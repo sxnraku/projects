@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+projectS/node_modules/
+
+# Expo & React Native
+.expo/
+projectS/.expo/
+expo-env.d.ts
+projectS/expo-env.d.ts
+
+# Build outputs
+dist/
+projectS/dist/
+web-build/
+projectS/web-build/
+
+# Local env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+projectS/.env
+projectS/.env.local
+projectS/.env.development.local
+projectS/.env.test.local
+projectS/.env.production.local
+
+# Editor/IDE configs
+.vscode/
+projectS/.vscode/
+.idea/
+projectS/.idea/
+.claude/
+projectS/.claude/
+.agents/
+
+# System files
+.DS_Store
+Thumbs.db
