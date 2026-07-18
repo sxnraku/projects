@@ -1,13 +1,9 @@
 # Política de Privacidade — Gestor de Futebol
 
-**Última atualização:** [DATA]
+**Última atualização:** 20 de Julho de 2026
 
 Esta política descreve como a aplicação **Gestor de Futebol** ("a App") trata os
 dados dos utilizadores. Ao instalar e utilizar a App, aceitas esta política.
-
-> Substitui `[DATA]`, `[O TEU NOME/EMPRESA]` e `[O TEU EMAIL]` antes de publicar,
-> e aloja este documento numa página pública (ex.: GitHub Pages). O link é
-> obrigatório na Play Console e no ecrã de Definições da App.
 
 ## 1. Dados que a App recolhe
 
@@ -55,7 +51,7 @@ Esta política pode ser atualizada. A data no topo indica a última revisão.
 
 ## 7. Contacto
 
-Para questões sobre privacidade: **[O TEU EMAIL]**
+Para questões sobre privacidade: **SKYYY.2612@GMAIL.COM**
 
 —
-[O TEU NOME/EMPRESA]
+RakuGAMES
