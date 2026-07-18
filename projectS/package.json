@@ -1,0 +1,47 @@
+{
+  "name": "gestor-futebol",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Jogo mobile de gestão de futebol (React Native + Expo).",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "build:android": "eas build -p android --profile preview",
+    "typecheck": "tsc --noEmit -p tsconfig.core.json",
+    "smoke": "tsx src/core/models/__tests__/model.smoke.ts",
+    "smoke:engine": "tsx src/core/engine/__tests__/engine.smoke.ts",
+    "smoke:season": "tsx src/core/season/__tests__/season.smoke.ts",
+    "smoke:economy": "tsx src/core/economy/__tests__/economy.smoke.ts",
+    "smoke:game": "tsx src/core/game/__tests__/game.smoke.ts",
+    "smoke:persist": "tsx src/persistence/__tests__/persistence.smoke.ts",
+    "smoke:ads": "tsx src/monetization/__tests__/monetization.smoke.ts",
+    "smoke:career": "tsx src/core/career/__tests__/career.smoke.ts",
+    "smoke:all": "npm run smoke && npm run smoke:engine && npm run smoke:season && npm run smoke:economy && npm run smoke:game && npm run smoke:persist && npm run smoke:ads && npm run smoke:career && npm run smoke:world && npm run smoke:inbox",
+    "smoke:world": "tsx src/core/cup/__tests__/world.smoke.ts",
+    "smoke:inbox": "tsx src/core/game/__tests__/inbox.smoke.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/react": "~18.3.12",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "@expo/metro-runtime": "~4.0.1",
+    "expo": "~52.0.0",
+    "expo-asset": "~11.0.5",
+    "expo-router": "~4.0.0",
+    "expo-sqlite": "~15.1.4",
+    "expo-status-bar": "~2.0.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-native": "0.76.9",
+    "react-native-google-mobile-ads": "^16.4.0",
+    "react-native-safe-area-context": "4.12.0",
+    "react-native-screens": "~4.4.0",
+    "react-native-web": "~0.19.13",
+    "zustand": "^5.0.14"
+  }
+}
