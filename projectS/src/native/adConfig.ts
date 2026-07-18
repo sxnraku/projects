@@ -8,7 +8,7 @@
  */
 
 // Real em produção, teste em desenvolvimento. (__DEV__ é false no build EAS.)
-export const USE_TEST_ADS = __DEV__;
+export const USE_TEST_ADS = false;
 
 // IDs de teste oficiais da Google (não editar).
 const TEST = {
@@ -19,9 +19,7 @@ const TEST = {
 
 // IDs reais da tua conta AdMob (app "Football Legacy").
 const PROD = {
-  // TODO: criar um bloco "Intersticial" no AdMob e colar o ID aqui.
-  // Enquanto vazio, os anúncios entre jornadas simplesmente não aparecem.
-  interstitial: '',
+  interstitial: 'ca-app-pub-7583056430043166/7131247068',
   rewarded: 'ca-app-pub-7583056430043166/5686871674',
   banner: 'ca-app-pub-7583056430043166/5220087950',
 };
