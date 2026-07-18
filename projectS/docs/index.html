@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Política de Privacidade — Football Legacy</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f1216;
+            --card-bg: #161b22;
+            --accent-green: #2f8a3b;
+            --accent-gold: #e3b341;
+            --text-main: #f0f3f6;
+            --text-muted: #8b949e;
+            --border-color: #30363d;
+            --shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            line-height: 1.6;
+            padding: 40px 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 800px;
+            width: 100%;
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 50px;
+            box-shadow: var(--shadow);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .container::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 6px;
+            background: linear-gradient(90deg, var(--accent-green) 0%, var(--accent-gold) 100%);
+        }
+
+        header {
+            margin-bottom: 40px;
+            text-align: center;
+        }
+
+        .logo-badge {
+            width: 70px;
+            height: 70px;
+            background: linear-gradient(135deg, var(--accent-green) 0%, #1b4d22 100%);
+            border-radius: 50%;
+            margin: 0 auto 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid var(--text-main);
+            box-shadow: 0 4px 12px rgba(47, 138, 59, 0.3);
+            position: relative;
+        }
+
+        .logo-badge svg {
+            width: 32px;
+            height: 32px;
+            fill: var(--accent-gold);
+        }
+
+        h1 {
+            font-size: 2.2rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+            background: linear-gradient(120deg, #ffffff 60%, var(--text-muted) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .meta-date {
+            font-size: 0.95rem;
+            color: var(--accent-gold);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 15px;
+        }
+
+        .intro {
+            font-size: 1.1rem;
+            color: var(--text-muted);
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        hr {
+            border: 0;
+            height: 1px;
+            background: var(--border-color);
+            margin: 30px 0;
+        }
+
+        section {
+            margin-bottom: 35px;
+        }
+
+        h2 {
+            font-size: 1.4rem;
+            font-weight: 600;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            color: #ffffff;
+        }
+
+        h2::before {
+            content: '';
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background-color: var(--accent-green);
+            border-radius: 50%;
+            margin-right: 12px;
+        }
+
+        p {
+            font-size: 1.05rem;
+            color: #d1d5db;
+            margin-bottom: 15px;
+            font-weight: 300;
+        }
+
+        ul {
+            list-style-type: none;
+            margin-bottom: 20px;
+            padding-left: 20px;
+        }
+
+        li {
+            font-size: 1.05rem;
+            color: #d1d5db;
+            margin-bottom: 10px;
+            position: relative;
+            font-weight: 300;
+        }
+
+        li::before {
+            content: "✓";
+            color: var(--accent-green);
+            position: absolute;
+            left: -20px;
+            font-weight: bold;
+        }
+
+        .link-text {
+            color: var(--accent-gold);
+            text-decoration: none;
+            transition: color 0.2s ease;
+            font-weight: 400;
+        }
+
+        .link-text:hover {
+            color: #fff;
+            text-decoration: underline;
+        }
+
+        .contact-box {
+            background-color: rgba(22, 27, 34, 0.6);
+            border: 1px dashed var(--border-color);
+            border-radius: 12px;
+            padding: 25px;
+            text-align: center;
+            margin-top: 40px;
+            box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .contact-email {
+            display: inline-block;
+            margin-top: 10px;
+            padding: 10px 20px;
+            background: linear-gradient(135deg, var(--accent-green) 0%, #1e5a26 100%);
+            color: #ffffff;
+            border-radius: 30px;
+            font-weight: 600;
+            text-decoration: none;
+            box-shadow: 0 4px 15px rgba(47, 138, 59, 0.2);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .contact-email:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(47, 138, 59, 0.3);
+        }
+
+        footer {
+            margin-top: 50px;
+            text-align: center;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            border-top: 1px solid var(--border-color);
+            padding-top: 25px;
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 600px) {
+            body {
+                padding: 15px 10px;
+            }
+            .container {
+                padding: 30px 20px;
+                border-radius: 15px;
+            }
+            h1 {
+                font-size: 1.7rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <div class="logo-badge">
+            <!-- SVG Star Icon matching game logo -->
+            <svg viewBox="0 0 24 24">
+                <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/>
+            </svg>
+        </div>
+        <h1>Football Legacy</h1>
+        <div class="meta-date">Última atualização: 20 de Julho de 2026</div>
+        <p class="intro">Esta política descreve como a aplicação <strong>Football Legacy</strong> ("a App") trata os dados dos utilizadores. Ao instalar e utilizar a App, aceitas esta política.</p>
+    </header>
+
+    <hr>
+
+    <main>
+        <section>
+            <h2>1. Dados que a App recolhe</h2>
+            <p>A App <strong>não recolhe dados pessoais identificáveis</strong> nem exige qualquer tipo de registo ou criação de conta de utilizador.</p>
+            <p>Todo o progresso de jogo, configurações e saves são guardados <strong>exclusivamente de forma local no teu dispositivo</strong> através de uma base de dados SQLite protegida. Esses dados nunca são transmitidos para servidores externos.</p>
+        </section>
+
+        <section>
+            <h2>2. Publicidade (Google AdMob)</h2>
+            <p>A App exibe anúncios integrados através do serviço <strong>Google AdMob</strong>. Para apresentar publicidade relevante, a Google e os seus parceiros tecnológicos podem processar dados do teu dispositivo, incluindo:</p>
+            <ul>
+                <li>Identificador de publicidade do dispositivo (Android Advertising ID);</li>
+                <li>Dados aproximados de utilização e de sistema do dispositivo;</li>
+                <li>Endereço IP.</li>
+            </ul>
+            <p>Estes dados são geridos pela Google segundo as suas próprias diretrizes de segurança, que podes consultar na <a class="link-text" href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Política de Privacidade da Google</a>.</p>
+            <p>Na União Europeia, a App solicita o teu <strong>consentimento explícito</strong> (através do Google UMP SDK) antes de apresentar anúncios personalizados, em total conformidade com o RGPD.</p>
+        </section>
+
+        <section>
+            <h2>3. Compras dentro da App</h2>
+            <p>A App disponibiliza uma compra opcional única ("Remover anúncios") processada de forma segura pela <strong>Google Play Billing</strong>. Não recolhemos nem armazenamos dados de pagamento ou cartões de crédito — todas as transações financeiras são geridas pela Google.</p>
+        </section>
+
+        <section>
+            <h2>4. Proteção de Crianças</h2>
+            <p>A App é segura para todos os públicos e não recolhe intencionalmente dados de crianças com idade inferior a 13 anos.</p>
+        </section>
+
+        <section>
+            <h2>5. Os teus direitos</h2>
+            <p>Uma vez que não alojamos dados pessoais em nenhum servidor próprio, não existe informação que possamos consultar ou apagar manualmente. No entanto, tu tens total controlo local:</p>
+            <ul>
+                <li>Podes redefinir o teu Android Advertising ID nas definições do teu sistema Android a qualquer momento;</li>
+                <li>Podes apagar todos os teus dados e progresso do jogo desinstalando a App;</li>
+                <li>Podes eliminar a exibição de anúncios adquirindo o produto "Remover anúncios".</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>6. Alterações à Política</h2>
+            <p>Esta Política de Privacidade pode ser atualizada periodicamente. A data correspondente à última alteração estará sempre descrita no topo do documento.</p>
+        </section>
+
+        <div class="contact-box">
+            <h2>7. Contacto</h2>
+            <p>Se tiveres dúvidas ou precisares de suporte relativo à privacidade do jogo, entra em contacto direto:</p>
+            <a href="mailto:SKYYY.2612@GMAIL.COM" class="contact-email">SKYYY.2612@GMAIL.COM</a>
+        </div>
+    </main>
+
+    <footer>
+        <p>&copy; 2026 RakuGAMES. Todos os direitos reservados.</p>
+    </footer>
+</div>
+
+</body>
+</html>
