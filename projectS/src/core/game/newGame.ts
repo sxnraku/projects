@@ -13,7 +13,7 @@ import {
 } from '../models';
 import { assignObjective } from '../career';
 import { generateCup } from '../cup';
-import { computeMarketValue, suggestedWage } from '../economy';
+import { computeMarketValue, recalcUpkeep, suggestedWage } from '../economy';
 import { emptyStandings, generateSchedule } from '../season';
 import { Rng } from '../engine/rng';
 import { autoPickLineup } from './lineup';
@@ -99,7 +99,9 @@ export function createNewGame(opts: NewGameOptions): GameState {
       }
       club.squad = squadIds;
       state.clubs[clubId] = club;
-      state.finances[clubId] = makeFinance(clubId, reputation, state.players, squadIds, season);
+      const fin = makeFinance(clubId, reputation, state.players, squadIds, season);
+      recalcUpkeep(club, fin); // manutenção a partir das instalações/estádio
+      state.finances[clubId] = fin;
       state.tactics[clubId] = autoPickLineup(clubId, squadIds, state.players);
     }
 
@@ -231,22 +233,28 @@ function makeFinance(
 ): Finance {
   const scale = reputation / 100;
   const wages = squadIds.reduce((s, id) => s + (players[id]?.wage ?? 0), 0);
-  const balance = Math.round((2_000_000 + scale * 40_000_000));
+  // Saldo cresce ao QUADRADO da reputação: os grandes têm muito mais margem
+  // que os pequenos. Sem isto, um clube da 3ª divisão começava com dinheiro
+  // suficiente para comprar craques logo na 1ª época.
+  const balance = Math.round(500_000 + scale * scale * 45_000_000);
   return {
     clubId,
     balance,
     transferBudget: Math.round(balance * 0.4),
     wageBudget: Math.round(wages * 1.3),
+    // Receitas escalam ao QUADRADO da reputação: um clube da 1ª divisão tem
+    // muito mais do que um da 3ª. Antes eram quase iguais, o que dava dinheiro
+    // a mais aos pequenos.
     income: {
       tickets: 0,
-      sponsorship: Math.round(50_000 + scale * 400_000),
-      tvRights: Math.round(80_000 + scale * 600_000),
-      merchandising: Math.round(20_000 + scale * 150_000),
+      sponsorship: Math.round(8_000 + scale * scale * 320_000),
+      tvRights: Math.round(12_000 + scale * scale * 480_000),
+      merchandising: Math.round(4_000 + scale * scale * 120_000),
     },
     expenses: {
       wages,
-      facilities: Math.round(30_000 + scale * 120_000),
-      staff: Math.round(20_000 + scale * 100_000),
+      facilities: 0, // calculado a partir das instalações (recalcUpkeep)
+      staff: Math.round(8_000 + scale * scale * 140_000),
     },
   };
 }
