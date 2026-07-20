@@ -54,4 +54,4 @@ Esta política pode ser atualizada. A data no topo indica a última revisão.
 Para questões sobre privacidade: **SKYYY.2612@GMAIL.COM**
 
 —
-RakuGAMES
+RakuLabs

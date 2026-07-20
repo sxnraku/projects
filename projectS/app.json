@@ -18,10 +18,10 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.rakugames.footballlegacy"
+      "bundleIdentifier": "com.rakulabs.footballlegacy"
     },
     "android": {
-      "package": "com.rakugames.footballlegacy",
+      "package": "com.rakulabs.footballlegacy",
       "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
