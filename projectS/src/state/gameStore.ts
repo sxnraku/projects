@@ -19,6 +19,7 @@ import {
   nextRound,
   replayFixture,
   acceptBid as coreAcceptBid,
+  blockingReason,
   BidDecision,
   dismissItem as coreDismissItem,
   ensureValidLineup,
@@ -47,7 +48,7 @@ import {
   upgradeFacility,
   UpgradeResult,
 } from '../core/economy';
-import { sortStandings } from '../core/season';
+import { sortStandings, transferWindow, WindowState } from '../core/season';
 import { deriveSeed, Rng } from '../core/engine/rng';
 import { TrainingFocus } from '../core/training';
 
@@ -62,6 +63,7 @@ export interface GameStore {
   state: GameState | null;
   trainingFocus: TrainingFocus;
   lastWeek: WeekResult | null;
+  blockedReason: string | null;
   lastSeason: SeasonSummary | null; // sumário do último fim de época (para a UI)
   replayedFixtures: string[]; // fixtures já re-simulados (1 segunda hipótese por jogo)
 
@@ -71,6 +73,8 @@ export interface GameStore {
 
   // Core loop
   advance: () => WeekResult | null;
+  /** Motivo do bloqueio do avanco (null = pode avancar). */
+  advanceBlockedBy: () => string | null;
   setTrainingFocus: (focus: TrainingFocus) => void;
   setTactic: (tactic: Tactic) => void;
 
@@ -112,6 +116,8 @@ export interface GameStore {
   squad: (clubId?: string) => Player[];
   inboxBids: () => BidItem[];
   inboxItems: () => InboxItem[];
+  /** Estado da janela de mercado na jornada atual. */
+  marketWindow: () => WindowState;
 }
 
 /** Substitui a referência de topo para forçar re-render mantendo as entidades. */
@@ -128,6 +134,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   state: null,
   trainingFocus: TrainingFocus.TECHNICAL,
   lastWeek: null,
+  blockedReason: null,
   lastSeason: null,
   replayedFixtures: [],
 
@@ -150,9 +157,23 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return null;
     }
 
+    // Interrupção obrigatória: propostas e pedidos exigem decisão antes de
+    // continuar (regra de interface — o core simula sempre).
+    const blocking = blockingReason(state);
+    if (blocking) {
+      set({ blockedReason: blocking });
+      return null;
+    }
+
     const result = advanceWeek(state, trainingFocus);
-    set({ state: bump(state), lastWeek: result, lastSeason: null });
+    set({ state: bump(state), lastWeek: result, lastSeason: null, blockedReason: null });
     return result;
+  },
+
+  /** Motivo pelo qual o avanço está bloqueado (null se puder avançar). */
+  advanceBlockedBy: () => {
+    const { state } = get();
+    return state ? blockingReason(state) : null;
   },
 
   setTrainingFocus: (focus) => set({ trainingFocus: focus }),
@@ -356,6 +377,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const { state } = get();
     if (!state) return [];
     return state.inbox.filter((it): it is BidItem => it.kind === 'BID');
+  },
+
+  marketWindow: () => {
+    const { state } = get();
+    if (!state) return { open: false, label: '—', opensAtRound: null };
+    const leagueId = managedLeagueId(state);
+    const schedule = state.schedules[leagueId];
+    const round = nextRound(state, leagueId) ?? (schedule?.totalRounds ?? 1);
+    return transferWindow(round, schedule?.totalRounds ?? 30);
   },
 
   inboxItems: () => {

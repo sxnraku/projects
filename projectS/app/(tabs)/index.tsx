@@ -32,6 +32,7 @@ export default function Dashboard() {
   const lastSeason = useGameStore((s) => s.lastSeason);
   const claimDaily = useGameStore((s) => s.claimDaily);
   const dailyAvailable = useGameStore((s) => s.dailyAvailable);
+  const advanceBlockedBy = useGameStore((s) => s.advanceBlockedBy);
 
   const inboxItems = useGameStore((s) => s.inboxItems);
   const acceptBid = useGameStore((s) => s.acceptBid);
@@ -49,6 +50,7 @@ export default function Dashboard() {
   const club = managedClub();
   const table = standings();
   const next = upcoming(1)[0];
+  const blocked = advanceBlockedBy();
 
   const position = useMemo(
     () => table.findIndex((r) => r.clubId === club?.id) + 1,
@@ -224,13 +226,19 @@ export default function Dashboard() {
                 </View>
               )}
               <Button
-                label={next ? 'Jogar ▶' : 'Nova época ▶'}
+                label={blocked ? '⚠ Resolve a caixa de entrada' : next ? 'Jogar ▶' : 'Nova época ▶'}
+                disabled={!!blocked}
                 onPress={async () => {
-                  advance();
+                  const r = advance();
                   if (onAdvanceAd()) await showInterstitial();
-                  if (next) router.push('/match');
+                  if (next && r) router.push('/match');
                 }}
               />
+              {blocked ? (
+                <Text style={styles.blockedNote}>
+                  Tens {blocked} — decide antes de avançar.
+                </Text>
+              ) : null}
             </View>
 
             {/* ÚLTIMOS RESULTADOS */}
@@ -409,6 +417,7 @@ const styles = StyleSheet.create({
   },
   bidRejectText: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700' },
 
+  blockedNote: { color: theme.colors.yellow, fontSize: theme.font.small, marginTop: 6, textAlign: 'center' },
   newsRow: {
     flexDirection: 'row', gap: theme.spacing(1), alignItems: 'flex-start',
     paddingVertical: theme.spacing(0.75),

@@ -1,6 +1,7 @@
 import {
   BidItem,
   GameState,
+  InboxItem,
   MAX_ACTIVE_BIDS,
   MAX_ACTIVE_RENEWALS,
   MAX_ACTIVE_REQUESTS,
@@ -183,6 +184,29 @@ export function bidForPlayer(state: GameState, playerId: string): BidItem | null
 /** Remove um item qualquer do inbox pelo id (dispensar aviso/pedido). */
 export function dismissItem(state: GameState, itemId: string): void {
   state.inbox = state.inbox.filter((it) => it.id !== itemId);
+}
+
+/**
+ * Itens que EXIGEM decisão antes de avançar a jornada.
+ *
+ * Sem isto o jogador carrega em "Avançar" indefinidamente e o jogo passa ao
+ * lado dele. Propostas e pedidos caducam se ignorados, por isso obrigam a uma
+ * resposta; os avisos de renovação são informativos e não bloqueiam.
+ */
+export function blockingItems(state: GameState): InboxItem[] {
+  return state.inbox.filter((it) => it.kind === 'BID' || it.kind === 'REQUEST');
+}
+
+/** Descrição curta do que está a bloquear o avanço (para a UI). */
+export function blockingReason(state: GameState): string | null {
+  const items = blockingItems(state);
+  if (items.length === 0) return null;
+  const bids = items.filter((i) => i.kind === 'BID').length;
+  const reqs = items.filter((i) => i.kind === 'REQUEST').length;
+  const parts: string[] = [];
+  if (bids > 0) parts.push(`${bids} proposta${bids > 1 ? 's' : ''} por resolver`);
+  if (reqs > 0) parts.push(`${reqs} pedido${reqs > 1 ? 's' : ''} de jogadores`);
+  return parts.join(' e ');
 }
 
 // ---------------------------------------------------------------------------
