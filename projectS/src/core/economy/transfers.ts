@@ -1,4 +1,10 @@
 import { Club, Finance, GameState, Player } from '../models';
+import {
+  checkInterest,
+  divisionCapRemaining,
+  divisionWageCap,
+  withinDivisionCap,
+} from './divisions';
 import { canAffordWage, isInsolvent, wageBudgetRemaining } from './finances';
 import { computeMarketValue, suggestedWage } from './marketValue';
 
@@ -9,6 +15,8 @@ export interface TransferOffer {
   fee: number; // valor oferecido pelo passe
   wageOffer: number; // salário semanal proposto ao jogador
   contractYears: number; // duração do novo contrato
+  /** Prémio de assinatura — convence jogadores a descer de nível. */
+  signingBonus?: number;
 }
 
 /** Decisão do clube vendedor + jogador perante uma proposta. */
@@ -25,7 +33,15 @@ export interface OfferEvaluation {
   requiredFee?: number;
   /** Salário mínimo que o jogador aceitaria (se o problema for o ordenado). */
   requiredWage?: number;
+  /** Prémio de assinatura necessário para o convencer a descer de nível. */
+  requiredSigningBonus?: number;
   reason: string;
+}
+
+/** Escalão (tier) da divisão onde um clube joga. 1 = principal. */
+function tierOf(state: GameState, clubId: string): number {
+  const leagueId = state.clubs[clubId]?.leagueId;
+  return leagueId ? state.leagues[leagueId]?.tier ?? 1 : 1;
 }
 
 /**
@@ -46,18 +62,46 @@ export function evaluateOffer(
     return { decision: 'REJECTED', reason: 'Jogador já pertence ao clube.' };
   }
 
-  // Restrições financeiras do COMPRADOR — avaliadas antes de negociar valores.
+  // Restrições do COMPRADOR — avaliadas antes de negociar valores.
   const buyerFin = state.finances[offer.fromClubId];
-  if (buyerFin) {
+  const buyerClub = state.clubs[offer.fromClubId];
+  const buyerTier = tierOf(state, offer.fromClubId);
+
+  if (buyerFin && buyerClub) {
     if (isInsolvent(buyerFin)) {
       return { decision: 'REJECTED', reason: 'Clube em insolvência: contratações bloqueadas.' };
     }
+
+    // Teto RÍGIDO da divisão — a direção barra, mesmo com dinheiro em caixa.
+    if (!withinDivisionCap(buyerFin, buyerTier, offer.wageOffer)) {
+      const cap = divisionWageCap(buyerTier);
+      const left = Math.max(0, divisionCapRemaining(buyerFin, buyerTier));
+      return {
+        decision: 'REJECTED',
+        reason: `Teto salarial da divisão (${cap.toLocaleString('pt-PT')} €/sem): só sobram ${left.toLocaleString('pt-PT')} €/sem.`,
+      };
+    }
+
     if (!canAffordWage(buyerFin, offer.wageOffer)) {
       const left = Math.max(0, wageBudgetRemaining(buyerFin));
       return {
         decision: 'REJECTED',
         reason: `Sem margem salarial (sobram ${left.toLocaleString('pt-PT')} €/sem).`,
       };
+    }
+
+    // INTERESSE DO JOGADOR: um craque não desce de nível sem ser compensado.
+    const interest = checkInterest(player, buyerClub, buyerTier);
+    if (!interest.interested) {
+      const bonus = offer.signingBonus ?? 0;
+      if (!Number.isFinite(interest.requiredSigningBonus) || bonus < interest.requiredSigningBonus) {
+        return {
+          decision: 'REJECTED',
+          requiredSigningBonus: Number.isFinite(interest.requiredSigningBonus)
+            ? interest.requiredSigningBonus : undefined,
+          reason: interest.reason,
+        };
+      }
     }
   }
 
@@ -132,6 +176,15 @@ export function executeTransfer(
     return { ok: false, error: 'Clube em insolvência: contratações bloqueadas.' };
   }
 
+  // Teto rígido da divisão (a direção barra o contrato).
+  const tier = tierOf(state, offer.fromClubId);
+  if (!withinDivisionCap(buyerFin, tier, offer.wageOffer)) {
+    return {
+      ok: false,
+      error: `Teto salarial da divisão excedido (máx. ${divisionWageCap(tier).toLocaleString('pt-PT')} €/sem).`,
+    };
+  }
+
   // Margem salarial: não basta ter o valor do passe, é preciso aguentar o
   // ordenado semanal até ao fim do contrato.
   if (!canAffordWage(buyerFin, offer.wageOffer)) {
@@ -142,11 +195,17 @@ export function executeTransfer(
     };
   }
 
+  // O prémio de assinatura sai do bolso do comprador (vai para o jogador).
+  const signingBonus = Math.max(0, offer.signingBonus ?? 0);
+  if (buyerFin.transferBudget < offer.fee + signingBonus) {
+    return { ok: false, error: 'Orçamento não cobre passe + prémio de assinatura.' };
+  }
+
   const sellerId = player.clubId;
 
-  // Movimento financeiro do comprador.
-  buyerFin.transferBudget -= offer.fee;
-  buyerFin.balance -= offer.fee;
+  // Movimento financeiro do comprador (passe + prémio de assinatura).
+  buyerFin.transferBudget -= offer.fee + signingBonus;
+  buyerFin.balance -= offer.fee + signingBonus;
 
   // Movimento do vendedor (se não for jogador livre).
   if (sellerId) {

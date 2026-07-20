@@ -69,6 +69,33 @@ export function recalcBudgets(finance: Finance): void {
   finance.wageBudget = Math.round(finance.expenses.wages * 1.2);
 }
 
+/**
+ * Liquidez máxima que um clube leva de uma época para a outra — o resto é
+ * absorvido pela direção (dívidas, investimento, acionistas).
+ * Escala com a dimensão do clube: 40 semanas de despesa corrente.
+ */
+export function liquidityCeiling(finance: Finance): number {
+  const weekly = finance.expenses.wages + finance.expenses.facilities + finance.expenses.staff;
+  return Math.max(2_000_000, Math.round(weekly * 40));
+}
+
+/**
+ * Reset anual: a direção absorve o excesso de caixa e refaz os orçamentos.
+ *
+ * Sem isto o dinheiro acumulava época após época e, a partir de certa altura,
+ * o orçamento deixava de ser uma restrição. Devolve quanto foi absorvido.
+ */
+export function annualBudgetReset(finance: Finance): number {
+  const ceiling = liquidityCeiling(finance);
+  let absorbed = 0;
+  if (finance.balance > ceiling) {
+    absorbed = finance.balance - ceiling;
+    finance.balance = ceiling;
+  }
+  recalcBudgets(finance);
+  return absorbed;
+}
+
 /** True se o clube está em risco financeiro (saldo negativo e fluxo semanal negativo). */
 export function inFinancialTrouble(finance: Finance): boolean {
   return finance.balance < 0 && weeklyNet(finance) < 0;

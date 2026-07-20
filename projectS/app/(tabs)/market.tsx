@@ -12,6 +12,8 @@ type Feedback = { kind: 'ok' | 'counter' | 'error'; text: string } | null;
 export default function Market() {
   const state = useGameStore((s) => s.state);
   const submitOffer = useGameStore((s) => s.submitOffer);
+  const marketWindow = useGameStore((s) => s.marketWindow);
+  const win = marketWindow();
 
   const managedId = state?.meta.managedClubId;
   const budget = managedId ? state?.finances[managedId]?.transferBudget ?? 0 : 0;
@@ -60,6 +62,16 @@ export default function Market() {
 
   return (
     <Screen>
+      {!win.open ? (
+        <View style={styles.windowClosed}>
+          <Text style={styles.windowClosedText}>
+            🔒 {win.label}{win.opensAtRound ? ` — reabre na jornada ${win.opensAtRound}` : ''}
+          </Text>
+          <Text style={styles.windowSub}>Podes observar jogadores, mas não contratar.</Text>
+        </View>
+      ) : (
+        <Text style={styles.windowOpen}>✓ {win.label}</Text>
+      )}
       <View style={styles.budgetRow}>
         <Text style={styles.budgetLabel}>ORÇAMENTO</Text>
         <Text style={styles.budgetVal}>{money(budget)}</Text>
@@ -123,8 +135,12 @@ export default function Market() {
                 </View>
                 <View style={{ marginTop: theme.spacing(1) }}>
                   <Button
-                    label={fee > budget ? 'Orçamento insuficiente' : 'Enviar proposta'}
-                    disabled={fee > budget}
+                    label={
+                      !win.open ? '🔒 Mercado fechado'
+                        : fee > budget ? 'Orçamento insuficiente'
+                        : 'Enviar proposta'
+                    }
+                    disabled={!win.open || fee > budget}
                     onPress={() => send(item)}
                   />
                 </View>
@@ -161,6 +177,10 @@ function TargetRow({
 }
 
 const styles = StyleSheet.create({
+  windowClosed: { backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.yellow, borderRadius: theme.radius.sm, padding: theme.spacing(1.25), marginTop: theme.spacing(1) },
+  windowClosedText: { color: theme.colors.yellow, fontSize: theme.font.body, fontWeight: '700' },
+  windowSub: { color: theme.colors.textDim, fontSize: theme.font.small, marginTop: 2 },
+  windowOpen: { color: theme.colors.green, fontSize: theme.font.small, fontWeight: '700', marginTop: theme.spacing(1) },
   budgetRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingVertical: theme.spacing(1.25),

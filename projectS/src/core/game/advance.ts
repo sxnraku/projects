@@ -3,11 +3,14 @@ import { generateCup, playCupRound } from '../cup';
 import { addNews } from '../news';
 import { deriveSeed, Rng } from '../engine/rng';
 import {
+  annualBudgetReset,
   applyInsolvency,
   applyWeeklyFinances,
+  leaguePrize,
   matchdayIncome,
   processContractExpiries,
-  recalcBudgets,
+  promotionPrize,
+  recalcIncome,
   recalcUpkeep,
 } from '../economy';
 import {
@@ -24,6 +27,7 @@ import { trainPlayer, TrainingFocus } from '../training';
 import { setManagedObjective } from './newGame';
 import { processYouthAndRetirements, YouthIntakeResult } from './youth';
 import {
+  blockingReason,
   generateIncomingBids,
   generatePlayerRequests,
   generateRenewalReminders,
@@ -60,6 +64,12 @@ export function nextRound(state: GameState, leagueId: string): number | null {
  * Avança uma semana de jogo em TODAS as divisões: simula a próxima jornada de
  * cada liga, aplica fadiga, treina os plantéis, processa finanças, recupera
  * lesões e atualiza a confiança da direção.
+ */
+/**
+ * NOTA DE ARQUITETURA: o bloqueio por decisões pendentes (propostas/pedidos)
+ * é uma regra de INTERFACE, não de simulação — vive na store, que consulta
+ * `blockingReason()`. Se vivesse aqui, partiria toda a simulação automática
+ * (testes, épocas simuladas, IA).
  */
 export function advanceWeek(
   state: GameState,
@@ -393,8 +403,39 @@ export function rolloverSeason(state: GameState): SeasonSummary {
     state.career.pendingOffers = generateJobOffers(state, managedId);
   }
 
+  // --- 2b. Prémios de fim de época (indexados ao escalão) ---
+  // Uma equipa da 3ª divisão não pode receber o mesmo que uma da 1ª.
+  for (const league of Object.values(state.leagues)) {
+    const table = state.standings[league.id];
+    if (!table) continue;
+    const ranked = sortStandings(table, (id) => state.clubs[id]?.name ?? id);
+    ranked.forEach((row, idx) => {
+      const fin = state.finances[row.clubId];
+      if (!fin) return;
+      const prize = leaguePrize(league.tier, idx + 1, ranked.length);
+      fin.balance += prize;
+      if (row.clubId === managedId) {
+        addNews(state, 'SEASON',
+          `Prémio de classificação (${idx + 1}º na ${league.name}): ${prize.toLocaleString('pt-PT')} €.`);
+      }
+    });
+  }
+
   // --- 3. Promoções/despromoções ---
   const moves = processPromotions(state);
+
+  // Prémio de subida — o "salto" de orçamento.
+  for (const mv of moves) {
+    if (mv.direction !== 'UP') continue;
+    const fin = state.finances[mv.clubId];
+    const newTier = state.leagues[mv.toLeagueId]?.tier ?? 1;
+    if (!fin) continue;
+    const bonus = promotionPrize(newTier);
+    fin.balance += bonus;
+    if (mv.clubId === managedId) {
+      addNews(state, 'SEASON', `Prémio de subida de divisão: ${bonus.toLocaleString('pt-PT')} €!`);
+    }
+  }
 
   // --- 4. Nova época: envelhecer, contratos, reformas + jovens, orçamentos ---
   state.meta.season += 1;
@@ -406,7 +447,20 @@ export function rolloverSeason(state: GameState): SeasonSummary {
   processContractExpiries(state);
   const youthRng = new Rng(deriveSeed(state.meta.rngSeed, 'youth', state.meta.season));
   const youth = processYouthAndRetirements(state, youthRng);
-  for (const fin of Object.values(state.finances)) recalcBudgets(fin);
+  // Receitas recalculadas com a NOVA divisão (subir traz mais TV/patrocínios),
+  // e a direção absorve o excesso de liquidez antes de refazer os orçamentos.
+  for (const club of Object.values(state.clubs)) {
+    const fin = state.finances[club.id];
+    if (!fin) continue;
+    const newTier = state.leagues[club.leagueId]?.tier ?? 1;
+    recalcIncome(club, newTier, fin);
+    recalcUpkeep(club, fin);
+    const absorbed = annualBudgetReset(fin);
+    if (club.id === managedId && absorbed > 0) {
+      addNews(state, 'CLUB',
+        `A direção absorveu ${absorbed.toLocaleString('pt-PT')} € de excedente de tesouraria.`);
+    }
+  }
 
   // --- 5. Calendários novos, tabelas limpas, nova Taça, objetivo novo ---
   for (const league of Object.values(state.leagues)) {
