@@ -143,6 +143,37 @@ export function naturalOverall(player: Player): number {
   return computeOverall(player.attributes, player.positions[0]);
 }
 
+/** Penalização por jogar fora da posição natural (em pontos de overall). */
+export const OUT_OF_POSITION_PENALTY = { sameGroup: 2, otherGroup: 5 } as const;
+
+/** True se o jogador atua naturalmente nesta posição. */
+export function isNaturalPosition(player: Player, position: Position): boolean {
+  return player.positions.includes(position);
+}
+
+/**
+ * Overall REAL do jogador numa dada posição do onze.
+ *
+ * Combina duas coisas:
+ *  1. Os atributos avaliados com os pesos DESSA posição (um central avaliado a
+ *     ponta-de-lança já pontua menos, porque não tem finalização).
+ *  2. Uma penalização de familiaridade por jogar fora da posição natural:
+ *     -2 dentro do mesmo setor (ex.: central a lateral), -5 fora dele
+ *     (ex.: médio a guarda-redes).
+ *
+ * É esta função que o motor de partida e a UI usam — pôr alguém fora de posição
+ * enfraquece mesmo a equipa, não é só cosmético.
+ */
+export function effectiveOverall(player: Player, position: Position): number {
+  const base = computeOverall(player.attributes, position);
+  if (isNaturalPosition(player, position)) return base;
+  const natural = player.positions[0];
+  const penalty = POSITION_GROUP[natural] === POSITION_GROUP[position]
+    ? OUT_OF_POSITION_PENALTY.sameGroup
+    : OUT_OF_POSITION_PENALTY.otherGroup;
+  return Math.max(1, base - penalty);
+}
+
 export function fullName(player: Player): string {
   return `${player.firstName} ${player.lastName}`;
 }

@@ -1,10 +1,10 @@
-# Ficha da Play Store — Gestor de Futebol
+# Ficha da Play Store — Football Legacy
 
 Textos prontos a colar na Google Play Console. Ajusta ao teu gosto.
 
 ## Nome da app (máx. 30 caracteres)
 ```
-Gestor de Futebol
+Football Legacy
 ```
 
 ## Descrição curta (máx. 80 caracteres)
@@ -14,7 +14,7 @@ Pega num clube da última divisão e leva-o ao topo. Tática, mercado e glória.
 
 ## Descrição completa (máx. 4000 caracteres)
 ```
-⚽ GESTOR DE FUTEBOL — a tua carreira de treinador começa aqui.
+⚽ FOOTBALL LEGACY — a tua carreira de treinador começa aqui.
 
 Escolhe um clube modesto da última divisão e prova que consegues chegar ao topo.
 Cada decisão conta: a tática, o mercado, o balneário e a paciência da direção.

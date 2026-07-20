@@ -1,5 +1,5 @@
 import {
-  computeOverall,
+  effectiveOverall,
   Formation,
   LineupSlot,
   Player,
@@ -41,7 +41,7 @@ export function autoPickLineup(
       if (used.has(id)) continue;
       const p = players[id];
       if (!p || p.condition.status !== 'AVAILABLE') continue;
-      const rating = computeOverall(p.attributes, position);
+      const rating = effectiveOverall(p, position);
       if (rating > bestRating) { bestRating = rating; bestId = id; }
     }
     if (bestId) { used.add(bestId); lineup.push({ position, playerId: bestId }); }
@@ -93,7 +93,7 @@ export function ensureValidLineup(
 
 function overallOf(slot: LineupSlot, players: Record<string, Player>): number {
   const p = players[slot.playerId];
-  return p ? computeOverall(p.attributes, slot.position) : 0;
+  return p ? effectiveOverall(p, slot.position) : 0;
 }
 
 /** Melhor marcador de penáltis = maior finalização no onze. */

@@ -11,8 +11,9 @@ import {
 } from 'react-native';
 import { useGameStore } from '../../src/state/gameStore';
 import {
-  computeOverall,
+  effectiveOverall,
   Formation,
+  isNaturalPosition,
   Mentality,
   Position,
   Tactic,
@@ -116,15 +117,23 @@ export default function Tactics() {
 
   const onPitchLayout = (e: LayoutChangeEvent) => setPitchW(e.nativeEvent.layout.width);
 
-  // Lista de candidatos para o slot em escolha, ordenada por rating NESSA posição.
+  // Candidatos para o slot: TODOS os jogadores, mas os da posição natural
+  // aparecem primeiro. O rating já inclui a penalização de fora de posição.
   const slotPosition: Position | null = pickSlot !== null ? tactic.lineup[pickSlot]!.position : null;
   const candidates = useMemo(() => {
     if (slotPosition === null) return [];
     return club.squad
       .map((id) => state.players[id]!)
       .filter(Boolean)
-      .map((p) => ({ p, rating: computeOverall(p.attributes, slotPosition) }))
-      .sort((a, b) => b.rating - a.rating);
+      .map((p) => ({
+        p,
+        rating: effectiveOverall(p, slotPosition),
+        natural: isNaturalPosition(p, slotPosition),
+      }))
+      .sort((a, b) => {
+        if (a.natural !== b.natural) return a.natural ? -1 : 1; // naturais à frente
+        return b.rating - a.rating;
+      });
   }, [slotPosition, club.squad, state.players]);
 
   return (
@@ -143,18 +152,25 @@ export default function Tactics() {
           {pitchW > 0 && tactic.lineup.map((slot, i) => {
             const p = state.players[slot.playerId];
             const pos = layout[i]!;
-            const rating = p ? computeOverall(p.attributes, slot.position) : 0;
+            // Rating já com penalização se estiver fora da posição natural.
+            const rating = p ? effectiveOverall(p, slot.position) : 0;
+            const outOfPos = p ? !isNaturalPosition(p, slot.position) : false;
             return (
               <Pressable
                 key={i}
                 onPress={() => setPickSlot(i)}
                 style={[styles.dotWrap, {
-                  left: pos.x * pitchW - DOT / 2,
+                  // x espelhado: direita do ecrã = lado direito do campo (RB/RW).
+                  left: (1 - pos.x) * pitchW - DOT / 2,
                   top: (1 - pos.y) * pitchH - DOT / 2,
                 }]}
               >
-                <View style={[styles.dot, slot.position === 'GK' && styles.dotGk]}>
-                  <Text style={styles.dotPos}>{slot.position}</Text>
+                <View style={[
+                  styles.dot,
+                  slot.position === 'GK' && styles.dotGk,
+                  outOfPos && styles.dotOutOfPos,
+                ]}>
+                  <Text style={styles.dotPos}>{slot.position}{outOfPos ? '!' : ''}</Text>
                   <Text style={[styles.dotOvr, { color: attrColor(rating) }]}>{rating}</Text>
                 </View>
                 <Text style={styles.dotName} numberOfLines={1}>{p?.lastName ?? '—'}</Text>
@@ -231,6 +247,9 @@ export default function Tactics() {
                       <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
                         <PosText position={item.p.positions[0]!} />
                         <Text style={styles.pickSub}>{item.p.age} anos</Text>
+                        {!item.natural ? (
+                          <Text style={styles.pickOutOfPos}>fora de posição</Text>
+                        ) : null}
                       </View>
                     </View>
                     <Text style={[styles.pickFit, { color: fitnessColor(item.p.condition.fitness) }]}>
@@ -331,6 +350,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   dotGk: { borderColor: theme.colors.yellow },
+  dotOutOfPos: { borderColor: theme.colors.red },
   dotPos: { color: theme.colors.textDim, fontSize: 8, fontWeight: '700' },
   dotOvr: { fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] },
   dotName: {
@@ -360,6 +380,7 @@ const styles = StyleSheet.create({
   pickOvr: { fontSize: theme.font.h3, fontWeight: '800', width: 28, textAlign: 'center', fontVariant: ['tabular-nums'] },
   pickName: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600' },
   pickSub: { color: theme.colors.textDim, fontSize: theme.font.small },
+  pickOutOfPos: { color: theme.colors.red, fontSize: theme.font.small, fontWeight: '700' },
   pickFit: { fontSize: theme.font.small, fontWeight: '700', width: 38, textAlign: 'right' },
   sep: { height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.border },
 });

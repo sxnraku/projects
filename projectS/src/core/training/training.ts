@@ -59,10 +59,13 @@ export function trainPlayer(
   const change: TrainingChange = { playerId: player.id, attribute: null, delta: 0 };
 
   // --- Crescimento ---
+  // Curva de progressão LENTA, estilo Football Manager / OSM: um jogador demora
+  // várias épocas a atingir o potencial, não 1-2. Um jovem-promessa evolui de
+  // forma gradual dos 16 aos ~22; jogadores perto do pico quase não mexem.
   if (player.age <= PEAK_AGE && overall < player.potential && focus !== 'RECOVERY') {
     const gap = player.potential - overall;
     const youth = (PEAK_AGE - player.age + 1) / (PEAK_AGE - 15 + 1); // 0..1
-    const growthChance = Math.min(0.65, 0.15 + gap * 0.05 + youth * 0.2 + growthBonus);
+    const growthChance = Math.min(0.25, 0.04 + gap * 0.02 + youth * 0.1 + growthBonus);
     if (rng.chance(growthChance)) {
       const attr = pickImprovable(player.attributes, FOCUS_ATTRS[focus], rng);
       if (attr) {

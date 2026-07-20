@@ -1,8 +1,8 @@
-# Política de Privacidade — Gestor de Futebol
+# Política de Privacidade — Football Legacy
 
 **Última atualização:** 20 de Julho de 2026
 
-Esta política descreve como a aplicação **Gestor de Futebol** ("a App") trata os
+Esta política descreve como a aplicação **Football Legacy** ("a App") trata os
 dados dos utilizadores. Ao instalar e utilizar a App, aceitas esta política.
 
 ## 1. Dados que a App recolhe

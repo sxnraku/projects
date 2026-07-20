@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { useMonetizationStore } from '../state/monetizationStore';
 import { AD_UNITS } from './adConfig';
+import { isExpoGo } from './runtime';
 
 const BANNER_ID = AD_UNITS.banner;
 
@@ -14,14 +15,15 @@ export default function AdBanner() {
   const [Ads, setAds] = useState<typeof import('react-native-google-mobile-ads') | null>(null);
 
   useEffect(() => {
+    if (isExpoGo) return; // Expo Go não tem o módulo nativo — não tentar
     let alive = true;
     import('react-native-google-mobile-ads')
       .then((mod) => { if (alive) setAds(mod); })
-      .catch(() => {}); // Expo Go sem módulo nativo → sem banner
+      .catch(() => {}); // módulo nativo ausente → sem banner
     return () => { alive = false; };
   }, []);
 
-  if (premium || !Ads) return null;
+  if (premium || isExpoGo || !Ads) return null;
 
   const { BannerAd, BannerAdSize } = Ads;
   return (

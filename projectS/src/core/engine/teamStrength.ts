@@ -1,5 +1,5 @@
 import {
-  computeOverall,
+  effectiveOverall,
   Mentality,
   Player,
   POSITION_GROUP,
@@ -67,7 +67,8 @@ export function computeTeamStrength(
     const p = players[slot.playerId];
     if (!p) continue; // titular em falta: zona fica mais fraca (penalização natural)
 
-    const rating = computeOverall(p.attributes, slot.position) * conditionMultiplier(p);
+    // effectiveOverall inclui a penalização por jogar fora da posição natural.
+    const rating = effectiveOverall(p, slot.position) * conditionMultiplier(p);
     const group = POSITION_GROUP[slot.position];
 
     if (group === 'ATTACK') { atk += rating; atkN++; }
