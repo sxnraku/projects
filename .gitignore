@@ -35,6 +35,27 @@ projectS/.idea/
 projectS/.claude/
 .agents/
 
+# Assinatura e credenciais — NUNCA versionar (quem tiver isto pode publicar
+# atualizacoes da app em teu nome)
+*.jks
+*.keystore
+*.p8
+*.p12
+*.key
+*.mobileprovision
+credentials.json
+google-services.json
+GoogleService-Info.plist
+play-store-key*.json
+service-account*.json
+
+# Builds nativos gerados (expo prebuild / EAS)
+android/
+ios/
+*.aab
+*.apk
+*.ipa
+
 # System files
 .DS_Store
 Thumbs.db
