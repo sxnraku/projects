@@ -5,9 +5,12 @@
  */
 import {
   computeOverall,
+  effectiveOverall,
   emptyGameState,
   fullName,
+  isNaturalPosition,
   naturalOverall,
+  OUT_OF_POSITION_PENALTY,
   Player,
   PlayerAttributes,
   SCHEMA_VERSION,
@@ -69,6 +72,20 @@ assert(stOverall > cbOverall, `mesmo jogador vale mais a ST (${stOverall}) que a
 console.log('\nOverall dentro da escala 1..20:');
 const ov = computeOverall(attrs(), 'CM');
 assert(ov >= 1 && ov <= 20, `overall CM = ${ov} está em 1..20`);
+
+console.log('\nPenalização por jogar fora de posição:');
+const centralBack = makePlayer({ positions: ['CB'], attributes: attrs() });
+const atCb = effectiveOverall(centralBack, 'CB');
+const atLb = effectiveOverall(centralBack, 'LB');
+const atSt = effectiveOverall(centralBack, 'ST');
+assert(isNaturalPosition(centralBack, 'CB'), 'CB é posição natural do central');
+assert(!isNaturalPosition(centralBack, 'LB'), 'LB não é natural para o central');
+assert(atCb === computeOverall(centralBack.attributes, 'CB'), `sem penalização na natural (${atCb})`);
+assert(atLb === Math.max(1, computeOverall(centralBack.attributes, 'LB') - OUT_OF_POSITION_PENALTY.sameGroup),
+  `mesmo setor (CB→LB) leva -${OUT_OF_POSITION_PENALTY.sameGroup} (${atLb})`);
+assert(atSt === Math.max(1, computeOverall(centralBack.attributes, 'ST') - OUT_OF_POSITION_PENALTY.otherGroup),
+  `outro setor (CB→ST) leva -${OUT_OF_POSITION_PENALTY.otherGroup} (${atSt})`);
+assert(atCb > atLb && atLb > atSt, `render decresce com a distância à posição: ${atCb} > ${atLb} > ${atSt}`);
 
 console.log('\nValidação apanha atributo fora de escala:');
 const bad = makePlayer({ attributes: attrs({ pace: 99 }) });

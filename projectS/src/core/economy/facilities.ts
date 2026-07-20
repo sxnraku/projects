@@ -26,13 +26,16 @@ export const FACILITY_EFFECTS: Record<FacilityType, string> = {
 
 /** Custo do próximo nível (cresce de forma acentuada). */
 export function facilityUpgradeCost(type: FacilityType, currentLevel: number): number {
+  // Custos altos + curva acentuada (2.2^n): melhorar instalações é um
+  // investimento de várias épocas, como nos jogos de gestão a sério — não algo
+  // que se maximiza numa temporada.
   const base: Record<FacilityType, number> = {
-    stadium: 4_000_000,
-    training: 2_500_000,
-    academy: 2_000_000,
-    medical: 1_500_000,
+    stadium: 8_000_000,
+    training: 6_000_000,
+    academy: 5_000_000,
+    medical: 4_000_000,
   };
-  return Math.round(base[type] * Math.pow(1.8, currentLevel - 1));
+  return Math.round(base[type] * Math.pow(2.2, currentLevel - 1));
 }
 
 export interface UpgradeResult {

@@ -7,11 +7,12 @@
  *  - Falhas são silenciosas (Expo Go sem módulo nativo, sem rede, etc.).
  */
 import { AD_LOAD_TIMEOUT_MS, AD_UNITS } from './adConfig';
+import { isExpoGo } from './runtime';
 
 type AdsModule = typeof import('react-native-google-mobile-ads');
 
 let adsModule: AdsModule | null = null;
-let unavailable = false;
+let unavailable = isExpoGo; // Expo Go não tem o módulo nativo
 let initialized = false;
 
 async function loadSdk(): Promise<AdsModule | null> {

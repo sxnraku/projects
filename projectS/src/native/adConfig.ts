@@ -7,8 +7,11 @@
  * anúncios de teste; o build EAS de produção usa os teus IDs reais.
  */
 
-// Real em produção, teste em desenvolvimento. (__DEV__ é false no build EAS.)
-export const USE_TEST_ADS = false;
+// Anúncios REAIS em produção, de TESTE em desenvolvimento.
+// __DEV__ é false no build EAS de produção (→ IDs reais, receita normal) e
+// true em `expo start` (→ IDs de teste). Nunca pôr `false` fixo: clicar nos
+// próprios anúncios reais a testar leva a Google a banir a conta AdMob.
+export const USE_TEST_ADS = __DEV__;
 
 // IDs de teste oficiais da Google (não editar).
 const TEST = {
