@@ -24,7 +24,7 @@ Estado do código: **pronto**. Este guia cobre o que falta fazer *fora* do códi
 ### Identificadores
 - **AdMob App ID (Android):** `ca-app-pub-7583056430043166~9482078235`
 - **Blocos:** banner `5220087950` · intersticial `7131247068` · premiado `5686871674`
-- **Package Android:** `com.rakugames.footballlegacy`
+- **Package Android:** `com.rakulabs.footballlegacy`
   ⚠️ **Permanente após o primeiro upload** na Play Console — a partir daí não
   pode ser alterado (mudá-lo criaria uma app nova, perdendo instalações e
   avaliações). Confirma que é este o que queres antes de submeter.
