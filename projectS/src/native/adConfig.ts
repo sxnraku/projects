@@ -7,11 +7,16 @@
  * anúncios de teste; o build EAS de produção usa os teus IDs reais.
  */
 
-// Anúncios REAIS em produção, de TESTE em desenvolvimento.
-// __DEV__ é false no build EAS de produção (→ IDs reais, receita normal) e
-// true em `expo start` (→ IDs de teste). Nunca pôr `false` fixo: clicar nos
-// próprios anúncios reais a testar leva a Google a banir a conta AdMob.
-export const USE_TEST_ADS = __DEV__;
+// Anúncios REAIS só no build de produção; de TESTE em tudo o resto.
+//
+//  - `expo start` (dev)                  -> __DEV__ true          -> teste
+//  - build `preview` (EAS_TEST_ADS=1)    -> flag de ambiente      -> teste
+//  - build `production`                  -> nenhum dos dois       -> REAIS
+//
+// Assim podes instalar o APK de teste e tocar nos anúncios à vontade, sem
+// risco de banimento da conta AdMob (cliques nos próprios anúncios reais).
+export const USE_TEST_ADS =
+  __DEV__ || process.env.EXPO_PUBLIC_TEST_ADS === '1';
 
 // IDs de teste oficiais da Google (não editar).
 const TEST = {
