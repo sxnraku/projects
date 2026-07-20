@@ -1,4 +1,5 @@
 import { Club, Finance, GameState, Player } from '../models';
+import { canAffordWage, wageBudgetRemaining } from './finances';
 import { suggestedWage } from './marketValue';
 import { recalcWages } from './transfers';
 
@@ -29,11 +30,23 @@ export function renewContract(
     return { ok: false, error: `Salário insuficiente. Jogador quer ${wanted.toLocaleString('pt-PT')}/semana.` };
   }
 
+  // Margem salarial: conta só o AUMENTO, já que o jogador já pesa na folha.
+  const fin = state.finances[player.clubId];
+  if (fin) {
+    const increase = wage - player.wage;
+    if (increase > 0 && !canAffordWage(fin, increase)) {
+      const left = Math.max(0, wageBudgetRemaining(fin));
+      return {
+        ok: false,
+        error: `Sem margem salarial para o aumento: sobram ${left.toLocaleString('pt-PT')} €/sem.`,
+      };
+    }
+  }
+
   player.wage = wage;
   player.contractUntil = state.meta.season + years;
 
   const club = state.clubs[player.clubId];
-  const fin = state.finances[player.clubId];
   if (club && fin) recalcWages(club, fin, state.players);
 
   return { ok: true };

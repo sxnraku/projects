@@ -16,9 +16,16 @@ import { naturalOverall, Player } from '../models';
 
 const OVERALL_BASE = 400_000; // multiplicador base — calibrado p/ overall 14 ≈ 1.5M
 
-/** Fator exponencial do overall — cada ponto acima de 10 pesa mais. */
+/**
+ * Fator exponencial do overall — cada ponto acima de 10 pesa MUITO mais.
+ *
+ * A base 1.55 (em vez de 1.35) torna a curva bem mais íngreme: um craque de
+ * overall 20 passa a valer ~40x um jogador de 14, em vez de ~6x. É isto que
+ * impede um clube de divisão baixa de comprar estrelas logo na 1ª época — os
+ * craques ficam fora de alcance até o clube crescer.
+ */
 function overallFactor(overall: number): number {
-  return Math.pow(1.35, overall - 10);
+  return Math.pow(1.55, overall - 10);
 }
 
 /** Curva de idade: pico em 24-27, quebra depois dos 30. Retorna ~0.3..1.15. */
@@ -66,6 +73,8 @@ export function computeMarketValue(player: Player, currentSeason: number): numbe
 /** Salário semanal sugerido, proporcional ao valor de mercado e overall. */
 export function suggestedWage(player: Player, currentSeason: number): number {
   const value = computeMarketValue(player, currentSeason);
-  // ~0.1% do valor por semana, com mínimo digno.
-  return Math.max(500, Math.round((value * 0.001) / 100) * 100);
+  // ~0.8% do valor por semana (~40% do valor por ano). Com os 0.1% originais
+  // os salários eram ~3% da receita e nenhum clube sentia pressão financeira;
+  // agora a folha salarial é a maior despesa, como no futebol real.
+  return Math.max(500, Math.round((value * 0.008) / 100) * 100);
 }

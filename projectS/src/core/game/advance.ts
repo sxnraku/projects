@@ -2,7 +2,14 @@ import { CUP_EVERY_LEAGUE_ROUNDS, Fixture, GameState, isRoundComplete } from '..
 import { generateCup, playCupRound } from '../cup';
 import { addNews } from '../news';
 import { deriveSeed, Rng } from '../engine/rng';
-import { applyWeeklyFinances, matchdayIncome, processContractExpiries, recalcBudgets } from '../economy';
+import {
+  applyInsolvency,
+  applyWeeklyFinances,
+  matchdayIncome,
+  processContractExpiries,
+  recalcBudgets,
+  recalcUpkeep,
+} from '../economy';
 import {
   emptyStandings,
   finalPosition,
@@ -187,12 +194,29 @@ export function advanceWeek(
   }
 
   // 3. Finanças semanais de todos os clubes.
+  //    Bilheteira depende da FORMA recente; manutenção escala com instalações;
+  //    saldo negativo traz sanções (reputação e venda forçada).
   for (const club of Object.values(state.clubs)) {
     const fin = state.finances[club.id];
     if (!fin) continue;
-    const income = homeClubsThisWeek.has(club.id) ? matchdayIncome(club) : 0;
+
+    recalcUpkeep(club, fin); // instalações maiores = manutenção maior
+
+    const income = homeClubsThisWeek.has(club.id)
+      ? matchdayIncome(club, recentFormOf(state, club.id, 5))
+      : 0;
     fin.income.tickets = income;
     applyWeeklyFinances(fin, income);
+
+    const sanction = applyInsolvency(state, club.id);
+    if (sanction.insolvent && club.id === managedId) {
+      if (sanction.soldPlayerName) {
+        addNews(state, 'CLUB',
+          `Insolvência: a direção vendeu ${sanction.soldPlayerName} por ${sanction.amount.toLocaleString('pt-PT')} € para cobrir dívidas.`);
+      } else {
+        addNews(state, 'CLUB', 'Clube em insolvência — contratações bloqueadas até equilibrar as contas.');
+      }
+    }
   }
 
   // 4. Treino de todos os plantéis (determinístico por semana+jogador).
@@ -266,6 +290,31 @@ export function advanceWeek(
 
   const seasonEnded = nextRound(state, mLeagueId) === null;
   return { round: managedRound, fixtures: managedFixtures, cupFixtures, seasonEnded, confidence };
+}
+
+/**
+ * Últimos N resultados de um clube na sua liga ('W' | 'D' | 'L').
+ * Usado pela bilheteira: uma boa série enche o estádio, uma má esvazia-o.
+ */
+export function recentFormOf(
+  state: GameState,
+  clubId: string,
+  count = 5,
+): ('W' | 'D' | 'L')[] {
+  const leagueId = state.clubs[clubId]?.leagueId;
+  const schedule = leagueId ? state.schedules[leagueId] : undefined;
+  if (!schedule) return [];
+
+  return schedule.fixtures
+    .filter((f) => f.result && (f.homeClubId === clubId || f.awayClubId === clubId))
+    .slice(-count)
+    .map((f) => {
+      const r = f.result!;
+      const home = f.homeClubId === clubId;
+      const mine = home ? r.home.goals : r.away.goals;
+      const theirs = home ? r.away.goals : r.home.goals;
+      return mine > theirs ? 'W' : mine === theirs ? 'D' : 'L';
+    });
 }
 
 /** Posição atual (1-indexada) de um clube na sua liga. */

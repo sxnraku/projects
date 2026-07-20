@@ -18,9 +18,10 @@
     "smoke:persist": "tsx src/persistence/__tests__/persistence.smoke.ts",
     "smoke:ads": "tsx src/monetization/__tests__/monetization.smoke.ts",
     "smoke:career": "tsx src/core/career/__tests__/career.smoke.ts",
-    "smoke:all": "npm run smoke && npm run smoke:engine && npm run smoke:season && npm run smoke:economy && npm run smoke:game && npm run smoke:persist && npm run smoke:ads && npm run smoke:career && npm run smoke:world && npm run smoke:inbox",
+    "smoke:all": "npm run smoke && npm run smoke:engine && npm run smoke:season && npm run smoke:economy && npm run smoke:game && npm run smoke:persist && npm run smoke:ads && npm run smoke:career && npm run smoke:world && npm run smoke:inbox && npm run smoke:finance",
     "smoke:world": "tsx src/core/cup/__tests__/world.smoke.ts",
-    "smoke:inbox": "tsx src/core/game/__tests__/inbox.smoke.ts"
+    "smoke:inbox": "tsx src/core/game/__tests__/inbox.smoke.ts",
+    "smoke:finance": "tsx src/core/economy/__tests__/finance.smoke.ts"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

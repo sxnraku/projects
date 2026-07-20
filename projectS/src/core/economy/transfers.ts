@@ -1,4 +1,5 @@
 import { Club, Finance, GameState, Player } from '../models';
+import { canAffordWage, isInsolvent, wageBudgetRemaining } from './finances';
 import { computeMarketValue, suggestedWage } from './marketValue';
 
 /** Proposta de transferência de um clube por um jogador de outro clube. */
@@ -43,6 +44,21 @@ export function evaluateOffer(
   }
   if (player.clubId === offer.fromClubId) {
     return { decision: 'REJECTED', reason: 'Jogador já pertence ao clube.' };
+  }
+
+  // Restrições financeiras do COMPRADOR — avaliadas antes de negociar valores.
+  const buyerFin = state.finances[offer.fromClubId];
+  if (buyerFin) {
+    if (isInsolvent(buyerFin)) {
+      return { decision: 'REJECTED', reason: 'Clube em insolvência: contratações bloqueadas.' };
+    }
+    if (!canAffordWage(buyerFin, offer.wageOffer)) {
+      const left = Math.max(0, wageBudgetRemaining(buyerFin));
+      return {
+        decision: 'REJECTED',
+        reason: `Sem margem salarial (sobram ${left.toLocaleString('pt-PT')} €/sem).`,
+      };
+    }
   }
 
   const value = computeMarketValue(player, state.meta.season);
@@ -109,6 +125,21 @@ export function executeTransfer(
 
   if (buyerFin.transferBudget < offer.fee) {
     return { ok: false, error: 'Orçamento de transferências insuficiente.' };
+  }
+
+  // Um clube insolvente não contrata — tem primeiro de equilibrar as contas.
+  if (isInsolvent(buyerFin)) {
+    return { ok: false, error: 'Clube em insolvência: contratações bloqueadas.' };
+  }
+
+  // Margem salarial: não basta ter o valor do passe, é preciso aguentar o
+  // ordenado semanal até ao fim do contrato.
+  if (!canAffordWage(buyerFin, offer.wageOffer)) {
+    const left = Math.max(0, wageBudgetRemaining(buyerFin));
+    return {
+      ok: false,
+      error: `Sem margem salarial: sobram ${left.toLocaleString('pt-PT')} €/sem.`,
+    };
   }
 
   const sellerId = player.clubId;

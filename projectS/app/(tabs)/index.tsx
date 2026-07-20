@@ -7,7 +7,7 @@ import { AdReward } from '../../src/monetization';
 import { OBJECTIVE_LABELS, dailyBonusAmount } from '../../src/core/career';
 import { TrainingFocus } from '../../src/core/training';
 import { money, wage } from '../../src/ui/format';
-import { suggestedWage } from '../../src/core/economy';
+import { isInsolvent, suggestedWage, wageBudgetRemaining } from '../../src/core/economy';
 import { theme } from '../../src/ui/theme';
 import { Bar, Body, Button, FormDots, RowKV, Screen, Section } from '../components';
 import { showInterstitial, showRewarded } from '../../src/native/ads';
@@ -302,6 +302,16 @@ export default function Dashboard() {
             <RowKV k="Saldo" v={money(finance.balance)} vColor={finance.balance >= 0 ? theme.colors.green : theme.colors.red} />
             <RowKV k="Orçamento de transferências" v={money(finance.transferBudget)} />
             <RowKV k="Salários semanais" v={money(finance.expenses.wages)} vColor={theme.colors.red} />
+            <RowKV
+              k="Margem salarial"
+              v={`${money(wageBudgetRemaining(finance))} de ${money(finance.wageBudget)}`}
+              vColor={wageBudgetRemaining(finance) > 0 ? theme.colors.green : theme.colors.red}
+            />
+            {isInsolvent(finance) ? (
+              <Body style={{ color: theme.colors.red, fontWeight: '700', marginTop: 4 }}>
+                ⚠ Clube insolvente — contratações bloqueadas
+              </Body>
+            ) : null}
 
             {/* TREINO */}
             <Section title="Foco de treino" />
