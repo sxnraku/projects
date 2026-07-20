@@ -42,6 +42,13 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "791c7568-e7dc-42b6-9b27-af98b579ad28"
+      }
+    },
+    "owner": "sxnraku"
   }
 }
