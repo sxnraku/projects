@@ -49,8 +49,8 @@ const rich = evaluateOffer({
   playerId: target.id, fromClubId: myId,
   fee: target.marketValue * 2, wageOffer: margin + 50_000, contractYears: 3,
 }, s);
-assert(rich.decision === 'REJECTED' && /margem salarial/i.test(rich.reason),
-  `com orçamento infinito, o teto salarial trava: "${rich.reason}"`);
+assert(rich.decision === 'REJECTED' && (rich.reasonKey === 'offer.reject.noMargin' || rich.reasonKey === 'offer.reject.wageCap'),
+  `com orçamento infinito, o teto salarial trava: "${rich.reasonKey}"`);
 
 // E o executeTransfer também recusa (defesa em profundidade).
 const forced = executeTransfer({
@@ -117,8 +117,8 @@ const blocked = evaluateOffer({
   playerId: target.id, fromClubId: myId,
   fee: target.marketValue * 2, wageOffer: 100, contractYears: 3,
 }, s);
-assert(blocked.decision === 'REJECTED' && /insolv/i.test(blocked.reason),
-  `mercado bloqueado: "${blocked.reason}"`);
+assert(blocked.decision === 'REJECTED' && blocked.reasonKey === 'offer.reject.insolvent',
+  `mercado bloqueado: "${blocked.reasonKey}"`);
 
 // ------------------------------------------------------ curva de valor íngreme
 console.log('\nCurva de valor separa craques de medianos:');

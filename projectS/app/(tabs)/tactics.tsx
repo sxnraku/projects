@@ -19,21 +19,16 @@ import {
   Tactic,
   Tempo,
 } from '../../src/core/models';
-import { autoPickLineup } from '../../src/core/game';
+import { autoPickLineup, lineupOverall } from '../../src/core/game';
+import { physicalLoad } from '../../src/core/engine';
 import { attrColor, fitnessColor, theme } from '../../src/ui/theme';
+import { useT } from '../../src/ui/i18n';
+import { Face } from '../../src/ui/Face';
 import { Body, PosText, Screen, Section } from '../components';
 
 const FORMATIONS = Object.values(Formation);
-const MENTALITIES: { key: Mentality; label: string }[] = [
-  { key: 'DEFENSIVE', label: 'Defensiva' },
-  { key: 'BALANCED', label: 'Equilibrada' },
-  { key: 'ATTACKING', label: 'Ofensiva' },
-];
-const TEMPOS: { key: Tempo; label: string }[] = [
-  { key: 'SLOW', label: 'Lento' },
-  { key: 'NORMAL', label: 'Normal' },
-  { key: 'FAST', label: 'Rápido' },
-];
+const MENTALITIES: Mentality[] = ['DEFENSIVE', 'BALANCED', 'ATTACKING'];
+const TEMPOS: Tempo[] = ['SLOW', 'NORMAL', 'FAST'];
 
 /** Coordenadas normalizadas por formação (x: 0-1 esq→dir; y: 0-1 baliza→ataque). */
 const LAYOUTS: Record<Formation, { x: number; y: number }[]> = {
@@ -80,6 +75,7 @@ const LAYOUTS: Record<Formation, { x: number; y: number }[]> = {
 const DOT = 44;
 
 export default function Tactics() {
+  const t = useT();
   const state = useGameStore((s) => s.state);
   const setTactic = useGameStore((s) => s.setTactic);
   const managedId = state?.meta.managedClubId;
@@ -87,7 +83,7 @@ export default function Tactics() {
   const [pitchW, setPitchW] = useState(0);
   const [pickSlot, setPickSlot] = useState<number | null>(null); // slot a escolher
 
-  if (!state || !managedId) return <Screen><Body>A carregar…</Body></Screen>;
+  if (!state || !managedId) return <Screen><Body>{t('common.loading')}</Body></Screen>;
 
   const tactic = state.tactics[managedId]!;
   const club = state.clubs[managedId]!;
@@ -117,6 +113,14 @@ export default function Tactics() {
 
   const onPitchLayout = (e: LayoutChangeEvent) => setPitchW(e.nativeEvent.layout.width);
 
+  // Consolidação das escolhas: qualidade do onze e preço físico da tática.
+  const xiOverall = lineupOverall(state, managedId);
+  const load = physicalLoad(tactic);
+  const loadColor = load.level === 'VERY_HIGH' ? theme.colors.red
+    : load.level === 'HIGH' ? theme.colors.yellow
+    : load.level === 'LOW' ? theme.colors.blue
+    : theme.colors.green;
+
   // Candidatos para o slot: TODOS os jogadores, mas os da posição natural
   // aparecem primeiro. O rating já inclui a penalização de fora de posição.
   const slotPosition: Position | null = pickSlot !== null ? tactic.lineup[pickSlot]!.position : null;
@@ -139,11 +143,27 @@ export default function Tactics() {
   return (
     <Screen>
       <ScrollView showsVerticalScrollIndicator={false}>
-        <Section title="Formação" />
+        <Section title={t('tac.formation')} />
         <View style={styles.chips}>
           {FORMATIONS.map((f) => (
             <Chip key={f} label={f} active={tactic.formation === f} onPress={() => changeFormation(f)} />
           ))}
+        </View>
+
+        {/* Dois números que consolidam as escolhas todas: qualidade e custo. */}
+        <View style={styles.summary}>
+          <View>
+            <Text style={styles.summaryLabel}>{t('tac.xiOverall')}</Text>
+            <Text style={[styles.summaryVal, { color: attrColor(Math.round(xiOverall)) }]}>
+              {xiOverall.toFixed(1)}
+            </Text>
+          </View>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={styles.summaryLabel}>{t('tac.load')}</Text>
+            <Text style={[styles.summaryVal, { color: loadColor }]}>
+              {t('tac.loadLine', { label: t(`loadlvl.${load.level}`), fit: load.fatigue })}
+            </Text>
+          </View>
         </View>
 
         {/* CAMPO — toca num jogador para o substituir (lista, não drag) */}
@@ -178,43 +198,58 @@ export default function Tactics() {
             );
           })}
         </View>
-        <Text style={styles.hint}>Toca num jogador para escolher o substituto.</Text>
+        <Text style={styles.hint}>{t('tac.hint')}</Text>
 
-        <Section title="Mentalidade" />
+        <Section title={t('tac.mentality')} />
         <View style={styles.chips}>
           {MENTALITIES.map((m) => (
-            <Chip key={m.key} label={m.label} active={tactic.mentality === m.key}
-              onPress={() => setTactic({ ...tactic, mentality: m.key })} radio />
+            <Chip key={m} label={t(`mentality.${m}`)} active={tactic.mentality === m}
+              onPress={() => setTactic({ ...tactic, mentality: m })} radio />
           ))}
         </View>
 
-        <Section title="Ritmo" />
+        <Section title={t('tac.tempo')} />
         <View style={styles.chips}>
-          {TEMPOS.map((t) => (
-            <Chip key={t.key} label={t.label} active={tactic.tempo === t.key}
-              onPress={() => setTactic({ ...tactic, tempo: t.key })} radio />
+          {TEMPOS.map((tp) => (
+            <Chip key={tp} label={t(`tempo.${tp}`)} active={tactic.tempo === tp}
+              onPress={() => setTactic({ ...tactic, tempo: tp })} radio />
           ))}
         </View>
 
-        <Section title="Instruções" />
+        <Section title={t('tac.instructions')} />
         <Slider
-          label="Pressão"
+          label={t('tac.pressing')}
           value={tactic.pressing}
           onChange={(v) => setTactic({ ...tactic, pressing: v })}
-          hint="Mais lances criados · mais faltas e desgaste"
+          hint={t('tac.pressing.hint')}
         />
         <Slider
-          label="Linha defensiva"
+          label={t('tac.line')}
           value={tactic.defensiveLine}
           onChange={(v) => setTactic({ ...tactic, defensiveLine: v })}
-          hint="Meio-campo mais forte · golos sofridos mais fáceis"
+          hint={t('tac.line.hint')}
         />
         <Slider
-          label="Criatividade"
+          label={t('tac.creativity')}
           value={tactic.creativity}
           onChange={(v) => setTactic({ ...tactic, creativity: v })}
-          hint="Remates mais perigosos · mais perdas de bola"
+          hint={t('tac.creativity.hint')}
         />
+
+        {/* O preço da tática, em números — decidir pressão alta é decidir
+            estoirar o plantel para a jornada seguinte. */}
+        <View style={[styles.loadBox, { borderColor: loadColor }]}>
+          <Text style={[styles.loadTitle, { color: loadColor }]}>
+            {t('load.title', {
+              label: t(`loadlvl.${load.level}`),
+              delta: load.deltaPct !== 0
+                ? t('load.delta', { sign: load.deltaPct > 0 ? '+' : '', pct: load.deltaPct })
+                : '',
+            })}
+          </Text>
+          <Text style={styles.loadHint}>{t(`load.${load.level}`)}</Text>
+        </View>
+
         <View style={{ height: theme.spacing(3) }} />
       </ScrollView>
 
@@ -223,7 +258,7 @@ export default function Tactics() {
         <Pressable style={styles.modalBack} onPress={() => setPickSlot(null)}>
           <Pressable style={styles.modalBox} onPress={() => {}}>
             <Text style={styles.modalTitle}>
-              Escolher jogador — {slotPosition}
+              {t('tac.pick', { pos: slotPosition ?? '' })}
             </Text>
             <FlatList
               data={candidates}
@@ -238,17 +273,18 @@ export default function Tactics() {
                     onPress={() => pickSlot !== null && assignPlayer(pickSlot, item.p.id)}
                   >
                     <Text style={[styles.pickOvr, { color: attrColor(item.rating) }]}>{item.rating}</Text>
+                    <Face seed={item.p.id} size={30} shirt={club.primaryColor} />
                     <View style={{ flex: 1 }}>
                       <Text style={styles.pickName}>
                         {item.p.lastName}
-                        {current ? <Text style={{ color: theme.colors.blue }}>  ● atual</Text> : null}
-                        {inLineup && !current ? <Text style={{ color: theme.colors.textDim }}>  (no onze)</Text> : null}
+                        {current ? <Text style={{ color: theme.colors.blue }}>  {t('tac.current')}</Text> : null}
+                        {inLineup && !current ? <Text style={{ color: theme.colors.textDim }}>  {t('tac.inLineup')}</Text> : null}
                       </Text>
                       <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
                         <PosText position={item.p.positions[0]!} />
-                        <Text style={styles.pickSub}>{item.p.age} anos</Text>
+                        <Text style={styles.pickSub}>{t('tac.years', { n: item.p.age })}</Text>
                         {!item.natural ? (
-                          <Text style={styles.pickOutOfPos}>fora de posição</Text>
+                          <Text style={styles.pickOutOfPos}>{t('tac.outOfPos')}</Text>
                         ) : null}
                       </View>
                     </View>
@@ -323,6 +359,25 @@ const styles = StyleSheet.create({
   chipActive: { borderColor: theme.colors.blue, backgroundColor: theme.colors.surfaceAlt },
   chipText: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700' },
   chipTextActive: { color: theme.colors.blue },
+
+  summary: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end',
+    backgroundColor: theme.colors.surface, borderRadius: theme.radius.sm,
+    borderWidth: 1, borderColor: theme.colors.border,
+    padding: theme.spacing(1.25), marginTop: theme.spacing(1.5),
+  },
+  summaryLabel: {
+    color: theme.colors.textDim, fontSize: theme.font.small,
+    fontWeight: '700', letterSpacing: 1,
+  },
+  summaryVal: { fontSize: theme.font.h2, fontWeight: '800', fontVariant: ['tabular-nums'], marginTop: 2 },
+
+  loadBox: {
+    backgroundColor: theme.colors.surface, borderRadius: theme.radius.sm,
+    borderWidth: 1, padding: theme.spacing(1.25), marginTop: theme.spacing(0.5),
+  },
+  loadTitle: { fontSize: theme.font.body, fontWeight: '700' },
+  loadHint: { color: theme.colors.textDim, fontSize: theme.font.small, marginTop: 3 },
 
   pitch: {
     width: '100%', aspectRatio: 1 / 1.35, backgroundColor: theme.colors.pitch,

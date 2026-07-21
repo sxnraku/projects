@@ -7,12 +7,17 @@ import React, { useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useGameStore } from '../src/state/gameStore';
 import { money } from '../src/ui/format';
+import { useT } from '../src/ui/i18n';
+import { LANGS, LANG_LABELS } from '../src/core/i18n';
 import { reputationStars, theme } from '../src/ui/theme';
 import { Button, Crest, Screen, Stars } from './components';
 
 export default function Onboarding() {
+  const t = useT();
   const state = useGameStore((s) => s.state);
   const completeOnboarding = useGameStore((s) => s.completeOnboarding);
+  const lang = useGameStore((s) => s.lang);
+  const setLang = useGameStore((s) => s.setLang);
 
   const [name, setName] = useState('');
   const [clubId, setClubId] = useState<string | null>(null);
@@ -34,24 +39,32 @@ export default function Onboarding() {
   return (
     <Screen>
       <View style={styles.header}>
-        <Text style={styles.title}>Bem-vindo, mister.</Text>
-        <Text style={styles.subtitle}>
-          Começas na {Object.values(state.leagues).length > 1 ? `Liga ${Math.max(...Object.values(state.leagues).map((l) => l.tier))}` : 'liga'}.
-          O objetivo é simples: subir até ao topo.
-        </Text>
+        <Text style={styles.title}>{t('onb.welcome')}</Text>
+        <Text style={styles.subtitle}>{t('onb.intro')}</Text>
       </View>
 
-      <Text style={styles.label}>O TEU NOME</Text>
+      {/* Idioma — escolha logo no arranque */}
+      <Text style={styles.label}>{t('onb.langLabel')}</Text>
+      <View style={styles.langRow}>
+        {LANGS.map((l) => (
+          <Pressable key={l} onPress={() => setLang(l)}
+            style={[styles.langBtn, lang === l && styles.langBtnOn]}>
+            <Text style={[styles.langBtnText, lang === l && styles.langBtnTextOn]}>{LANG_LABELS[l]}</Text>
+          </Pressable>
+        ))}
+      </View>
+
+      <Text style={styles.label}>{t('onb.yourName')}</Text>
       <TextInput
         style={styles.input}
-        placeholder="Nome do treinador"
+        placeholder={t('onb.namePlaceholder')}
         placeholderTextColor={theme.colors.textDim}
         value={name}
         onChangeText={setName}
         maxLength={24}
       />
 
-      <Text style={styles.label}>ESCOLHE O TEU CLUBE</Text>
+      <Text style={styles.label}>{t('onb.pickClub')}</Text>
       <FlatList
         data={clubs}
         keyExtractor={(c) => c.id}
@@ -71,7 +84,7 @@ export default function Onboarding() {
               </View>
               <View style={{ alignItems: 'flex-end' }}>
                 <Text style={styles.clubBudget}>{money(fin?.transferBudget ?? 0)}</Text>
-                <Text style={styles.clubBudgetLabel}>transferências</Text>
+                <Text style={styles.clubBudgetLabel}>{t('onb.transferBudget')}</Text>
               </View>
               <Text style={[styles.radio, selected && { color: theme.colors.blue }]}>
                 {selected ? '●' : '○'}
@@ -84,7 +97,7 @@ export default function Onboarding() {
 
       <View style={{ paddingVertical: theme.spacing(1.5) }}>
         <Button
-          label="COMEÇAR CARREIRA ▶"
+          label={t('onb.start')}
           disabled={!clubId}
           onPress={() => clubId && completeOnboarding(name, clubId)}
         />
@@ -117,4 +130,12 @@ const styles = StyleSheet.create({
   clubBudgetLabel: { color: theme.colors.textDim, fontSize: 9 },
   radio: { color: theme.colors.textDim, fontSize: 16, width: 20, textAlign: 'center' },
   sep: { height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.border },
+  langRow: { flexDirection: 'row', gap: theme.spacing(0.75) },
+  langBtn: {
+    flex: 1, paddingVertical: theme.spacing(1), borderRadius: theme.radius.sm,
+    borderWidth: 1, borderColor: theme.colors.border, alignItems: 'center', backgroundColor: theme.colors.surface,
+  },
+  langBtnOn: { borderColor: theme.colors.blue, backgroundColor: theme.colors.surfaceAlt },
+  langBtnText: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700' },
+  langBtnTextOn: { color: theme.colors.blue },
 });

@@ -61,8 +61,8 @@ const overCap = evaluateOffer({
   playerId: anyTarget.id, fromClubId: myId,
   fee: 1000, wageOffer: cap + 10_000, contractYears: 3,
 }, s);
-assert(overCap.decision === 'REJECTED' && /teto salarial da divis/i.test(overCap.reason),
-  `direção barra acima do teto da divisão: "${overCap.reason}"`);
+assert(overCap.decision === 'REJECTED' && overCap.reasonKey === 'offer.reject.wageCap',
+  `direção barra acima do teto da divisão: "${overCap.reasonKey}"`);
 
 // --------------------------------------------------- interesse do jogador
 console.log('\nInteresse do jogador (reputação):');
@@ -82,7 +82,7 @@ const refused = evaluateOffer({
   fee: star.marketValue * 3, wageOffer: 1000, contractYears: 3,
 }, s);
 assert(refused.decision === 'REJECTED',
-  `mesmo com fee 3x, o craque recusa: "${refused.reason}"`);
+  `mesmo com fee 3x, o craque recusa: "${refused.reasonKey}"`);
 
 // Um jogador ao nível do clube deve passar neste filtro.
 const modest = Object.values(s.players)

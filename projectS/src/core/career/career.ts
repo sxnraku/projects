@@ -2,6 +2,7 @@
  * Carreira do treinador — objetivos da direção, confiança, despedimento,
  * troféus, historial e bónus diário. Lógica pura, sem UI nem SDKs.
  */
+import { Lang } from '../i18n';
 
 /** Objetivo definido pela direção no início da época. */
 export const Objective = {
@@ -11,10 +12,11 @@ export const Objective = {
 } as const;
 export type Objective = (typeof Objective)[keyof typeof Objective];
 
-export const OBJECTIVE_LABELS: Record<Objective, string> = {
-  TITLE: 'Lutar pelo título',
-  TOP_HALF: 'Terminar na 1ª metade',
-  AVOID_RELEGATION: 'Evitar a despromoção',
+/** Chave i18n do objetivo (a UI traduz). */
+export const OBJECTIVE_KEYS: Record<Objective, string> = {
+  TITLE: 'objective.TITLE',
+  TOP_HALF: 'objective.TOP_HALF',
+  AVOID_RELEGATION: 'objective.AVOID_RELEGATION',
 };
 
 /** Registo de uma época concluída (linha do historial). */
@@ -34,10 +36,11 @@ export interface SeasonRecord {
   relegated: boolean;
 }
 
-/** Troféu conquistado. */
+/** Troféu conquistado (chave i18n + params; a UI traduz). */
 export interface Trophy {
   season: number;
-  label: string; // ex: "Campeão — Liga Principal"
+  key: string;
+  params?: import('../i18n').MsgParams;
 }
 
 /** Estado completo da carreira, persistido no save. */
@@ -56,6 +59,9 @@ export interface CareerState {
   // Bónus diário (datas do MUNDO REAL, não do jogo)
   lastLoginDate: string; // "YYYY-MM-DD"
   loginStreak: number;
+
+  /** Idioma escolhido pelo utilizador (persiste no save). */
+  lang?: Lang;
 }
 
 export function initialCareer(): CareerState {
@@ -111,7 +117,7 @@ export function updateConfidence(
 export interface BoardVerdict {
   metObjective: boolean;
   fired: boolean;
-  message: string;
+  messageKey: string; // chave i18n (a UI traduz)
 }
 
 /**
@@ -129,18 +135,18 @@ export function evaluateSeason(
 
   if (met) {
     career.confidence = Math.min(100, career.confidence + 15);
-    return { metObjective: true, fired: false, message: 'A direção está satisfeita. Objetivo cumprido!' };
+    return { metObjective: true, fired: false, messageKey: 'board.satisfied' };
   }
 
   const badMiss = finalPosition > target + 3 || relegated;
   const fired = badMiss || career.confidence <= 15;
   if (fired) {
     career.timesFired += 1;
-    return { metObjective: false, fired: true, message: 'A direção perdeu a paciência. Foste despedido.' };
+    return { metObjective: false, fired: true, messageKey: 'board.fired' };
   }
 
   career.confidence = Math.max(0, career.confidence - 15);
-  return { metObjective: false, fired: false, message: 'Objetivo falhado. A direção dá-te mais uma época — a última.' };
+  return { metObjective: false, fired: false, messageKey: 'board.lastChance' };
 }
 
 // ---------- Bónus diário (retenção) ----------

@@ -61,7 +61,7 @@ const balBefore = game.finances[clubId]!.balance;
 const msg1 = applyReward(game, 'SPONSOR_BONUS');
 assert(game.finances[clubId]!.balance === balBefore + SPONSOR_BONUS_AMOUNT,
   `patrocínio soma ${SPONSOR_BONUS_AMOUNT.toLocaleString('pt-PT')} ao saldo`);
-assert(msg1.includes('Patrocinador'), 'mensagem de patrocínio devolvida');
+assert(msg1.key === 'reward.sponsor', 'mensagem de patrocínio devolvida');
 
 // Cansa o plantel e aplica o boost.
 const squad = game.clubs[clubId]!.squad;

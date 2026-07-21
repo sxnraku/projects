@@ -82,7 +82,8 @@ export interface InterestCheck {
   interested: boolean;
   /** Prémio de assinatura necessário para o convencer (0 se já aceita). */
   requiredSigningBonus: number;
-  reason: string;
+  reasonKey: string;
+  reasonParams?: import('../i18n').MsgParams;
 }
 
 /**
@@ -102,7 +103,7 @@ export function checkInterest(
   const gap = needed - club.reputation;
 
   if (gap <= 0) {
-    return { interested: true, requiredSigningBonus: 0, reason: 'Jogador aberto a negociar.' };
+    return { interested: true, requiredSigningBonus: 0, reasonKey: 'interest.open' };
   }
 
   // Fora de alcance: nem com dinheiro (mais de 25 pontos de diferença).
@@ -110,7 +111,8 @@ export function checkInterest(
     return {
       interested: false,
       requiredSigningBonus: Infinity,
-      reason: `${player.lastName} não considera um clube deste nível (${club.reputation} vs ${needed} necessários).`,
+      reasonKey: 'interest.refuse',
+      reasonParams: { name: player.lastName, rep: club.reputation, needed },
     };
   }
 
@@ -122,6 +124,7 @@ export function checkInterest(
   return {
     interested: false,
     requiredSigningBonus: Math.max(50_000, bonus),
-    reason: `${player.lastName} só desce de nível com um prémio de assinatura de ${Math.max(50_000, bonus).toLocaleString('pt-PT')} €.`,
+    reasonKey: 'interest.bonus',
+    reasonParams: { name: player.lastName, bonus: Math.max(50_000, bonus).toLocaleString('pt-PT') },
   };
 }

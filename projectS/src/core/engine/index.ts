@@ -2,3 +2,4 @@
 export * from './rng';
 export * from './teamStrength';
 export * from './matchEngine';
+export * from './fatigue';

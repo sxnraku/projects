@@ -14,47 +14,129 @@ import {
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Club, POSITION_GROUP, Position } from '../src/core/models';
+import { managedLeagueId, nextRound } from '../src/core/game';
 import { useGameStore } from '../src/state/gameStore';
-import { money, shortDate } from '../src/ui/format';
-import { POS_COLORS, reputationStars, theme } from '../src/ui/theme';
+import { money } from '../src/ui/format';
+import { useT } from '../src/ui/i18n';
+import { fitnessColor, POS_COLORS, reputationStars, theme } from '../src/ui/theme';
+
+/** Preto ou branco conforme a cor de fundo, para o texto ficar legível. */
+export function contrastOn(hex: string): string {
+  const c = hex.replace('#', '');
+  if (c.length < 6) return '#fff';
+  const r = parseInt(c.slice(0, 2), 16);
+  const g = parseInt(c.slice(2, 4), 16);
+  const b = parseInt(c.slice(4, 6), 16);
+  // Luminância relativa aproximada.
+  return (r * 299 + g * 587 + b * 114) / 1000 > 150 ? '#1A1D22' : '#FFFFFF';
+}
+
+/** Escurece uma cor hex por um fator (0..1) — usado nos degradés do cabeçalho. */
+export function darken(hex: string, factor: number): string {
+  const c = hex.replace('#', '');
+  if (c.length < 6) return hex;
+  const r = Math.round(parseInt(c.slice(0, 2), 16) * factor);
+  const g = Math.round(parseInt(c.slice(2, 4), 16) * factor);
+  const b = Math.round(parseInt(c.slice(4, 6), 16) * factor);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+}
+
+/** Escudo circular (estilo "logo token" dos ecrãs de referência). */
+export function CrestCircle({ club, size = 32 }: { club: Club; size?: number }) {
+  return (
+    <View style={[
+      styles.crestCircle,
+      {
+        width: size, height: size, borderRadius: size / 2,
+        backgroundColor: club.primaryColor,
+        borderColor: club.secondaryColor,
+        borderWidth: Math.max(1.5, size * 0.06),
+      },
+    ]}>
+      <Text style={[styles.crestCircleText, {
+        fontSize: size * 0.36, color: contrastOn(club.primaryColor),
+      }]}>
+        {club.shortName.slice(0, 3)}
+      </Text>
+    </View>
+  );
+}
 
 export function Screen({ children }: { children: React.ReactNode }) {
   return <SafeAreaView style={styles.screen} edges={['left', 'right']}>{children}</SafeAreaView>;
 }
 
 /**
- * Barra superior fixa: clube, estrelas de reputação, dinheiro, data.
- * Nunca esconder dinheiro nem reputação.
+ * Barra superior: faixa colorida do clube (escudo + nome) + tira escura com
+ * época/jornada ao centro e pastilhas de recursos (energia, lesões, dinheiro,
+ * reputação). Estilo dos jogos de gestão móveis, mas com dados reais.
  */
 export function TopBar() {
   const router = useRouter();
+  const t = useT();
   const state = useGameStore((s) => s.state);
   const club = useGameStore((s) => s.managedClub)();
   // Sem estado ou durante o onboarding: barra vazia (sem dados falsos).
   if (!state || !club || state.meta.managerName === '') {
     return <SafeAreaView edges={['top']} style={styles.topbarWrap} />;
   }
-  const balance = state.finances[club.id]?.balance ?? 0;
+
+  const fin = state.finances[club.id];
+  const balance = fin?.balance ?? 0;
+  const head = club.primaryColor;
+  const ink = contrastOn(head);
+
+  // Recursos derivados do plantel.
+  const squad = club.squad.map((id) => state.players[id]).filter(Boolean);
+  const avgFit = squad.length
+    ? Math.round(squad.reduce((s, p) => s + (p!.condition.fitness), 0) / squad.length)
+    : 0;
+  const injured = squad.filter((p) => p!.condition.status === 'INJURED').length;
+
+  const careerYear = state.career.seasons.length + 1;
+  const round = nextRound(state, managedLeagueId(state));
+  const seasonLabel = `${state.meta.season}/${String((state.meta.season + 1) % 100).padStart(2, '0')}`;
 
   return (
-    <SafeAreaView edges={['top']} style={styles.topbarWrap}>
-      <View style={styles.topbar}>
-        <View style={[styles.topbarBadge, { backgroundColor: club.primaryColor }]} />
+    <SafeAreaView edges={['top']} style={{ backgroundColor: head }}>
+      {/* Faixa do clube */}
+      <View style={[styles.clubBand, { backgroundColor: head }]}>
+        <CrestCircle club={club} size={34} />
         <View style={{ flex: 1 }}>
-          <Text style={styles.topbarClub} numberOfLines={1}>{club.name}</Text>
-          <Stars value={reputationStars(club.reputation)} />
+          <Text style={[styles.clubBandName, { color: ink }]} numberOfLines={1}>{club.name}</Text>
+          <View style={{ opacity: 0.9 }}>
+            <Stars value={reputationStars(club.reputation)} />
+          </View>
         </View>
-        <View style={{ alignItems: 'flex-end' }}>
-          <Text style={[styles.topbarMoney, { color: balance >= 0 ? theme.colors.green : theme.colors.red }]}>
-            {money(balance)}
-          </Text>
-          <Text style={styles.topbarDate}>{shortDate(state.meta.currentDate)}</Text>
-        </View>
-        <Pressable onPress={() => router.push('/club' as never)} hitSlop={8}>
-          <Text style={styles.topbarGear}>⚙</Text>
+        <Pressable onPress={() => router.push('/club' as never)} hitSlop={8}
+          style={[styles.gearBtn, { borderColor: ink === '#FFFFFF' ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.25)' }]}>
+          <Text style={[styles.gearText, { color: ink }]}>⚙</Text>
         </Pressable>
       </View>
+
+      {/* Tira de recursos */}
+      <View style={styles.resBar}>
+        <Text style={styles.resSeason} numberOfLines={1}>
+          {round
+            ? t('top.season', { y: careerYear, season: seasonLabel, round })
+            : t('top.seasonNoRound', { y: careerYear, season: seasonLabel })}
+        </Text>
+        <View style={styles.resPills}>
+          <ResPill icon="⚡" text={`${avgFit}%`} color={fitnessColor(avgFit)} />
+          <ResPill icon="✚" text={String(injured)} color={injured > 0 ? theme.colors.red : theme.colors.textDim} />
+          <ResPill icon="€" text={money(balance)} color={balance >= 0 ? theme.colors.green : theme.colors.red} />
+        </View>
+      </View>
     </SafeAreaView>
+  );
+}
+
+function ResPill({ icon, text, color }: { icon: string; text: string; color: string }) {
+  return (
+    <View style={styles.resPill}>
+      <Text style={[styles.resPillIcon, { color }]}>{icon}</Text>
+      <Text style={[styles.resPillText, { color }]}>{text}</Text>
+    </View>
   );
 }
 
@@ -80,6 +162,55 @@ export function Section({ title, right }: { title: string; right?: React.ReactNo
 /** Painel discreto (usado com moderação — o conteúdo manda). */
 export function Card({ children, style }: { children: React.ReactNode; style?: ViewStyle }) {
   return <View style={[styles.card, style]}>{children}</View>;
+}
+
+/**
+ * Cartão de dashboard: barra de título com chevron (toca para abrir o ecrã
+ * completo) e conteúdo por baixo. É o tijolo do novo ecrã inicial em cartões.
+ */
+export function DashCard({
+  title, onOpen, right, children, style, accent,
+}: {
+  title: string;
+  onOpen?: () => void;
+  right?: React.ReactNode;
+  children: React.ReactNode;
+  style?: ViewStyle;
+  accent?: string; // fio de cor à esquerda (estado: alerta, etc.)
+}) {
+  return (
+    <View style={[styles.dashCard, accent ? { borderLeftColor: accent, borderLeftWidth: 3 } : null, style]}>
+      <Pressable
+        onPress={onOpen}
+        disabled={!onOpen}
+        style={styles.dashHead}
+      >
+        <Text style={styles.dashTitle}>{title}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1) }}>
+          {right}
+          {onOpen ? <Text style={styles.dashChevron}>»</Text> : null}
+        </View>
+      </Pressable>
+      <View style={styles.dashBody}>{children}</View>
+    </View>
+  );
+}
+
+/** Trio de forças DEF · MED · ATA em caixas, como nos ecrãs de referência. */
+export function StrengthTriplet({
+  def, mid, att, compact,
+}: { def: number; mid: number; att: number; compact?: boolean }) {
+  const cells: [string, number][] = [['DEF', def], ['MED', mid], ['ATA', att]];
+  return (
+    <View style={styles.triplet}>
+      {cells.map(([label, v]) => (
+        <View key={label} style={styles.tripletCell}>
+          <Text style={styles.tripletLabel}>{label}</Text>
+          <Text style={[styles.tripletVal, compact && { fontSize: theme.font.body }]}>{v}</Text>
+        </View>
+      ))}
+    </View>
+  );
 }
 
 export function H1({ children, style }: { children: React.ReactNode; style?: object }) {
@@ -248,17 +379,62 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: theme.colors.bg, paddingHorizontal: theme.spacing(1.5) },
 
   topbarWrap: { backgroundColor: theme.colors.surface },
-  topbar: {
-    flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1),
+
+  clubBand: {
+    flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1.25),
     paddingHorizontal: theme.spacing(1.5), paddingVertical: theme.spacing(1),
+  },
+  clubBandName: { fontSize: theme.font.h2, fontWeight: '800' },
+  gearBtn: {
+    width: 34, height: 34, borderRadius: 8, borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  gearText: { fontSize: 18 },
+
+  resBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: '#171B21', paddingHorizontal: theme.spacing(1.5), paddingVertical: theme.spacing(0.75),
     borderBottomWidth: 1, borderBottomColor: theme.colors.border,
   },
-  topbarBadge: { width: 26, height: 26, borderRadius: 4 },
-  topbarClub: { color: theme.colors.text, fontSize: theme.font.h3, fontWeight: '700' },
-  topbarMoney: { fontSize: theme.font.h3, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  topbarDate: { color: theme.colors.textDim, fontSize: theme.font.small },
-  topbarGear: { color: theme.colors.textDim, fontSize: 18, paddingLeft: 4 },
+  resSeason: { color: theme.colors.text, fontSize: theme.font.small, fontWeight: '700', flexShrink: 1 },
+  resPills: { flexDirection: 'row', gap: theme.spacing(0.75) },
+  resPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: theme.colors.surface, borderRadius: 5,
+    paddingHorizontal: theme.spacing(0.75), paddingVertical: 3,
+  },
+  resPillIcon: { fontSize: 11, fontWeight: '800' },
+  resPillText: { fontSize: theme.font.small, fontWeight: '800', fontVariant: ['tabular-nums'] },
+
+  crestCircle: { alignItems: 'center', justifyContent: 'center' },
+  crestCircleText: { fontWeight: '900', letterSpacing: 0.5 },
+
   stars: { color: theme.colors.yellow, fontSize: 10, letterSpacing: 1 },
+
+  dashCard: {
+    backgroundColor: theme.colors.surface, borderRadius: theme.radius.md,
+    borderWidth: 1, borderColor: theme.colors.border, marginBottom: theme.spacing(1.25),
+    overflow: 'hidden',
+  },
+  dashHead: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: theme.spacing(1.5), paddingVertical: theme.spacing(1),
+    backgroundColor: theme.colors.surfaceAlt,
+  },
+  dashTitle: {
+    color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '800',
+    letterSpacing: 1.1, textTransform: 'uppercase',
+  },
+  dashChevron: { color: theme.colors.textDim, fontSize: theme.font.h3, fontWeight: '800' },
+  dashBody: { padding: theme.spacing(1.5) },
+
+  triplet: { flexDirection: 'row', gap: theme.spacing(0.75) },
+  tripletCell: {
+    flex: 1, alignItems: 'center', backgroundColor: theme.colors.bg,
+    borderRadius: theme.radius.sm, paddingVertical: theme.spacing(0.75),
+  },
+  tripletLabel: { color: theme.colors.textDim, fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
+  tripletVal: { color: theme.colors.text, fontSize: theme.font.h2, fontWeight: '800', fontVariant: ['tabular-nums'] },
 
   section: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',

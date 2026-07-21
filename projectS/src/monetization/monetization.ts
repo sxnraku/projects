@@ -1,4 +1,5 @@
 import { GameState } from '../core/models';
+import { Msg } from '../core/i18n';
 
 /**
  * Lógica de monetização — pura e testável, sem SDKs.
@@ -81,7 +82,7 @@ export function consumeRewarded(m: MonetizationState, gameDate: string): void {
  * Aplica a recompensa ao estado do jogo (muta o GameState do clube gerido).
  * Devolve uma descrição para a UI.
  */
-export function applyReward(state: GameState, reward: AdReward): string {
+export function applyReward(state: GameState, reward: AdReward): Msg {
   const clubId = state.meta.managedClubId;
 
   if (reward === 'SPONSOR_BONUS') {
@@ -90,7 +91,7 @@ export function applyReward(state: GameState, reward: AdReward): string {
       fin.balance += SPONSOR_BONUS_AMOUNT;
       fin.transferBudget += Math.round(SPONSOR_BONUS_AMOUNT * 0.5);
     }
-    return `Patrocinador surpresa! +${SPONSOR_BONUS_AMOUNT.toLocaleString('pt-PT')} € em caixa.`;
+    return { key: 'reward.sponsor', params: { amount: SPONSOR_BONUS_AMOUNT.toLocaleString('pt-PT') } };
   }
 
   // FITNESS_BOOST — recupera o plantel inteiro.
@@ -101,5 +102,5 @@ export function applyReward(state: GameState, reward: AdReward): string {
       if (p) p.condition.fitness = Math.min(100, p.condition.fitness + FITNESS_BOOST_AMOUNT);
     }
   }
-  return `Sessão de recuperação! Plantel +${FITNESS_BOOST_AMOUNT} de frescura.`;
+  return { key: 'reward.fitness', params: { amount: FITNESS_BOOST_AMOUNT } };
 }

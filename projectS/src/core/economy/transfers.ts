@@ -35,7 +35,8 @@ export interface OfferEvaluation {
   requiredWage?: number;
   /** Prémio de assinatura necessário para o convencer a descer de nível. */
   requiredSigningBonus?: number;
-  reason: string;
+  reasonKey: string; // chave i18n (a UI traduz)
+  reasonParams?: import('../i18n').MsgParams;
 }
 
 /** Escalão (tier) da divisão onde um clube joga. 1 = principal. */
@@ -53,13 +54,13 @@ export function evaluateOffer(
   state: GameState,
 ): OfferEvaluation {
   const player = state.players[offer.playerId];
-  if (!player) return { decision: 'REJECTED', reason: 'Jogador não existe.' };
+  if (!player) return { decision: 'REJECTED', reasonKey: 'offer.reject.notExist' };
   if (player.clubId === null) {
     // Jogador livre — só precisa de aceitar o salário (fee = 0).
     return evaluatePlayerWillingness(offer, player, state);
   }
   if (player.clubId === offer.fromClubId) {
-    return { decision: 'REJECTED', reason: 'Jogador já pertence ao clube.' };
+    return { decision: 'REJECTED', reasonKey: 'offer.reject.own' };
   }
 
   // Restrições do COMPRADOR — avaliadas antes de negociar valores.
@@ -69,7 +70,7 @@ export function evaluateOffer(
 
   if (buyerFin && buyerClub) {
     if (isInsolvent(buyerFin)) {
-      return { decision: 'REJECTED', reason: 'Clube em insolvência: contratações bloqueadas.' };
+      return { decision: 'REJECTED', reasonKey: 'offer.reject.insolvent' };
     }
 
     // Teto RÍGIDO da divisão — a direção barra, mesmo com dinheiro em caixa.
@@ -78,7 +79,8 @@ export function evaluateOffer(
       const left = Math.max(0, divisionCapRemaining(buyerFin, buyerTier));
       return {
         decision: 'REJECTED',
-        reason: `Teto salarial da divisão (${cap.toLocaleString('pt-PT')} €/sem): só sobram ${left.toLocaleString('pt-PT')} €/sem.`,
+        reasonKey: 'offer.reject.wageCap',
+        reasonParams: { cap: cap.toLocaleString('pt-PT'), left: left.toLocaleString('pt-PT') },
       };
     }
 
@@ -86,7 +88,8 @@ export function evaluateOffer(
       const left = Math.max(0, wageBudgetRemaining(buyerFin));
       return {
         decision: 'REJECTED',
-        reason: `Sem margem salarial (sobram ${left.toLocaleString('pt-PT')} €/sem).`,
+        reasonKey: 'offer.reject.noMargin',
+        reasonParams: { left: left.toLocaleString('pt-PT') },
       };
     }
 
@@ -99,7 +102,8 @@ export function evaluateOffer(
           decision: 'REJECTED',
           requiredSigningBonus: Number.isFinite(interest.requiredSigningBonus)
             ? interest.requiredSigningBonus : undefined,
-          reason: interest.reason,
+          reasonKey: interest.reasonKey,
+          reasonParams: interest.reasonParams,
         };
       }
     }
@@ -115,7 +119,8 @@ export function evaluateOffer(
     return {
       decision: 'COUNTER',
       requiredFee,
-      reason: `Proposta baixa. Clube pede ${requiredFee.toLocaleString('pt-PT')}.`,
+      reasonKey: 'offer.counter.fee',
+      reasonParams: { fee: requiredFee.toLocaleString('pt-PT') },
     };
   }
 
@@ -134,13 +139,14 @@ function evaluatePlayerWillingness(
     return {
       decision: 'COUNTER',
       requiredWage: wanted,
-      reason: `Salário insuficiente. Jogador quer ${wanted.toLocaleString('pt-PT')}/semana.`,
+      reasonKey: 'offer.counter.wage',
+      reasonParams: { wage: wanted.toLocaleString('pt-PT') },
     };
   }
   if (offer.contractYears < 1 || offer.contractYears > 6) {
-    return { decision: 'REJECTED', reason: 'Duração de contrato inaceitável (1-6 anos).' };
+    return { decision: 'REJECTED', reasonKey: 'offer.reject.contract' };
   }
-  return { decision: 'ACCEPTED', reason: 'Proposta aceite.' };
+  return { decision: 'ACCEPTED', reasonKey: 'offer.accepted' };
 }
 
 /** Resultado da execução de uma transferência. */

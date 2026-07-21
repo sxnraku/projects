@@ -160,7 +160,7 @@ if (requestItem) {
   if (requestItem.request === 'WANTS_LEAVE') {
     const msg = resolveRequest(s5, requestItem.id, true);
     assert(s5.players[benchId]!.transferListed, 'aceitar "quer sair" coloca-o na lista de transferências');
-    assert(msg !== null && msg.includes('lista'), 'mensagem devolvida');
+    assert(msg !== null && msg.key === 'req.leaveAccepted', 'mensagem devolvida');
   } else {
     const wageBefore = s5.players[benchId]!.wage;
     const msg = resolveRequest(s5, requestItem.id, true);

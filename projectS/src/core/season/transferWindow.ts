@@ -12,7 +12,7 @@ export const WINTER_WINDOW_LENGTH = 3;
 
 export interface WindowState {
   open: boolean;
-  label: string;
+  labelKey: string; // chave i18n (a UI traduz)
   /** Jornada em que a próxima janela abre (null se já está aberta ou acabaram). */
   opensAtRound: number | null;
 }
@@ -23,19 +23,19 @@ export interface WindowState {
  */
 export function transferWindow(round: number, totalRounds: number): WindowState {
   if (round >= SUMMER_WINDOW.from && round <= SUMMER_WINDOW.to) {
-    return { open: true, label: 'Mercado de verão aberto', opensAtRound: null };
+    return { open: true, labelKey: 'window.summer', opensAtRound: null };
   }
 
   const winterFrom = Math.max(SUMMER_WINDOW.to + 1, Math.floor(totalRounds / 2));
   const winterTo = winterFrom + WINTER_WINDOW_LENGTH - 1;
 
   if (round >= winterFrom && round <= winterTo) {
-    return { open: true, label: 'Mercado de inverno aberto', opensAtRound: null };
+    return { open: true, labelKey: 'window.winter', opensAtRound: null };
   }
 
   if (round < winterFrom) {
-    return { open: false, label: 'Mercado fechado', opensAtRound: winterFrom };
+    return { open: false, labelKey: 'window.closed', opensAtRound: winterFrom };
   }
 
-  return { open: false, label: 'Mercado fechado até à próxima época', opensAtRound: null };
+  return { open: false, labelKey: 'window.closedSeason', opensAtRound: null };
 }

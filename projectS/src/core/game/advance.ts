@@ -1,13 +1,20 @@
-import { CUP_EVERY_LEAGUE_ROUNDS, Fixture, GameState, isRoundComplete } from '../models';
+import {
+  CUP_EVERY_LEAGUE_ROUNDS,
+  Fixture,
+  GameState,
+  isRoundComplete,
+  naturalOverall,
+} from '../models';
 import { generateCup, playCupRound } from '../cup';
 import { addNews } from '../news';
 import { deriveSeed, Rng } from '../engine/rng';
+import { matchFatigue } from '../engine/fatigue';
 import {
   annualBudgetReset,
   applyInsolvency,
   applyWeeklyFinances,
   leaguePrize,
-  matchdayIncome,
+  matchdayGate,
   processContractExpiries,
   promotionPrize,
   recalcIncome,
@@ -33,12 +40,46 @@ import {
   generateRenewalReminders,
   pruneInbox,
 } from './inbox';
-
-const MATCH_FATIGUE = 18; // perda de fitness de quem joga a titular
+import { pruneOffers, resolveDueOffers } from './offers';
+import { BOSMAN_WINDOW_ROUNDS, roundsRemaining, runBosmanApproaches } from './matchday';
 
 /** Liga do clube gerido (muda com promoções/despromoções). */
 export function managedLeagueId(state: GameState): string {
   return state.clubs[state.meta.managedClubId]?.leagueId ?? Object.keys(state.leagues)[0]!;
+}
+
+/** Uma linha das "notas do plantel" no resumo da jornada (chave + params). */
+export interface WeekNote {
+  key: string;
+  params?: import('../i18n').MsgParams;
+  kind: 'INJURY' | 'GROWTH' | 'TRANSFER' | 'INFO';
+}
+
+/**
+ * Balanço da jornada do clube gerido — alimenta o modal de fecho da semana.
+ *
+ * O saldo mudava em silêncio na barra de topo e o jogador nunca ligava o
+ * resultado desportivo à saúde financeira. Este relatório mostra o dinheiro a
+ * entrar e a sair no segundo exato em que a jornada acaba.
+ */
+export interface WeekReport {
+  round: number;
+  played: boolean;
+  isHome: boolean;
+  opponentName: string;
+  goalsFor: number;
+  goalsAgainst: number;
+
+  attendance: number;
+  gate: number; // bilheteira
+  otherIncome: number; // TV + patrocínios + merchandising
+  facilities: number; // despesa (positivo)
+  wages: number; // despesa (positivo)
+  staff: number; // despesa (positivo)
+  net: number; // lucro líquido da semana
+  balanceAfter: number;
+
+  notes: WeekNote[];
 }
 
 /** Resultado de avançar uma semana. */
@@ -48,6 +89,7 @@ export interface WeekResult {
   cupFixtures: Fixture[]; // jogos da Taça disputados nesta semana (se houve)
   seasonEnded: boolean;
   confidence: number; // confiança da direção após a jornada
+  report: WeekReport | null; // balanço da semana do clube gerido
 }
 
 /** Próxima jornada por simular numa liga. Null se a época dessa liga acabou. */
@@ -82,6 +124,16 @@ export function advanceWeek(
   const allPlayed: Fixture[] = [];
   const homeClubsThisWeek = new Set<string>();
   const playedClubs = new Set<string>();
+
+  // Dados recolhidos ao longo da semana para o relatório final.
+  const notes: WeekNote[] = [];
+  let managedGate = { attendance: 0, revenue: 0 };
+  // Overall antes do treino, para detetar quem evoluiu esta semana.
+  const overallBefore = new Map<string, number>();
+  for (const id of state.clubs[managedId]?.squad ?? []) {
+    const p = state.players[id];
+    if (p) overallBefore.set(id, naturalOverall(p));
+  }
 
   // 1. Simular a próxima jornada de cada divisão.
   for (const league of Object.values(state.leagues)) {
@@ -143,7 +195,12 @@ export function advanceWeek(
       p.condition.status = 'INJURED';
       p.condition.injuryDaysRemaining = rng.int(7, 28);
       if (p.clubId === managedId) {
-        addNews(state, 'INJURY', `Lesão: ${p.firstName} ${p.lastName} parado ~${p.condition.injuryDaysRemaining} dias.`);
+        addNews(state, 'INJURY', 'news.injury', { player: `${p.firstName} ${p.lastName}`, days: p.condition.injuryDaysRemaining });
+        notes.push({
+          kind: 'INJURY',
+          key: 'note.injury',
+          params: { player: p.lastName, days: p.condition.injuryDaysRemaining },
+        });
       }
     }
   }
@@ -156,15 +213,17 @@ export function advanceWeek(
     const mine = isHome ? r.home.goals : r.away.goals;
     const theirs = isHome ? r.away.goals : r.home.goals;
     const opp = state.clubs[isHome ? myFx.awayClubId : myFx.homeClubId]?.name ?? '';
-    const verb = mine > theirs ? 'vence' : mine === theirs ? 'empata com' : 'perde com';
-    addNews(state, 'MATCH', `${state.clubs[managedId]?.shortName} ${verb} ${opp} (${mine}-${theirs}), jornada ${managedRound}.`);
+    const key = mine > theirs ? 'news.match.win' : mine === theirs ? 'news.match.draw' : 'news.match.loss';
+    addNews(state, 'MATCH', key, {
+      club: state.clubs[managedId]?.shortName ?? '', opp, score: `${mine}-${theirs}`, round: managedRound,
+    });
   }
 
   // 2. Fadiga dos titulares que jogaram (pressing alto cansa mais).
   for (const clubId of playedClubs) {
     const tactic = state.tactics[clubId];
     if (!tactic) continue;
-    const fatigue = MATCH_FATIGUE + Math.round((tactic.pressing - 5) * 1.2);
+    const fatigue = matchFatigue(tactic);
     for (const slot of tactic.lineup) {
       const p = state.players[slot.playerId];
       if (p) p.condition.fitness = Math.max(0, p.condition.fitness - fatigue);
@@ -212,19 +271,20 @@ export function advanceWeek(
 
     recalcUpkeep(club, fin); // instalações maiores = manutenção maior
 
-    const income = homeClubsThisWeek.has(club.id)
-      ? matchdayIncome(club, recentFormOf(state, club.id, 5))
-      : 0;
-    fin.income.tickets = income;
-    applyWeeklyFinances(fin, income);
+    const gate = homeClubsThisWeek.has(club.id)
+      ? matchdayGate(club, recentFormOf(state, club.id, 5))
+      : { attendance: 0, revenue: 0 };
+    if (club.id === managedId) managedGate = gate;
+    fin.income.tickets = gate.revenue;
+    applyWeeklyFinances(fin, gate.revenue);
 
     const sanction = applyInsolvency(state, club.id);
     if (sanction.insolvent && club.id === managedId) {
       if (sanction.soldPlayerName) {
-        addNews(state, 'CLUB',
-          `Insolvência: a direção vendeu ${sanction.soldPlayerName} por ${sanction.amount.toLocaleString('pt-PT')} € para cobrir dívidas.`);
+        addNews(state, 'CLUB', 'news.insolvency.sold',
+          { player: sanction.soldPlayerName, amount: sanction.amount.toLocaleString('pt-PT') });
       } else {
-        addNews(state, 'CLUB', 'Clube em insolvência — contratações bloqueadas até equilibrar as contas.');
+        addNews(state, 'CLUB', 'news.insolvency.blocked');
       }
     }
   }
@@ -240,6 +300,16 @@ export function advanceWeek(
       if (!p) continue;
       const rng = new Rng(deriveSeed(state.meta.rngSeed, 'train', weekKey, id));
       trainPlayer(p, clubFocus, rng, growthBonus);
+    }
+  }
+
+  // 4b. Quem subiu de overall esta semana — a recompensa visível do treino.
+  for (const [id, before] of overallBefore) {
+    const p = state.players[id];
+    if (!p) continue;
+    const after = naturalOverall(p);
+    if (after > before) {
+      notes.push({ kind: 'GROWTH', key: 'note.growth', params: { player: p.lastName, ovr: after } });
     }
   }
 
@@ -269,7 +339,7 @@ export function advanceWeek(
     const p = state.players[b.playerId];
     const buyer = state.clubs[b.fromClubId];
     if (p && buyer) {
-      addNews(state, 'TRANSFER', `${buyer.name} oferece ${(b.fee).toLocaleString('pt-PT')} € por ${p.firstName} ${p.lastName}.`);
+      addNews(state, 'TRANSFER', 'news.bid', { buyer: buyer.name, fee: b.fee.toLocaleString('pt-PT'), player: `${p.firstName} ${p.lastName}` });
     }
   }
 
@@ -278,7 +348,20 @@ export function advanceWeek(
     const reminders = generateRenewalReminders(state);
     for (const r of reminders) {
       const p = state.players[r.playerId];
-      if (p) addNews(state, 'CLUB', `Contrato de ${p.firstName} ${p.lastName} expira no fim da época.`);
+      if (p) addNews(state, 'CLUB', 'news.renewal.expiring', { player: `${p.firstName} ${p.lastName}` });
+    }
+  }
+
+  // 7b-bis. Lei Bosman: ao entrar nas últimas 6 jornadas, clubes sondam os
+  // nossos jogadores em fim de contrato. Dispara UMA vez (exatamente 6 a faltar)
+  // e avisa com antecedência — renovar ou vender antes de os perder de graça.
+  if (roundsRemaining(state) === BOSMAN_WINDOW_ROUNDS) {
+    for (const ap of runBosmanApproaches(state)) {
+      const p = state.players[ap.playerId];
+      const suitor = state.clubs[ap.suitorClubId];
+      if (p && suitor) {
+        addNews(state, 'TRANSFER', 'news.bosman', { suitor: suitor.name, player: `${p.firstName} ${p.lastName}` });
+      }
     }
   }
 
@@ -288,9 +371,8 @@ export function advanceWeek(
   for (const r of newRequests) {
     const p = state.players[r.playerId];
     if (p) {
-      addNews(state, 'CLUB', r.request === 'WAGE_RISE'
-        ? `${p.firstName} ${p.lastName} pede aumento salarial.`
-        : `${p.firstName} ${p.lastName} quer ser vendido.`);
+      addNews(state, 'CLUB', r.request === 'WAGE_RISE' ? 'news.request.wage' : 'news.request.leave',
+        { player: `${p.firstName} ${p.lastName}` });
     }
   }
 
@@ -298,8 +380,73 @@ export function advanceWeek(
   state.meta.currentDate = addDays(state.meta.currentDate, 7);
   state.meta.updatedAt = new Date().toISOString();
 
+  // 8b. Respostas às NOSSAS propostas — chegam agora que a data avançou.
+  //     É por isto que negociar exige simular: a resposta vive no futuro.
+  for (const offer of resolveDueOffers(state)) {
+    const p = state.players[offer.playerId];
+    if (!p) continue;
+    const name = `${p.firstName} ${p.lastName}`;
+    if (offer.status === 'ACCEPTED') {
+      addNews(state, 'TRANSFER', 'news.offer.signed', { player: name, club: state.clubs[managedId]?.name ?? '' });
+      notes.push({ kind: 'TRANSFER', key: 'note.signed', params: { player: name } });
+    } else if (offer.status === 'COUNTER') {
+      notes.push({ kind: 'INFO', key: 'note.counter', params: { player: p.lastName } });
+    } else {
+      notes.push({ kind: 'INFO', key: 'note.rejected', params: { player: p.lastName } });
+    }
+  }
+  pruneOffers(state);
+
+  // 9. Balanço da semana do clube gerido.
+  const mFin = state.finances[managedId];
+  const report: WeekReport | null = mFin ? buildWeekReport({
+    state, managedId, managedRound, myFx, gate: managedGate, fin: mFin, notes,
+  }) : null;
+
   const seasonEnded = nextRound(state, mLeagueId) === null;
-  return { round: managedRound, fixtures: managedFixtures, cupFixtures, seasonEnded, confidence };
+  return { round: managedRound, fixtures: managedFixtures, cupFixtures, seasonEnded, confidence, report };
+}
+
+/** Monta o relatório da jornada a partir do que foi recolhido durante a semana. */
+function buildWeekReport(args: {
+  state: GameState;
+  managedId: string;
+  managedRound: number;
+  myFx: Fixture | undefined;
+  gate: { attendance: number; revenue: number };
+  fin: import('../models').Finance;
+  notes: WeekNote[];
+}): WeekReport {
+  const { state, managedId, managedRound, myFx, gate, fin, notes } = args;
+
+  const played = !!myFx?.result;
+  const isHome = myFx?.homeClubId === managedId;
+  const r = myFx?.result;
+  const goalsFor = r ? (isHome ? r.home.goals : r.away.goals) : 0;
+  const goalsAgainst = r ? (isHome ? r.away.goals : r.home.goals) : 0;
+  const oppId = myFx ? (isHome ? myFx.awayClubId : myFx.homeClubId) : null;
+
+  const otherIncome = fin.income.sponsorship + fin.income.tvRights + fin.income.merchandising;
+  const net = gate.revenue + otherIncome
+    - fin.expenses.wages - fin.expenses.facilities - fin.expenses.staff;
+
+  return {
+    round: managedRound,
+    played,
+    isHome,
+    opponentName: oppId ? state.clubs[oppId]?.name ?? '' : '',
+    goalsFor,
+    goalsAgainst,
+    attendance: gate.attendance,
+    gate: gate.revenue,
+    otherIncome,
+    facilities: fin.expenses.facilities,
+    wages: fin.expenses.wages,
+    staff: fin.expenses.staff,
+    net,
+    balanceAfter: fin.balance,
+    notes,
+  };
 }
 
 /**
@@ -339,7 +486,7 @@ export function currentPosition(state: GameState, leagueId: string, clubId: stri
 export interface SeasonSummary {
   record: SeasonRecord;
   fired: boolean;
-  boardMessage: string;
+  boardMessageKey: string; // chave i18n da mensagem da direção
   moves: TierMove[];
   youth: YouthIntakeResult;
 }
@@ -394,7 +541,7 @@ export function rolloverSeason(state: GameState): SeasonSummary {
   state.career.totalDraws += row.drawn;
   state.career.totalLosses += row.lost;
   if (champion) {
-    state.career.trophies.push({ season: state.meta.season, label: `Campeão — ${mLeague.name}` });
+    state.career.trophies.push({ season: state.meta.season, key: 'trophy.league', params: { league: mLeague.name } });
   }
 
   // --- 2. Avaliação da direção ---
@@ -415,8 +562,8 @@ export function rolloverSeason(state: GameState): SeasonSummary {
       const prize = leaguePrize(league.tier, idx + 1, ranked.length);
       fin.balance += prize;
       if (row.clubId === managedId) {
-        addNews(state, 'SEASON',
-          `Prémio de classificação (${idx + 1}º na ${league.name}): ${prize.toLocaleString('pt-PT')} €.`);
+        addNews(state, 'SEASON', 'news.prize.league',
+          { pos: idx + 1, league: league.name, amount: prize.toLocaleString('pt-PT') });
       }
     });
   }
@@ -433,11 +580,18 @@ export function rolloverSeason(state: GameState): SeasonSummary {
     const bonus = promotionPrize(newTier);
     fin.balance += bonus;
     if (mv.clubId === managedId) {
-      addNews(state, 'SEASON', `Prémio de subida de divisão: ${bonus.toLocaleString('pt-PT')} €!`);
+      addNews(state, 'SEASON', 'news.prize.promotion', { amount: bonus.toLocaleString('pt-PT') });
     }
   }
 
   // --- 4. Nova época: envelhecer, contratos, reformas + jovens, orçamentos ---
+  // Antes de caducar contratos, guarda quem sai do nosso clube a custo zero
+  // (Bosman): foram avisados durante a época e não renovámos.
+  const bosmanLosses = (state.clubs[managedId]?.squad ?? [])
+    .map((id) => state.players[id])
+    .filter((p): p is NonNullable<typeof p> => !!p && p.contractUntil === state.meta.season)
+    .map((p) => `${p.firstName} ${p.lastName}`);
+
   state.meta.season += 1;
   for (const p of Object.values(state.players)) {
     p.age += 1;
@@ -445,6 +599,9 @@ export function rolloverSeason(state: GameState): SeasonSummary {
     p.condition.form = p.condition.morale;
   }
   processContractExpiries(state);
+  for (const name of bosmanLosses) {
+    addNews(state, 'TRANSFER', 'news.bosman.left', { player: name });
+  }
   const youthRng = new Rng(deriveSeed(state.meta.rngSeed, 'youth', state.meta.season));
   const youth = processYouthAndRetirements(state, youthRng);
   // Receitas recalculadas com a NOVA divisão (subir traz mais TV/patrocínios),
@@ -457,8 +614,7 @@ export function rolloverSeason(state: GameState): SeasonSummary {
     recalcUpkeep(club, fin);
     const absorbed = annualBudgetReset(fin);
     if (club.id === managedId && absorbed > 0) {
-      addNews(state, 'CLUB',
-        `A direção absorveu ${absorbed.toLocaleString('pt-PT')} € de excedente de tesouraria.`);
+      addNews(state, 'CLUB', 'news.absorbed', { amount: absorbed.toLocaleString('pt-PT') });
     }
   }
 
@@ -479,15 +635,15 @@ export function rolloverSeason(state: GameState): SeasonSummary {
   state.meta.updatedAt = new Date().toISOString();
 
   // --- 6. Notícias do fim de época ---
-  if (record.champion) addNews(state, 'SEASON', `🏆 CAMPEÕES! ${record.clubName} vence a ${record.leagueName}.`);
-  if (record.promoted && !record.champion) addNews(state, 'SEASON', `Subida de divisão garantida! (${record.position}º na ${record.leagueName})`);
-  if (record.relegated) addNews(state, 'SEASON', `Despromovidos após terminar em ${record.position}º.`);
-  addNews(state, 'BOARD', verdict.message);
+  if (record.champion) addNews(state, 'SEASON', 'news.season.champion', { club: record.clubName, league: record.leagueName });
+  if (record.promoted && !record.champion) addNews(state, 'SEASON', 'news.season.promoted', { pos: record.position, league: record.leagueName });
+  if (record.relegated) addNews(state, 'SEASON', 'news.season.relegated', { pos: record.position });
+  addNews(state, 'BOARD', verdict.messageKey);
   if (youth.joinedManagedClub.length > 0) {
-    addNews(state, 'YOUTH', `${youth.joinedManagedClub.length} jovens da academia sobem à equipa principal.`);
+    addNews(state, 'YOUTH', 'news.youth', { n: youth.joinedManagedClub.length });
   }
 
-  return { record, fired: verdict.fired, boardMessage: verdict.message, moves, youth };
+  return { record, fired: verdict.fired, boardMessageKey: verdict.messageKey, moves, youth };
 }
 
 /**

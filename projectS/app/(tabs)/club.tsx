@@ -2,14 +2,12 @@ import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useGameStore } from '../../src/state/gameStore';
 import { FACILITY_MAX_LEVEL, weeklyNet } from '../../src/core/models';
-import {
-  FACILITY_EFFECTS,
-  FACILITY_LABELS,
-  FacilityType,
-  facilityUpgradeCost,
-} from '../../src/core/economy';
+import { FacilityType, facilityUpgradeCost } from '../../src/core/economy';
 import { money } from '../../src/ui/format';
 import { theme } from '../../src/ui/theme';
+import { Face } from '../../src/ui/Face';
+import { useT, useTMsg } from '../../src/ui/i18n';
+import { LANGS, LANG_LABELS } from '../../src/core/i18n';
 import { Body, RowKV, Screen, Section, Stars } from '../components';
 import { reputationStars } from '../../src/ui/theme';
 import { useMonetizationStore } from '../../src/state/monetizationStore';
@@ -17,16 +15,20 @@ import { useMonetizationStore } from '../../src/state/monetizationStore';
 const FACILITY_TYPES: FacilityType[] = ['stadium', 'training', 'academy', 'medical'];
 
 export default function ClubScreen() {
+  const t = useT();
+  const tMsg = useTMsg();
   const state = useGameStore((s) => s.state);
   const club = useGameStore((s) => s.managedClub)();
   const upgrade = useGameStore((s) => s.upgrade);
   const newGame = useGameStore((s) => s.newGame);
+  const lang = useGameStore((s) => s.lang);
+  const setLang = useGameStore((s) => s.setLang);
   const premium = useMonetizationStore((s) => s.m.premium);
   const setPremium = useMonetizationStore((s) => s.setPremium);
   const [upgradeMsg, setUpgradeMsg] = useState<string | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
 
-  if (!state || !club) return <Screen><Body>A carregar…</Body></Screen>;
+  if (!state || !club) return <Screen><Body>{t('common.loading')}</Body></Screen>;
 
   const fin = state.finances[club.id]!;
   const career = state.career;
@@ -37,17 +39,17 @@ export default function ClubScreen() {
     <Screen>
       <ScrollView showsVerticalScrollIndicator={false}>
         {/* PERFIL */}
-        <Section title="Clube" />
-        <RowKV k="Nome" v={club.name} />
+        <Section title={t('club.section.club')} />
+        <RowKV k={t('club.nameLabel')} v={club.name} />
         <View style={styles.repRow}>
-          <Text style={styles.repKey}>Reputação</Text>
+          <Text style={styles.repKey}>{t('club.reputation')}</Text>
           <Stars value={reputationStars(club.reputation)} />
         </View>
-        <RowKV k="Estádio" v={`${club.stadiumName} (${club.stadiumCapacity.toLocaleString('pt-PT')})`} />
-        <RowKV k="Divisão" v={state.leagues[club.leagueId]?.name ?? '—'} />
+        <RowKV k={t('club.stadium')} v={`${club.stadiumName} (${club.stadiumCapacity.toLocaleString('pt-PT')})`} />
+        <RowKV k={t('club.division')} v={state.leagues[club.leagueId]?.name ?? '—'} />
 
         {/* INSTALAÇÕES */}
-        <Section title="Instalações" />
+        <Section title={t('club.section.facilities')} />
         {upgradeMsg ? <Text style={styles.upgradeMsg}>{upgradeMsg}</Text> : null}
         {FACILITY_TYPES.map((type) => {
           const level = club.facilities[type];
@@ -57,10 +59,10 @@ export default function ClubScreen() {
           return (
             <View key={type} style={styles.facRow}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.facName}>{FACILITY_LABELS[type]}</Text>
-                <Text style={styles.facEffect}>{FACILITY_EFFECTS[type]}</Text>
+                <Text style={styles.facName}>{t(`facility.${type}`)}</Text>
+                <Text style={styles.facEffect}>{t(`facility.effect.${type}`)}</Text>
                 <Text style={styles.facLevel}>
-                  {'▰'.repeat(level)}{'▱'.repeat(FACILITY_MAX_LEVEL - level)}  Nível {level}
+                  {'▰'.repeat(level)}{'▱'.repeat(FACILITY_MAX_LEVEL - level)}  {t('facility.level', { n: level })}
                 </Text>
               </View>
               <Pressable
@@ -68,13 +70,13 @@ export default function ClubScreen() {
                 onPress={() => {
                   const r = upgrade(type);
                   setUpgradeMsg(r.ok
-                    ? `${FACILITY_LABELS[type]} melhorado para o nível ${r.newLevel} (−${money(r.cost ?? 0)}).`
+                    ? t('club.upgraded', { name: t(`facility.${type}`), level: r.newLevel ?? level + 1, cost: money(r.cost ?? 0) })
                     : r.error ?? null);
                 }}
                 style={[styles.facBtn, !affordable && styles.facBtnDisabled]}
               >
                 <Text style={[styles.facBtnText, !affordable && { color: theme.colors.textDim }]}>
-                  {maxed ? 'MÁX' : money(cost)}
+                  {maxed ? t('facility.max') : money(cost)}
                 </Text>
               </Pressable>
             </View>
@@ -82,56 +84,62 @@ export default function ClubScreen() {
         })}
 
         {/* FINANÇAS */}
-        <Section title="Receitas semanais" />
-        <RowKV k="Bilheteira (último jogo em casa)" v={money(fin.income.tickets)} vColor={theme.colors.green} />
-        <RowKV k="Patrocínios" v={money(fin.income.sponsorship)} vColor={theme.colors.green} />
-        <RowKV k="Direitos de TV" v={money(fin.income.tvRights)} vColor={theme.colors.green} />
-        <RowKV k="Merchandising" v={money(fin.income.merchandising)} vColor={theme.colors.green} />
+        <Section title={t('club.section.income')} />
+        <RowKV k={t('income.tickets')} v={money(fin.income.tickets)} vColor={theme.colors.green} />
+        <RowKV k={t('income.sponsorship')} v={money(fin.income.sponsorship)} vColor={theme.colors.green} />
+        <RowKV k={t('income.tv')} v={money(fin.income.tvRights)} vColor={theme.colors.green} />
+        <RowKV k={t('income.merch')} v={money(fin.income.merchandising)} vColor={theme.colors.green} />
 
-        <Section title="Despesas semanais" />
-        <RowKV k="Salários" v={money(fin.expenses.wages)} vColor={theme.colors.red} />
-        <RowKV k="Instalações" v={money(fin.expenses.facilities)} vColor={theme.colors.red} />
-        <RowKV k="Equipa técnica" v={money(fin.expenses.staff)} vColor={theme.colors.red} />
+        <Section title={t('club.section.expenses')} />
+        <RowKV k={t('expense.wages')} v={money(fin.expenses.wages)} vColor={theme.colors.red} />
+        <RowKV k={t('expense.facilities')} v={money(fin.expenses.facilities)} vColor={theme.colors.red} />
+        <RowKV k={t('expense.staff')} v={money(fin.expenses.staff)} vColor={theme.colors.red} />
 
-        <Section title="Balanço" />
-        <RowKV k="Fluxo semanal" v={`${net >= 0 ? '+' : ''}${money(net)}`}
+        <Section title={t('club.section.balance')} />
+        <RowKV k={t('fin.weeklyFlow')} v={`${net >= 0 ? '+' : ''}${money(net)}`}
           vColor={net >= 0 ? theme.colors.green : theme.colors.red} />
-        <RowKV k="Saldo" v={money(fin.balance)}
+        <RowKV k={t('fin.balance')} v={money(fin.balance)}
           vColor={fin.balance >= 0 ? theme.colors.green : theme.colors.red} />
-        <RowKV k="Orçamento de transferências" v={money(fin.transferBudget)} />
+        <RowKV k={t('fin.transferBudget')} v={money(fin.transferBudget)} />
 
         {/* CARREIRA */}
-        <Section title="Carreira do treinador" />
-        <RowKV k="Treinador" v={state.meta.managerName} />
-        <RowKV k="Registo" v={record} />
-        <RowKV k="Despedimentos" v={String(career.timesFired)}
+        <Section title={t('club.section.career')} />
+        <View style={styles.managerRow}>
+          <Face seed={`mgr_${state.meta.managerName}`} size={44} staff />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.managerName}>{state.meta.managerName}</Text>
+            <Text style={styles.managerSub}>{t('club.managerSub', { club: club.name, season: state.meta.season })}</Text>
+          </View>
+        </View>
+        <RowKV k={t('club.record')} v={record} />
+        <RowKV k={t('club.timesFired')} v={String(career.timesFired)}
           vColor={career.timesFired > 0 ? theme.colors.red : undefined} />
 
         {/* TROFÉUS */}
-        <Section title="Sala de troféus" />
+        <Section title={t('club.section.trophies')} />
         {career.trophies.length === 0 ? (
-          <Text style={styles.empty}>Ainda sem troféus. A escalada começa agora.</Text>
+          <Text style={styles.empty}>{t('club.noTrophies')}</Text>
         ) : (
-          career.trophies.map((t, i) => (
+          career.trophies.map((tr, i) => (
             <View key={i} style={styles.trophyRow}>
               <Text style={styles.trophyIcon}>🏆</Text>
-              <Text style={styles.trophyText}>{t.label}</Text>
-              <Text style={styles.trophySeason}>{t.season}</Text>
+              <Text style={styles.trophyText}>{tMsg(tr)}</Text>
+              <Text style={styles.trophySeason}>{tr.season}</Text>
             </View>
           ))
         )}
 
         {/* HISTORIAL */}
-        <Section title="Historial de épocas" />
+        <Section title={t('club.historyFull')} />
         {career.seasons.length === 0 ? (
-          <Text style={styles.empty}>A primeira época ainda está a decorrer.</Text>
+          <Text style={styles.empty}>{t('club.firstSeason')}</Text>
         ) : (
           <View>
             <View style={styles.histHead}>
-              <Text style={[styles.hh, { width: 44 }]}>Época</Text>
-              <Text style={[styles.hh, { flex: 1 }]}>Clube · Liga</Text>
-              <Text style={[styles.hh, { width: 30, textAlign: 'center' }]}>Pos</Text>
-              <Text style={[styles.hh, { width: 30, textAlign: 'right' }]}>Pts</Text>
+              <Text style={[styles.hh, { width: 44 }]}>{t('hist.season')}</Text>
+              <Text style={[styles.hh, { flex: 1 }]}>{t('hist.clubLeague')}</Text>
+              <Text style={[styles.hh, { width: 30, textAlign: 'center' }]}>{t('hist.pos')}</Text>
+              <Text style={[styles.hh, { width: 30, textAlign: 'right' }]}>{t('hist.pts')}</Text>
             </View>
             {[...career.seasons].reverse().map((s, i) => (
               <View key={i} style={styles.histRow}>
@@ -149,29 +157,37 @@ export default function ClubScreen() {
           </View>
         )}
         {/* DEFINIÇÕES */}
-        <Section title="Definições" />
+        <Section title={t('club.section.settings')} />
+
+        {/* Idioma — 3 botões */}
+        <Text style={styles.langLabel}>{t('club.lang')}</Text>
+        <View style={styles.langRow}>
+          {LANGS.map((l) => (
+            <Pressable key={l} onPress={() => setLang(l)}
+              style={[styles.langBtn, lang === l && styles.langBtnOn]}>
+              <Text style={[styles.langBtnText, lang === l && styles.langBtnTextOn]}>{LANG_LABELS[l]}</Text>
+            </Pressable>
+          ))}
+        </View>
+
         <View style={styles.settingRow}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.settingName}>Remover anúncios (Premium)</Text>
-            <Text style={styles.settingSub}>
-              {premium ? 'Ativo — obrigado pelo apoio! Os interstitials desapareceram.' : 'Sem interstitials nem banners. Bónus de anúncio continuam disponíveis.'}
-            </Text>
+            <Text style={styles.settingName}>{t('club.premiumName')}</Text>
+            <Text style={styles.settingSub}>{premium ? t('club.premiumActiveSub') : t('club.premiumSub')}</Text>
           </View>
           <Pressable
             disabled={premium}
             onPress={() => setPremium(true)} // TODO lançamento: fluxo real Google Play Billing
             style={[styles.settingBtn, premium && styles.settingBtnDone]}
           >
-            <Text style={styles.settingBtnText}>{premium ? '✓ Ativo' : 'Ativar'}</Text>
+            <Text style={styles.settingBtnText}>{premium ? t('club.premiumOn') : t('club.premiumActivate')}</Text>
           </Pressable>
         </View>
 
         <View style={styles.settingRow}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.settingName}>Nova carreira</Text>
-            <Text style={styles.settingSub}>
-              {confirmReset ? '⚠ Apaga TODO o progresso. Toca de novo para confirmar.' : 'Recomeça do zero com um mundo novo.'}
-            </Text>
+            <Text style={styles.settingName}>{t('club.newCareer')}</Text>
+            <Text style={styles.settingSub}>{confirmReset ? t('club.newCareerConfirmSub') : t('club.newCareerSub')}</Text>
           </View>
           <Pressable
             onPress={() => {
@@ -182,15 +198,13 @@ export default function ClubScreen() {
             style={[styles.settingBtn, confirmReset && styles.settingBtnDanger]}
           >
             <Text style={[styles.settingBtnText, confirmReset && { color: '#fff' }]}>
-              {confirmReset ? 'Confirmar' : 'Recomeçar'}
+              {confirmReset ? t('club.confirm') : t('club.restart')}
             </Text>
           </Pressable>
         </View>
 
-        <RowKV k="Versão" v="1.0.0" />
-        <Text style={styles.legal}>
-          Este jogo mostra anúncios (Google AdMob). Política de privacidade obrigatória antes do lançamento na Play Store.
-        </Text>
+        <RowKV k={t('club.version')} v="1.0.0" />
+        <Text style={styles.legal}>{t('club.legal')}</Text>
 
         <View style={{ height: theme.spacing(3) }} />
       </ScrollView>
@@ -199,6 +213,14 @@ export default function ClubScreen() {
 }
 
 const styles = StyleSheet.create({
+  managerRow: {
+    flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1.5),
+    paddingVertical: theme.spacing(1),
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border,
+  },
+  managerName: { color: theme.colors.text, fontSize: theme.font.h3, fontWeight: '700' },
+  managerSub: { color: theme.colors.textDim, fontSize: theme.font.small, marginTop: 2 },
+
   upgradeMsg: { color: theme.colors.green, fontSize: theme.font.small, marginBottom: theme.spacing(0.5) },
   facRow: {
     flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1.5),
@@ -220,6 +242,15 @@ const styles = StyleSheet.create({
     paddingVertical: theme.spacing(1.25),
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border,
   },
+  langLabel: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700', marginTop: theme.spacing(1), marginBottom: theme.spacing(0.5) },
+  langRow: { flexDirection: 'row', gap: theme.spacing(0.75), marginBottom: theme.spacing(0.5) },
+  langBtn: {
+    flex: 1, paddingVertical: theme.spacing(1), borderRadius: theme.radius.sm,
+    borderWidth: 1, borderColor: theme.colors.border, alignItems: 'center', backgroundColor: theme.colors.surface,
+  },
+  langBtnOn: { borderColor: theme.colors.blue, backgroundColor: theme.colors.surfaceAlt },
+  langBtnText: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700' },
+  langBtnTextOn: { color: theme.colors.blue },
   settingName: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600' },
   settingSub: { color: theme.colors.textDim, fontSize: theme.font.small, marginTop: 2 },
   settingBtn: {

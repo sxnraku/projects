@@ -21,11 +21,19 @@ export function emptyCup(): CupState {
   return { season: 0, alive: [], fixtures: [], currentRound: 1, totalRounds: 0, winnerClubId: null };
 }
 
-/** Nome humano da eliminatória (final, meia-final, quartos, …). */
-export function cupRoundName(cup: CupState, round: number): string {
+/** Descritor i18n da eliminatória (final, meia-final, quartos, …). */
+export function cupRoundMsg(cup: CupState, round: number): import('../i18n').Msg {
   const remaining = cup.totalRounds - round;
-  if (remaining === 0) return 'Final';
-  if (remaining === 1) return 'Meias-finais';
-  if (remaining === 2) return 'Quartos de final';
-  return `${round}ª eliminatória`;
+  if (remaining === 0) return { key: 'cup.final' };
+  if (remaining === 1) return { key: 'cup.semi' };
+  if (remaining === 2) return { key: 'cup.quarter' };
+  return { key: 'cup.prelim', params: { n: round } };
+}
+
+/** Converte a eliminatória num param aninhado "@chave|n=…" para notícias. */
+export function cupStageParam(cup: CupState, round: number): string {
+  const m = cupRoundMsg(cup, round);
+  if (!m.params) return `@${m.key}`;
+  const segs = Object.entries(m.params).map(([k, v]) => `${k}=${v}`).join('|');
+  return `@${m.key}|${segs}`;
 }

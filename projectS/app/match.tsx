@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { useGameStore } from '../src/state/gameStore';
 import { MatchEvent, MatchResult } from '../src/core/models';
 import { theme } from '../src/ui/theme';
+import { useT } from '../src/ui/i18n';
 import { Body, Button, Card, Crest, H1, Screen } from './components';
 import { showRewarded } from '../src/native/ads';
 
@@ -18,6 +19,7 @@ const FULL_TIME_MIN = 90;
 
 export default function Match() {
   const router = useRouter();
+  const t = useT();
   const lastWeek = useGameStore((s) => s.lastWeek);
   const state = useGameStore((s) => s.state);
   const managedId = state?.meta.managedClubId;
@@ -79,10 +81,10 @@ export default function Match() {
   if (!state || !result || !live) {
     return (
       <Screen>
-        <H1>Sem jogo recente</H1>
-        <Body dim>Avança uma jornada no ecrã principal.</Body>
+        <H1>{t('match.noRecent')}</H1>
+        <Body dim>{t('match.advanceHint')}</Body>
         <View style={{ height: 16 }} />
-        <Button label="Voltar" variant="ghost" onPress={() => router.back()} />
+        <Button label={t('common.back')} variant="ghost" onPress={() => router.back()} />
       </Screen>
     );
   }
@@ -116,10 +118,10 @@ export default function Match() {
           {/* Relógio */}
           <View style={styles.clockRow}>
             <Text style={[styles.clock, finished && { color: theme.colors.accent }]}>
-              {finished ? 'FINAL' : `${minute}'`}
+              {finished ? t('match.fullTime') : `${minute}'`}
             </Text>
-            {!finished && minute >= 45 ? <Text style={styles.halfTag}>2ª PARTE</Text> : null}
-            {!finished && minute < 45 ? <Text style={styles.halfTag}>1ª PARTE</Text> : null}
+            {!finished && minute >= 45 ? <Text style={styles.halfTag}>{t('match.secondHalf')}</Text> : null}
+            {!finished && minute < 45 ? <Text style={styles.halfTag}>{t('match.firstHalf')}</Text> : null}
           </View>
           <View style={styles.progressTrack}>
             <View style={[styles.progressFill, { width: `${(minute / FULL_TIME_MIN) * 100}%` }]} />
@@ -142,12 +144,12 @@ export default function Match() {
           </View>
 
           {goalJustNow ? (
-            <Text style={styles.goalFlash}>⚽ GOOOOLO! {playerName(lastEvent!.playerId)}</Text>
+            <Text style={styles.goalFlash}>{t('match.goal', { name: playerName(lastEvent!.playerId) })}</Text>
           ) : null}
 
           {finished ? (
             <Text style={[styles.verdict, { color: won ? theme.colors.win : drew ? theme.colors.draw : theme.colors.loss }]}>
-              {won ? '🎉 VITÓRIA' : drew ? '🤝 EMPATE' : '😞 DERROTA'}
+              {won ? t('match.win') : drew ? t('match.draw') : t('match.loss')}
             </Text>
           ) : null}
         </View>
@@ -160,14 +162,14 @@ export default function Match() {
               <ControlBtn key={s} label={`${s}x`} active={speed === s && !paused}
                 onPress={() => { setSpeed(s); setPaused(false); }} />
             ))}
-            <ControlBtn label="⏩ Fim" onPress={() => setMinute(FULL_TIME_MIN)} />
+            <ControlBtn label={t('match.speed.end')} onPress={() => setMinute(FULL_TIME_MIN)} />
           </View>
         ) : null}
 
         {/* ESTATÍSTICAS AO VIVO */}
         <Card>
-          <StatCompare label="Remates" home={live.shotsHome} away={live.shotsAway} />
-          <StatCompare label="À baliza" home={live.onTargetHome} away={live.onTargetAway} />
+          <StatCompare label={t('match.shots')} home={live.shotsHome} away={live.shotsAway} />
+          <StatCompare label={t('match.onTarget')} home={live.onTargetHome} away={live.onTargetAway} />
           {finished ? (
             <View style={styles.xgRow}>
               <Text style={styles.xgVal}>{result.home.xg.toFixed(2)}</Text>
@@ -217,14 +219,12 @@ export default function Match() {
             }}
             style={[styles.replayBtn, busyAd && { opacity: 0.5 }]}
           >
-            <Text style={styles.replayText}>
-              🔁 SEGUNDA HIPÓTESE — vê um anúncio e joga outra vez
-            </Text>
-            <Text style={styles.replaySub}>O novo resultado pode ser melhor... ou pior.</Text>
+            <Text style={styles.replayText}>{t('match.replay')}</Text>
+            <Text style={styles.replaySub}>{t('match.replaySub')}</Text>
           </Pressable>
         ) : null}
 
-        {finished ? <Button label="CONTINUAR  ▶" onPress={() => router.replace('/')} /> : null}
+        {finished ? <Button label={t('match.continue')} onPress={() => router.replace('/')} /> : null}
         <View style={{ height: 24 }} />
       </ScrollView>
     </Screen>
@@ -242,11 +242,12 @@ function ControlBtn({ label, onPress, active }: { label: string; onPress: () => 
 function PossessionBar({
   home, away, homeColor, awayColor,
 }: { home: number; away: number; homeColor: string; awayColor: string }) {
+  const t = useT();
   return (
     <View style={styles.possWrap}>
       <View style={styles.possLabels}>
         <Text style={styles.possVal}>{home}%</Text>
-        <Text style={styles.possLabel}>POSSE DE BOLA</Text>
+        <Text style={styles.possLabel}>{t('match.possession')}</Text>
         <Text style={styles.possVal}>{away}%</Text>
       </View>
       <View style={styles.possBar}>

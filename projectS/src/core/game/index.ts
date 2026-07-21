@@ -5,3 +5,5 @@ export * from './advance';
 export * from './youth';
 export * from './replay';
 export * from './inbox';
+export * from './offers';
+export * from './matchday';

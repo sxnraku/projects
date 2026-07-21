@@ -48,6 +48,9 @@ export function pruneInbox(state: GameState): void {
   const today = state.meta.currentDate;
   const managedId = state.meta.managedClubId;
   state.inbox = state.inbox.filter((it) => {
+    // As propostas NOSSAS referem jogadores de outros clubes — têm ciclo de
+    // vida próprio (pruneOffers), por isso escapam ao filtro do plantel.
+    if (it.kind === 'OFFER') return true;
     const p = state.players[it.playerId];
     if (!p || p.clubId !== managedId) return false;
     if (it.kind === 'BID' && it.expiresDate < today) return false;
@@ -194,18 +197,37 @@ export function dismissItem(state: GameState, itemId: string): void {
  * resposta; os avisos de renovação são informativos e não bloqueiam.
  */
 export function blockingItems(state: GameState): InboxItem[] {
-  return state.inbox.filter((it) => it.kind === 'BID' || it.kind === 'REQUEST');
+  return state.inbox.filter((it) =>
+    it.kind === 'BID' ||
+    it.kind === 'REQUEST' ||
+    // Contra-proposta nossa: o vendedor pôs um preço e espera resposta.
+    // (Propostas PENDING não bloqueiam — é precisamente avançar que as resolve.)
+    (it.kind === 'OFFER' && it.status === 'COUNTER'));
 }
 
-/** Descrição curta do que está a bloquear o avanço (para a UI). */
+/** Contagens do que bloqueia o avanço, para a UI compor o texto traduzido. */
+export interface BlockingCounts { bids: number; reqs: number; counters: number; }
+export function blockingCounts(state: GameState): BlockingCounts | null {
+  const items = blockingItems(state);
+  if (items.length === 0) return null;
+  return {
+    bids: items.filter((i) => i.kind === 'BID').length,
+    reqs: items.filter((i) => i.kind === 'REQUEST').length,
+    counters: items.filter((i) => i.kind === 'OFFER').length,
+  };
+}
+
+/** Descrição curta do que está a bloquear o avanço (PT — usado em testes). */
 export function blockingReason(state: GameState): string | null {
   const items = blockingItems(state);
   if (items.length === 0) return null;
   const bids = items.filter((i) => i.kind === 'BID').length;
   const reqs = items.filter((i) => i.kind === 'REQUEST').length;
+  const counters = items.filter((i) => i.kind === 'OFFER').length;
   const parts: string[] = [];
   if (bids > 0) parts.push(`${bids} proposta${bids > 1 ? 's' : ''} por resolver`);
   if (reqs > 0) parts.push(`${reqs} pedido${reqs > 1 ? 's' : ''} de jogadores`);
+  if (counters > 0) parts.push(`${counters} contra-proposta${counters > 1 ? 's' : ''}`);
   return parts.join(' e ');
 }
 
@@ -326,7 +348,7 @@ export function generatePlayerRequests(state: GameState, rng: Rng): RequestItem[
  *  - Saída aceite: entra na lista de transferências, moral alivia. Recusado: moral cai mais.
  * Devolve a mensagem para a UI, ou null se o item não existir.
  */
-export function resolveRequest(state: GameState, itemId: string, accept: boolean): string | null {
+export function resolveRequest(state: GameState, itemId: string, accept: boolean): import('../i18n').Msg | null {
   const item = state.inbox.find((it): it is RequestItem => it.kind === 'REQUEST' && it.id === itemId);
   if (!item) return null;
   const player = state.players[item.playerId];
@@ -347,18 +369,18 @@ export function resolveRequest(state: GameState, itemId: string, accept: boolean
       const club = state.clubs[state.meta.managedClubId];
       const fin = state.finances[state.meta.managedClubId];
       if (club && fin) recalcWages(club, fin, state.players);
-      return `${name} aceitou o novo salário (${newWage.toLocaleString('pt-PT')} €/sem) e está motivado.`;
+      return { key: 'req.wageAccepted', params: { name, wage: newWage.toLocaleString('pt-PT') } };
     }
     player.condition.morale = clamp(player.condition.morale - 8);
-    return `${name} não gostou da recusa — a moral caiu.`;
+    return { key: 'req.wageRefused', params: { name } };
   }
 
   // WANTS_LEAVE
   if (accept) {
     player.transferListed = true;
     player.condition.morale = clamp(55);
-    return `${name} foi colocado na lista de transferências, aliviado.`;
+    return { key: 'req.leaveAccepted', params: { name } };
   }
   player.condition.morale = clamp(player.condition.morale - 10);
-  return `${name} continua no plantel contrariado — a moral caiu.`;
+  return { key: 'req.leaveRefused', params: { name } };
 }

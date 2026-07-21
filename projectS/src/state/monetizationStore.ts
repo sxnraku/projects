@@ -26,8 +26,8 @@ export interface MonetizationStore {
   /** O rewarded ainda está disponível hoje (data do jogo)? */
   rewardedAvailable: () => boolean;
 
-  /** Consome um rewarded e aplica a recompensa ao jogo. Devolve a mensagem para a UI. */
-  claimReward: (reward: AdReward) => string | null;
+  /** Consome um rewarded e aplica a recompensa ao jogo. Devolve o descritor de mensagem. */
+  claimReward: (reward: AdReward) => import('../core/i18n').Msg | null;
 
   /** Ativa premium (chamado pelo fluxo de compra IAP quando existir). */
   setPremium: (premium: boolean) => void;
@@ -59,10 +59,10 @@ export const useMonetizationStore = create<MonetizationStore>((set, get) => ({
     consumeRewarded(m, game.meta.currentDate);
     set({ m });
 
-    const message = applyReward(game, reward);
+    const msg = applyReward(game, reward);
     // Notifica a UI da mutação do GameState (mesma técnica do gameStore).
     gameStore.loadState({ ...game, meta: { ...game.meta } });
-    return message;
+    return msg;
   },
 
   setPremium: (premium) => set({ m: { ...get().m, premium } }),

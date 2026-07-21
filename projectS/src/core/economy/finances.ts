@@ -12,6 +12,18 @@ import { Club, Finance, weeklyNet } from '../models';
  *   só contam quantas vitórias/derrotas há). Vazio = sem efeito.
  */
 export function matchdayIncome(club: Club, recentForm: ('W' | 'D' | 'L')[] = []): number {
+  return matchdayGate(club, recentForm).revenue;
+}
+
+/**
+ * Bilheteira detalhada: afluência E receita. O resumo pós-jogo mostra quantos
+ * adeptos apareceram, por isso o número de espectadores não pode ficar
+ * escondido dentro do cálculo da receita.
+ */
+export function matchdayGate(
+  club: Club,
+  recentForm: ('W' | 'D' | 'L')[] = [],
+): { attendance: number; revenue: number } {
   const wins = recentForm.filter((r) => r === 'W').length;
   const losses = recentForm.filter((r) => r === 'L').length;
   const formMultiplier = 1 + wins * 0.05 - losses * 0.08;
@@ -21,7 +33,7 @@ export function matchdayIncome(club: Club, recentForm: ('W' | 'D' | 'L')[] = [])
 
   const attendance = Math.round(club.stadiumCapacity * attendanceRate);
   const ticketPrice = 8 + club.reputation * 0.25; // 8..33
-  return Math.round(attendance * ticketPrice);
+  return { attendance, revenue: Math.round(attendance * ticketPrice) };
 }
 
 /**

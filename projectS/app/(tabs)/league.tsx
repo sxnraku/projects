@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useGameStore } from '../../src/state/gameStore';
-import { Club, cupRoundName, goalDifference, StandingRow } from '../../src/core/models';
+import { Club, cupRoundMsg, goalDifference, StandingRow } from '../../src/core/models';
 import { theme, zoneColor } from '../../src/ui/theme';
-import { Body, Screen, Section } from '../components';
+import { useT, useTMsg } from '../../src/ui/i18n';
+import { CompBadge } from '../../src/ui/Flag';
+import { Body, CrestCircle, Screen, Section } from '../components';
 
 export default function League() {
+  const t = useT();
+  const tMsg = useTMsg();
   const standings = useGameStore((s) => s.standings);
   const managedLeague = useGameStore((s) => s.managedLeague);
   const state = useGameStore((s) => s.state);
@@ -17,9 +21,14 @@ export default function League() {
   const isCup = activeLeague === 'taca';
   const rows = isCup ? [] : standings(activeLeague);
 
+  const leagueObj = state?.leagues[activeLeague];
+  const nation = state?.clubs[state.meta.managedClubId]?.country ?? 'PRT';
+
   if (isCup && state) {
     return (
       <Screen>
+        <CompBadge country={nation} title={t('cup.name')}
+          subtitle={t('cup.resultsSub', { stage: tMsg(cupRoundMsg(state.cup, state.cup.currentRound)) })} />
         <Tabs leagues={leagues} active={activeLeague} onSelect={setSelected} />
         <CupView state={state} />
       </Screen>
@@ -28,6 +37,11 @@ export default function League() {
 
   return (
     <Screen>
+      <CompBadge
+        country={leagueObj?.country ?? nation}
+        title={leagueObj?.name ?? t('tab.league')}
+        subtitle={leagueObj ? t('league.metaSub', { n: leagueObj.clubIds.length, tier: leagueObj.tier }) : undefined}
+      />
       <Tabs leagues={leagues} active={activeLeague} onSelect={setSelected} />
 
       <FlatList
@@ -41,7 +55,7 @@ export default function League() {
           <View style={[styles.row, styles.head]}>
             <View style={styles.zone} />
             <Text style={[styles.h, styles.pos]}>#</Text>
-            <Text style={[styles.h, { flex: 1, textAlign: 'left' }]}>Clube</Text>
+            <Text style={[styles.h, { flex: 1, textAlign: 'left' }]}>{t('league.col.club')}</Text>
             <Text style={[styles.h, styles.num]}>J</Text>
             <Text style={[styles.h, styles.num]}>V</Text>
             <Text style={[styles.h, styles.num]}>E</Text>
@@ -52,8 +66,8 @@ export default function League() {
         }
         ListFooterComponent={
           <View style={styles.legend}>
-            <LegendDot color={theme.colors.green} label="Título / Subida" />
-            <LegendDot color={theme.colors.red} label="Despromoção" />
+            <LegendDot color={theme.colors.green} label={t('league.legend.promo')} />
+            <LegendDot color={theme.colors.red} label={t('league.legend.releg')} />
           </View>
         }
         ItemSeparatorComponent={() => <View style={styles.sep} />}
@@ -70,19 +84,20 @@ function Tabs({
   active: string;
   onSelect: (id: string) => void;
 }) {
+  const t = useT();
   return (
     <View style={styles.tabs}>
       {leagues.map((l) => (
         <Pressable key={l.id} onPress={() => onSelect(l.id)}
           style={[styles.tab, active === l.id && styles.tabActive]}>
           <Text style={[styles.tabText, active === l.id && styles.tabTextActive]}>
-            {`Liga ${l.tier}`}
+            {t('league.tabTier', { tier: l.tier })}
           </Text>
         </Pressable>
       ))}
       <Pressable onPress={() => onSelect('taca')}
         style={[styles.tab, active === 'taca' && styles.tabActive]}>
-        <Text style={[styles.tabText, active === 'taca' && styles.tabTextActive]}>Taça</Text>
+        <Text style={[styles.tabText, active === 'taca' && styles.tabTextActive]}>{t('league.tabCup')}</Text>
       </Pressable>
     </View>
   );
@@ -90,6 +105,8 @@ function Tabs({
 
 /** Vista da Taça: estado atual + resultados por eliminatória (mais recente primeiro). */
 function CupView({ state }: { state: NonNullable<ReturnType<typeof useGameStore.getState>['state']> }) {
+  const t = useT();
+  const tMsg = useTMsg();
   const cup = state.cup;
   const managedId = state.meta.managedClubId;
   const name = (id: string) => state.clubs[id]?.name ?? id;
@@ -99,31 +116,36 @@ function CupView({ state }: { state: NonNullable<ReturnType<typeof useGameStore.
 
   return (
     <ScrollView showsVerticalScrollIndicator={false}>
-      <Section title="Estado" />
+      <Section title={t('cup.state')} />
       {cup.winnerClubId ? (
         <Body style={{ color: theme.colors.yellow, fontWeight: '700' }}>
-          🏆 Vencedor: {name(cup.winnerClubId)}
+          {t('cup.winner', { club: name(cup.winnerClubId) })}
         </Body>
       ) : (
         <Body dim>
-          {cup.alive.length} clubes em prova · próxima: {cupRoundName(cup, cup.currentRound)}
-          {stillIn ? ' · ainda estás na Taça' : cup.fixtures.length > 0 ? ' · já foste eliminado' : ''}
+          {t('cup.inProgress', { n: cup.alive.length, stage: tMsg(cupRoundMsg(cup, cup.currentRound)) })}
+          {stillIn ? t('cup.stillIn') : cup.fixtures.length > 0 ? t('cup.out') : ''}
         </Body>
       )}
 
       {rounds.map((round) => (
         <View key={round}>
-          <Section title={cupRoundName(cup, round)} />
+          <Section title={tMsg(cupRoundMsg(cup, round))} />
           {cup.fixtures.filter((f) => f.round === round).map((f) => {
             const r = f.result!;
             const mine = f.homeClubId === managedId || f.awayClubId === managedId;
+            const homeClub = state.clubs[f.homeClubId];
+            const awayClub = state.clubs[f.awayClubId];
+            const homeWon = r.home.goals > r.away.goals;
             return (
               <View key={f.id} style={[styles.cupRow, mine && styles.highlight]}>
-                <Text style={[styles.cupTeam, { textAlign: 'right' }, mine && styles.bold]} numberOfLines={1}>
+                <Text style={[styles.cupTeam, { textAlign: 'right' }, mine && styles.bold, !homeWon && styles.dim]} numberOfLines={1}>
                   {name(f.homeClubId)}
                 </Text>
+                {homeClub ? <CrestCircle club={homeClub} size={22} /> : null}
                 <Text style={styles.cupScore}>{r.home.goals}-{r.away.goals}</Text>
-                <Text style={[styles.cupTeam, mine && styles.bold]} numberOfLines={1}>
+                {awayClub ? <CrestCircle club={awayClub} size={22} /> : null}
+                <Text style={[styles.cupTeam, mine && styles.bold, homeWon && styles.dim]} numberOfLines={1}>
                   {name(f.awayClubId)}
                 </Text>
               </View>
@@ -131,7 +153,7 @@ function CupView({ state }: { state: NonNullable<ReturnType<typeof useGameStore.
           })}
         </View>
       ))}
-      {cup.fixtures.length === 0 ? <Body dim>O sorteio está feito — a 1ª eliminatória joga-se em breve.</Body> : null}
+      {cup.fixtures.length === 0 ? <Body dim>{t('cup.drawDone')}</Body> : null}
       <View style={{ height: theme.spacing(3) }} />
     </ScrollView>
   );
@@ -146,7 +168,8 @@ function TableRow({
     <View style={[styles.row, highlight && styles.highlight]}>
       <View style={[styles.zone, zone ? { backgroundColor: zone } : null]} />
       <Text style={[styles.cell, styles.pos, styles.dim]}>{pos}</Text>
-      <Text style={[styles.cell, { flex: 1, textAlign: 'left' }, highlight && styles.bold]} numberOfLines={1}>
+      {club ? <CrestCircle club={club} size={20} /> : <View style={{ width: 20 }} />}
+      <Text style={[styles.cell, { flex: 1, textAlign: 'left', marginLeft: 4 }, highlight && styles.bold]} numberOfLines={1}>
         {club?.name ?? row.clubId}
       </Text>
       <Text style={[styles.cell, styles.num, styles.dim]}>{row.played}</Text>

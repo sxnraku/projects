@@ -6,19 +6,22 @@ import { bidForPlayer, isWonderkid } from '../../src/core/game';
 import { suggestedWage } from '../../src/core/economy';
 import { naturalOverall } from '../../src/core/models';
 import { money, wage } from '../../src/ui/format';
+import { useT } from '../../src/ui/i18n';
 import { attrColor, fitnessColor, theme } from '../../src/ui/theme';
+import { Face } from '../../src/ui/Face';
 import { Body, Button, PosText, RowKV, Screen, StatBar, Stepper } from '../components';
 
 type Tab = 'OVERVIEW' | 'STATS' | 'CONTRACT' | 'SELL';
-const TABS: { key: Tab; label: string }[] = [
-  { key: 'OVERVIEW', label: 'Visão' },
-  { key: 'STATS', label: 'Atributos' },
-  { key: 'CONTRACT', label: 'Contrato' },
-  { key: 'SELL', label: 'Vender' },
+const TABS: { key: Tab; labelKey: string }[] = [
+  { key: 'OVERVIEW', labelKey: 'player.tab.overview' },
+  { key: 'STATS', labelKey: 'player.tab.stats' },
+  { key: 'CONTRACT', labelKey: 'player.tab.contract' },
+  { key: 'SELL', labelKey: 'player.tab.sell' },
 ];
 
 export default function PlayerDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const t = useT();
   const state = useGameStore((s) => s.state);
   const renewPlayer = useGameStore((s) => s.renewPlayer);
   const setListed = useGameStore((s) => s.setListed);
@@ -30,7 +33,7 @@ export default function PlayerDetail() {
   const [sellMsg, setSellMsg] = useState<string | null>(null);
 
   const player = state?.players[id ?? ''];
-  if (!state || !player) return <Screen><Body>Jogador não encontrado.</Body></Screen>;
+  if (!state || !player) return <Screen><Body>{t('player.notFound')}</Body></Screen>;
 
   const ovr = naturalOverall(player);
   const club = player.clubId ? state.clubs[player.clubId] : null;
@@ -43,6 +46,12 @@ export default function PlayerDetail() {
     <Screen>
       {/* Cabeçalho */}
       <View style={styles.header}>
+        <Face
+          seed={player.id}
+          size={54}
+          shirt={club?.primaryColor}
+          ring={player.condition.status === 'INJURED' ? theme.colors.red : undefined}
+        />
         <View style={[styles.ovrBox, { backgroundColor: attrColor(ovr) }]}>
           <Text style={styles.ovrText}>{ovr}</Text>
         </View>
@@ -53,18 +62,18 @@ export default function PlayerDetail() {
           </Text>
           <View style={styles.metaRow}>
             <PosText position={player.positions[0]!} />
-            <Text style={styles.sub}>{player.age} anos · {player.nationality} · {club?.name ?? 'Livre'}</Text>
+            <Text style={styles.sub}>{t('player.age', { age: player.age, nat: player.nationality, club: club?.name ?? t('player.free') })}</Text>
           </View>
         </View>
       </View>
 
       {/* Separadores (o "Vender" só aparece para jogadores nossos) */}
       <View style={styles.tabs}>
-        {TABS.filter((t) => t.key !== 'SELL' || isOurs).map((t) => (
-          <Pressable key={t.key} onPress={() => setTab(t.key)}
-            style={[styles.tab, tab === t.key && styles.tabActive]}>
-            <Text style={[styles.tabText, tab === t.key && styles.tabTextActive]}>
-              {t.label}{t.key === 'SELL' && pendingBid ? ' •' : ''}
+        {TABS.filter((tb) => tb.key !== 'SELL' || isOurs).map((tb) => (
+          <Pressable key={tb.key} onPress={() => setTab(tb.key)}
+            style={[styles.tab, tab === tb.key && styles.tabActive]}>
+            <Text style={[styles.tabText, tab === tb.key && styles.tabTextActive]}>
+              {t(tb.labelKey)}{tb.key === 'SELL' && pendingBid ? ' •' : ''}
             </Text>
           </Pressable>
         ))}
@@ -73,62 +82,62 @@ export default function PlayerDetail() {
       <ScrollView showsVerticalScrollIndicator={false}>
         {tab === 'OVERVIEW' ? (
           <View>
-            <RowKV k="Overall" v={String(ovr)} vColor={attrColor(ovr)} />
-            <RowKV k="Potencial" v={String(player.potential)} vColor={attrColor(player.potential)} />
-            <RowKV k="Forma" v={String(player.condition.form)} />
-            <RowKV k="Moral" v={String(player.condition.morale)} />
-            <RowKV k="Fitness" v={`${player.condition.fitness}%`} vColor={fitnessColor(player.condition.fitness)} />
-            <RowKV k="Pé" v={player.foot === 'RIGHT' ? 'Direito' : player.foot === 'LEFT' ? 'Esquerdo' : 'Ambos'} />
-            <RowKV k="Valor de mercado" v={money(player.marketValue)} />
+            <RowKV k={t('player.overall')} v={String(ovr)} vColor={attrColor(ovr)} />
+            <RowKV k={t('player.potential')} v={String(player.potential)} vColor={attrColor(player.potential)} />
+            <RowKV k={t('player.form')} v={String(player.condition.form)} />
+            <RowKV k={t('player.morale')} v={String(player.condition.morale)} />
+            <RowKV k={t('player.fitness')} v={`${player.condition.fitness}%`} vColor={fitnessColor(player.condition.fitness)} />
+            <RowKV k={t('player.foot')} v={t(`foot.${player.foot}`)} />
+            <RowKV k={t('mkt.marketValue')} v={money(player.marketValue)} />
             {player.condition.status === 'INJURED' ? (
-              <RowKV k="Estado" v={`Lesionado (${player.condition.injuryDaysRemaining} dias)`} vColor={theme.colors.red} />
+              <RowKV k={t('player.statusLabel')} v={t('player.injuredDays', { days: player.condition.injuryDaysRemaining })} vColor={theme.colors.red} />
             ) : null}
           </View>
         ) : null}
 
         {tab === 'STATS' ? (
           <View>
-            <Text style={styles.group}>FÍSICO</Text>
-            <StatBar label="Velocidade" value={a.pace} />
-            <StatBar label="Resistência" value={a.stamina} />
-            <StatBar label="Força" value={a.strength} />
-            <StatBar label="Agilidade" value={a.agility} />
-            <Text style={styles.group}>TÉCNICA</Text>
-            <StatBar label="Finalização" value={a.finishing} />
-            <StatBar label="Passe" value={a.passing} />
-            <StatBar label="Drible" value={a.dribbling} />
-            <StatBar label="Desarme" value={a.tackling} />
-            <StatBar label="Cabeceamento" value={a.heading} />
-            {player.positions[0] === 'GK' ? <StatBar label="Guarda-redes" value={a.goalkeeping} /> : null}
-            <Text style={styles.group}>MENTAL</Text>
-            <StatBar label="Posicionamento" value={a.positioning} />
-            <StatBar label="Compostura" value={a.composure} />
-            <StatBar label="Equipa" value={a.teamwork} />
-            <StatBar label="Visão" value={a.vision} />
+            <Text style={styles.group}>{t('grp.PHYSICAL')}</Text>
+            <StatBar label={t('attr.pace')} value={a.pace} />
+            <StatBar label={t('attr.stamina')} value={a.stamina} />
+            <StatBar label={t('attr.strength')} value={a.strength} />
+            <StatBar label={t('attr.agility')} value={a.agility} />
+            <Text style={styles.group}>{t('grp.TECHNICAL')}</Text>
+            <StatBar label={t('attr.finishing')} value={a.finishing} />
+            <StatBar label={t('attr.passing')} value={a.passing} />
+            <StatBar label={t('attr.dribbling')} value={a.dribbling} />
+            <StatBar label={t('attr.tackling')} value={a.tackling} />
+            <StatBar label={t('attr.heading')} value={a.heading} />
+            {player.positions[0] === 'GK' ? <StatBar label={t('attr.goalkeeping')} value={a.goalkeeping} /> : null}
+            <Text style={styles.group}>{t('grp.MENTAL')}</Text>
+            <StatBar label={t('attr.positioning')} value={a.positioning} />
+            <StatBar label={t('attr.composure')} value={a.composure} />
+            <StatBar label={t('attr.teamwork')} value={a.teamwork} />
+            <StatBar label={t('attr.vision')} value={a.vision} />
           </View>
         ) : null}
 
         {tab === 'CONTRACT' ? (
           <View>
-            <RowKV k="Salário atual" v={wage(player.wage)} />
+            <RowKV k={t('player.wageCurrent')} v={wage(player.wage)} />
             <RowKV
-              k="Contrato até"
-              v={player.contractUntil ? `${player.contractUntil}${player.contractUntil === state.meta.season ? ' ⚠ último ano!' : ''}` : '—'}
+              k={t('player.contractUntil')}
+              v={player.contractUntil ? `${player.contractUntil}${player.contractUntil === state.meta.season ? t('player.lastYearInline') : ''}` : '—'}
               vColor={player.contractUntil === state.meta.season ? theme.colors.red : undefined}
             />
-            <RowKV k="Salário pedido (renovação)" v={wage(askedWage)} vColor={theme.colors.yellow} />
+            <RowKV k={t('player.askedWageRenew')} v={wage(askedWage)} vColor={theme.colors.yellow} />
 
             {isOurs ? (
               <View style={styles.renewBox}>
                 <View style={styles.renewRow}>
-                  <Text style={styles.sub}>Duração</Text>
+                  <Text style={styles.sub}>{t('mkt.duration')}</Text>
                   <Stepper value={years} onChange={setYears} step={1} min={1} max={5}
-                    format={(v) => `${v} anos`} />
+                    format={(v) => t('tac.years', { n: v })} />
                 </View>
                 {renewMsg ? <Text style={styles.renewMsg}>{renewMsg}</Text> : null}
-                <Button label="Renovar contrato" onPress={() => {
+                <Button label={t('player.renew')} onPress={() => {
                   const r = renewPlayer(player.id, years, askedWage);
-                  setRenewMsg(r.ok ? `Renovado até ${state.meta.season + years} por ${wage(askedWage)}.` : r.error ?? 'Recusado.');
+                  setRenewMsg(r.ok ? t('player.renewToast', { until: state.meta.season + years, wage: wage(askedWage) }) : r.error ?? t('player.renewFailed'));
                 }} />
               </View>
             ) : null}
@@ -137,8 +146,8 @@ export default function PlayerDetail() {
 
         {tab === 'SELL' && isOurs ? (
           <View>
-            <RowKV k="Valor de mercado" v={money(player.marketValue)} />
-            <RowKV k="Na lista de transferências" v={player.transferListed ? 'Sim' : 'Não'}
+            <RowKV k={t('mkt.marketValue')} v={money(player.marketValue)} />
+            <RowKV k={t('player.listed')} v={player.transferListed ? t('common.yes') : t('common.no')}
               vColor={player.transferListed ? theme.colors.yellow : undefined} />
 
             {sellMsg ? <Text style={styles.renewMsg}>{sellMsg}</Text> : null}
@@ -146,26 +155,24 @@ export default function PlayerDetail() {
             {/* Proposta pendente, se houver */}
             {pendingBid ? (
               <View style={styles.bidBox}>
-                <Text style={styles.bidTitle}>Proposta de {state.clubs[pendingBid.fromClubId]?.name}</Text>
+                <Text style={styles.bidTitle}>{t('player.bidFrom', { club: state.clubs[pendingBid.fromClubId]?.name ?? '' })}</Text>
                 <Text style={styles.bidFee}>{money(pendingBid.fee)}</Text>
-                <Button label="Aceitar e vender" onPress={() => {
+                <Button label={t('player.acceptSell')} onPress={() => {
                   const r = acceptBid(pendingBid.id);
-                  setSellMsg(r.ok ? `Vendido por ${money(r.fee ?? pendingBid.fee)}.` : r.error ?? 'Falhou.');
+                  setSellMsg(r.ok ? t('player.sellToast', { fee: money(r.fee ?? pendingBid.fee) }) : r.error ?? t('player.sellFailed'));
                 }} />
               </View>
             ) : (
-              <Text style={styles.sub}>Sem propostas de momento. Põe o jogador na lista para atrair interessados.</Text>
+              <Text style={styles.sub}>{t('player.noBids')}</Text>
             )}
 
             <View style={{ marginTop: theme.spacing(2) }}>
               <Button
-                label={player.transferListed ? 'Retirar da lista de transferências' : 'Pôr na lista de transferências'}
+                label={player.transferListed ? t('player.listToggleOn') : t('player.listToggleOff')}
                 variant={player.transferListed ? 'ghost' : 'primary'}
                 onPress={() => {
                   setListed(player.id, !player.transferListed);
-                  setSellMsg(player.transferListed
-                    ? 'Retirado da lista.'
-                    : 'Na lista — os clubes vão começar a fazer propostas nas próximas jornadas.');
+                  setSellMsg(player.transferListed ? t('player.removedFromList') : t('player.addedToList'));
                 }}
               />
             </View>

@@ -1,7 +1,8 @@
 import {
   CUP_LEAGUE_ID,
   CUP_WINNER_PRIZE,
-  cupRoundName,
+  cupRoundMsg,
+  cupStageParam,
   CupState,
   Fixture,
   GameState,
@@ -16,7 +17,7 @@ import { addNews } from '../news';
  * Empate no fim dos 90' → grandes penalidades (decididas pela seed).
  */
 
-export { CUP_LEAGUE_ID, CUP_WINNER_PRIZE, cupRoundName };
+export { CUP_LEAGUE_ID, CUP_WINNER_PRIZE, cupRoundMsg, cupStageParam };
 export type { CupState };
 
 /** Gera o sorteio da Taça para a época atual (baralha todos os clubes). */
@@ -92,10 +93,12 @@ export function playCupRound(state: GameState): Fixture[] {
       const won = winnerId === managedId;
       const score = `${result.home.goals}-${result.away.goals}${pens ? ' (g.p.)' : ''}`;
       const opp = state.clubs[homeId === managedId ? awayId : homeId]?.name ?? '';
-      addNews(state, 'CUP',
-        won
-          ? `Taça: ${state.clubs[managedId]?.shortName} elimina ${opp} (${score}) — ${cupRoundName(cup, round)}`
-          : `Taça: eliminado por ${opp} (${score}) na ${cupRoundName(cup, round)}`);
+      const stage = cupStageParam(cup, round);
+      if (won) {
+        addNews(state, 'CUP', 'news.cup.win', { club: state.clubs[managedId]?.shortName ?? '', opp, score, stage });
+      } else {
+        addNews(state, 'CUP', 'news.cup.out', { opp, score, stage });
+      }
     }
   }
 
@@ -112,10 +115,10 @@ export function playCupRound(state: GameState): Fixture[] {
       fin.transferBudget += Math.round(CUP_WINNER_PRIZE / 2);
     }
     if (champion === managedId) {
-      state.career.trophies.push({ season: cup.season, label: 'Vencedor da Taça' });
-      addNews(state, 'CUP', `🏆 CAMPEÕES DA TAÇA! Prémio de ${CUP_WINNER_PRIZE.toLocaleString('pt-PT')} €`);
+      state.career.trophies.push({ season: cup.season, key: 'trophy.cup' });
+      addNews(state, 'CUP', 'news.cup.championManaged', { amount: CUP_WINNER_PRIZE.toLocaleString('pt-PT') });
     } else {
-      addNews(state, 'CUP', `${state.clubs[champion]?.name ?? champion} vence a Taça.`);
+      addNews(state, 'CUP', 'news.cup.champion', { club: state.clubs[champion]?.name ?? champion });
     }
   }
 

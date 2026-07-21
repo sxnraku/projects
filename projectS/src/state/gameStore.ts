@@ -19,19 +19,34 @@ import {
   nextRound,
   replayFixture,
   acceptBid as coreAcceptBid,
+  acceptCounter as coreAcceptCounter,
+  autoRotate,
+  availableBudget as coreAvailableBudget,
+  blockingCounts,
+  BlockingCounts,
   blockingReason,
   BidDecision,
   dismissItem as coreDismissItem,
   ensureValidLineup,
+  MatchdayPreview,
+  matchdayPreview,
+  Reachability,
+  reachability,
   rejectBid as coreRejectBid,
   RenewalDecision,
+  reservedBudget as coreReservedBudget,
   resolveRenewal as coreResolveRenewal,
   resolveRequest as coreResolveRequest,
   rolloverSeason,
+  RotationResult,
   SeasonSummary,
   setManagedObjective,
   setTransferListed,
+  submitPendingOffer,
+  SubmitResult,
+  WeekReport,
   WeekResult,
+  withdrawOffer as coreWithdrawOffer,
   youthTrial,
 } from '../core/game';
 import {
@@ -39,10 +54,7 @@ import {
   dailyBonusAvailable,
 } from '../core/career';
 import {
-  evaluateOffer,
-  executeTransfer,
   FacilityType,
-  OfferEvaluation,
   renewContract as coreRenew,
   TransferOffer,
   upgradeFacility,
@@ -51,6 +63,7 @@ import {
 import { sortStandings, transferWindow, WindowState } from '../core/season';
 import { deriveSeed, Rng } from '../core/engine/rng';
 import { TrainingFocus } from '../core/training';
+import { Lang } from '../core/i18n';
 
 /**
  * Store global do jogo (Zustand).
@@ -61,22 +74,37 @@ import { TrainingFocus } from '../core/training';
  */
 export interface GameStore {
   state: GameState | null;
+  lang: Lang;
   trainingFocus: TrainingFocus;
   lastWeek: WeekResult | null;
   blockedReason: string | null;
   lastSeason: SeasonSummary | null; // sumário do último fim de época (para a UI)
   replayedFixtures: string[]; // fixtures já re-simulados (1 segunda hipótese por jogo)
+  /** Balanço da última jornada — o modal de fecho lê daqui e limpa no fim. */
+  pendingReport: WeekReport | null;
 
   // Ciclo de vida
   newGame: (opts: NewGameOptions) => void;
   loadState: (state: GameState) => void;
+  /** Idioma da interface (persiste no save). */
+  setLang: (lang: Lang) => void;
 
   // Core loop
   advance: () => WeekResult | null;
   /** Motivo do bloqueio do avanco (null = pode avancar). */
   advanceBlockedBy: () => string | null;
+  /** Contagens do bloqueio para a UI traduzir (null = pode avançar). */
+  blockedCounts: () => BlockingCounts | null;
   setTrainingFocus: (focus: TrainingFocus) => void;
   setTactic: (tactic: Tactic) => void;
+
+  // Pré-jogo
+  /** Checklist da próxima jornada (onze, dinheiro, adversário). */
+  preview: () => MatchdayPreview | null;
+  /** Troca titulares exaustos/lesionados por suplentes frescos. */
+  rotate: () => RotationResult;
+  /** Fecha o modal de balanço da jornada. */
+  clearReport: () => void;
 
   // Carreira
   acceptOffer: (clubId: string) => boolean;
@@ -96,8 +124,18 @@ export interface GameStore {
    */
   completeOnboarding: (managerName: string, clubId: string) => void;
 
-  // Mercado
-  submitOffer: (offer: TransferOffer) => OfferEvaluation;
+  // Mercado — a proposta fica pendente; a resposta chega ao avançar a jornada.
+  submitOffer: (offer: TransferOffer) => SubmitResult;
+  /** Aceita os termos exigidos numa contra-proposta (fecha já). */
+  acceptCounter: (itemId: string) => SubmitResult;
+  /** Desiste de uma proposta e liberta o orçamento reservado. */
+  withdrawOffer: (itemId: string) => void;
+  /** Orçamento livre (já descontadas as propostas em curso). */
+  freeBudget: () => number;
+  /** Orçamento comprometido em propostas por responder. */
+  committedBudget: () => number;
+  /** O clube tem estatuto para contratar este jogador? */
+  reachOf: (playerId: string) => Reachability | null;
   renewPlayer: (playerId: string, years: number, wage: number) => { ok: boolean; error?: string };
 
   // Vendas / caixa de entrada
@@ -105,7 +143,7 @@ export interface GameStore {
   rejectBid: (bidId: string) => void;
   setListed: (playerId: string, listed: boolean) => void;
   resolveRenewal: (itemId: string, years?: number) => RenewalDecision;
-  resolveRequest: (itemId: string, accept: boolean) => string | null;
+  resolveRequest: (itemId: string, accept: boolean) => import('../core/i18n').Msg | null;
   dismissItem: (itemId: string) => void;
 
   // Seletores (derivados — não guardam estado)
@@ -132,18 +170,27 @@ function todayISO(): string {
 
 export const useGameStore = create<GameStore>((set, get) => ({
   state: null,
+  lang: 'pt-PT',
   trainingFocus: TrainingFocus.TECHNICAL,
   lastWeek: null,
   blockedReason: null,
   lastSeason: null,
   replayedFixtures: [],
+  pendingReport: null,
 
   newGame: (opts) => {
     const state = createNewGame(opts);
-    set({ state, lastWeek: null, lastSeason: null, replayedFixtures: [] });
+    state.career.lang = get().lang; // guarda o idioma escolhido no save
+    set({ state, lastWeek: null, lastSeason: null, replayedFixtures: [], pendingReport: null });
   },
 
-  loadState: (state) => set({ state }),
+  loadState: (state) => set({ state, lang: state.career.lang ?? get().lang }),
+
+  setLang: (lang) => {
+    const { state } = get();
+    if (state) { state.career.lang = lang; set({ state: bump(state), lang }); }
+    else set({ lang });
+  },
 
   advance: () => {
     const { state, trainingFocus } = get();
@@ -166,14 +213,41 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     const result = advanceWeek(state, trainingFocus);
-    set({ state: bump(state), lastWeek: result, lastSeason: null, blockedReason: null });
+    set({
+      state: bump(state),
+      lastWeek: result,
+      lastSeason: null,
+      blockedReason: null,
+      pendingReport: result.report,
+    });
     return result;
   },
+
+  // ---- Pré-jogo ----
+  preview: () => {
+    const { state } = get();
+    return state ? matchdayPreview(state) : null;
+  },
+
+  rotate: () => {
+    const { state } = get();
+    if (!state) return { swapped: 0, changes: [] };
+    const res = autoRotate(state);
+    if (res.swapped > 0) set({ state: bump(state) });
+    return res;
+  },
+
+  clearReport: () => set({ pendingReport: null }),
 
   /** Motivo pelo qual o avanço está bloqueado (null se puder avançar). */
   advanceBlockedBy: () => {
     const { state } = get();
     return state ? blockingReason(state) : null;
+  },
+
+  blockedCounts: () => {
+    const { state } = get();
+    return state ? blockingCounts(state) : null;
   },
 
   setTrainingFocus: (focus) => set({ trainingFocus: focus }),
@@ -260,19 +334,45 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   // ---- Mercado ----
+  // A proposta NÃO é decidida aqui: fica pendente e a resposta chega quando a
+  // jornada avança. É o que separa negociar de comprar numa loja.
   submitOffer: (offer) => {
     const { state } = get();
-    if (!state) return { decision: 'REJECTED', reason: 'Sem jogo ativo.' };
-    const sellerId = state.players[offer.playerId]?.clubId;
-    const evaluation = evaluateOffer(offer, state);
-    if (evaluation.decision === 'ACCEPTED') {
-      const res = executeTransfer(offer, state);
-      if (!res.ok) return { decision: 'REJECTED', reason: res.error ?? 'Falha na transferência.' };
-      // O clube vendedor pode ter perdido um titular — repõe um onze válido.
-      if (sellerId) ensureValidLineup(sellerId, state.clubs[sellerId]?.squad ?? [], state.players, state.tactics);
-      set({ state: bump(state) });
-    }
-    return evaluation;
+    if (!state) return { ok: false, errorKey: 'submit.noGame' };
+    const res = submitPendingOffer(state, offer);
+    if (res.ok) set({ state: bump(state) });
+    return res;
+  },
+
+  acceptCounter: (itemId) => {
+    const { state } = get();
+    if (!state) return { ok: false, errorKey: 'submit.noGame' };
+    const res = coreAcceptCounter(state, itemId);
+    set({ state: bump(state) });
+    return res;
+  },
+
+  withdrawOffer: (itemId) => {
+    const { state } = get();
+    if (!state) return;
+    coreWithdrawOffer(state, itemId);
+    set({ state: bump(state) });
+  },
+
+  freeBudget: () => {
+    const { state } = get();
+    return state ? coreAvailableBudget(state) : 0;
+  },
+
+  committedBudget: () => {
+    const { state } = get();
+    return state ? coreReservedBudget(state) : 0;
+  },
+
+  reachOf: (playerId) => {
+    const { state } = get();
+    const p = state?.players[playerId];
+    return state && p ? reachability(state, p) : null;
   },
 
   // ---- Vendas / caixa de entrada ----
@@ -381,7 +481,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   marketWindow: () => {
     const { state } = get();
-    if (!state) return { open: false, label: '—', opensAtRound: null };
+    if (!state) return { open: false, labelKey: 'window.closed', opensAtRound: null };
     const leagueId = managedLeagueId(state);
     const schedule = state.schedules[leagueId];
     const round = nextRound(state, leagueId) ?? (schedule?.totalRounds ?? 1);
