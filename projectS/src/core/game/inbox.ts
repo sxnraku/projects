@@ -3,7 +3,6 @@ import {
   GameState,
   InboxItem,
   MAX_ACTIVE_BIDS,
-  MAX_ACTIVE_RENEWALS,
   MAX_ACTIVE_REQUESTS,
   naturalOverall,
   RenewalItem,
@@ -175,7 +174,10 @@ export function rejectBid(state: GameState, bidId: string): void {
 /** Marca/desmarca um jogador na lista de transferências. */
 export function setTransferListed(state: GameState, playerId: string, listed: boolean): void {
   const p = state.players[playerId];
-  if (p) p.transferListed = listed;
+  if (!p) return;
+  // Não se pode listar um jogador emprestado (recebido) — o passe não é nosso.
+  if (listed && p.condition.loanOwnerId) return;
+  p.transferListed = listed;
 }
 
 /** Melhor oferta pendente por um jogador (para mostrar no ecrã do jogador). */
@@ -248,12 +250,14 @@ export function generateRenewalReminders(state: GameState): RenewalItem[] {
     state.inbox.filter((it) => it.kind === 'RENEWAL').map((it) => it.playerId),
   );
 
+  // TODOS os jogadores em fim de contrato recebem aviso — nenhum sai em silêncio.
+  // (Antes limitava a MAX_ACTIVE_RENEWALS=4, e os restantes desapareciam sem
+  // que o utilizador pudesse renovar. Agora avisa o plantel todo que expira.)
   const expiring = club.squad
     .map((id) => state.players[id])
     .filter((p): p is NonNullable<typeof p> =>
       !!p && p.contractUntil === state.meta.season && !existing.has(p.id))
-    .sort((a, b) => b.marketValue - a.marketValue)
-    .slice(0, MAX_ACTIVE_RENEWALS - existing.size);
+    .sort((a, b) => b.marketValue - a.marketValue);
 
   const created: RenewalItem[] = [];
   for (const p of expiring) {

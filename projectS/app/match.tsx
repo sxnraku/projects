@@ -1,15 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useGameStore } from '../src/state/gameStore';
-import { MatchEvent, MatchResult } from '../src/core/models';
+import { GameState, Mentality, MatchEvent, MatchResult, POSITION_GROUP, shortName, Tempo } from '../src/core/models';
 import { theme } from '../src/ui/theme';
 import { useT } from '../src/ui/i18n';
 import { Body, Button, Card, Crest, H1, Screen } from './components';
 import { showRewarded } from '../src/native/ads';
 
+const MENTALITIES: Mentality[] = ['DEFENSIVE', 'BALANCED', 'ATTACKING'];
+const TEMPOS: Tempo[] = ['SLOW', 'NORMAL', 'FAST'];
+const MAX_SUBS = 3;
+
 const EVENT_ICON: Record<string, string> = {
-  GOAL: '⚽', SAVE: '🧤', CHANCE: '💨', YELLOW_CARD: '🟨', RED_CARD: '🟥',
+  GOAL: '⚽', ASSIST: '🅰', SAVE: '🧤', CHANCE: '💨', YELLOW_CARD: '🟨', RED_CARD: '🟥',
   INJURY: '🚑', HALF_TIME: '⏸', FULL_TIME: '🏁', KICKOFF: '▶',
 };
 
@@ -26,7 +30,10 @@ export default function Match() {
 
   const replayLastMatch = useGameStore((s) => s.replayLastMatch);
   const replayedFixtures = useGameStore((s) => s.replayedFixtures);
+  const applyHalftime = useGameStore((s) => s.applyHalftime);
   const [busyAd, setBusyAd] = useState(false);
+  const [halftimeDone, setHalftimeDone] = useState(false);
+  const [showHT, setShowHT] = useState(false);
 
   const fixture = useMemo(() => {
     if (!lastWeek || !managedId) return null;
@@ -40,11 +47,25 @@ export default function Match() {
   const [paused, setPaused] = useState(false);
   const finished = minute >= FULL_TIME_MIN;
 
-  // Novo jogo → relógio volta ao 0'.
+  // Novo jogo → relógio volta ao 0' e reinicia o estado do intervalo.
   useEffect(() => {
     setMinute(0);
     setPaused(false);
+    setHalftimeDone(false);
+    setShowHT(false);
   }, [result?.seed]);
+
+  // Só há ajuste de intervalo em jogos de LIGA do clube gerido (Taça usa outra seed).
+  const isLeagueMatch = !!fixture && !!state && !!managedId
+    && fixture.leagueId === state.clubs[managedId]?.leagueId;
+
+  // Ao chegar ao intervalo (45'), pausa e abre o painel de ajustes — uma vez.
+  useEffect(() => {
+    if (isLeagueMatch && !halftimeDone && !finished && minute >= 45) {
+      setPaused(true);
+      setShowHT(true);
+    }
+  }, [minute, halftimeDone, finished, isLeagueMatch]);
 
   // Tick do relógio (limpa e recria quando a velocidade/pausa muda).
   useEffect(() => {
@@ -80,7 +101,7 @@ export default function Match() {
 
   if (!state || !result || !live) {
     return (
-      <Screen>
+      <Screen edges={['left', 'right', 'bottom']}>
         <H1>{t('match.noRecent')}</H1>
         <Body dim>{t('match.advanceHint')}</Body>
         <View style={{ height: 16 }} />
@@ -98,15 +119,22 @@ export default function Match() {
 
   const playerName = (id: string | null) => {
     const p = id ? state.players[id] : null;
-    return p ? p.lastName : '';
+    return p ? shortName(p) : '';
   };
 
   // O lance mais recente é um golo acabado de acontecer? → destaque.
   const lastEvent = live.timeline[0];
   const goalJustNow = !finished && lastEvent?.type === 'GOAL' && minute - lastEvent.minute <= 2;
 
+  // Pós-jogo: notas, homem do jogo, marcadores e assistências.
+  const ps = result.playerStats ?? {};
+  const motmId = result.motm ?? null;
+  const scorers = Object.keys(ps).filter((id) => ps[id]!.goals > 0).sort((a, b) => ps[b]!.goals - ps[a]!.goals);
+  const assisters = Object.keys(ps).filter((id) => ps[id]!.assists > 0);
+  const withCount = (id: string, n: number) => `${playerName(id)}${n > 1 ? ` (${n})` : ''}`;
+
   return (
-    <Screen>
+    <Screen edges={['left', 'right', 'bottom']}>
       <ScrollView showsVerticalScrollIndicator={false}>
         {/* SCOREBOARD AO VIVO */}
         <View style={styles.board}>
@@ -187,6 +215,31 @@ export default function Match() {
           ) : null}
         </Card>
 
+        {/* PÓS-JOGO: homem do jogo, marcadores, assistências */}
+        {finished && (motmId || scorers.length > 0) ? (
+          <Card>
+            {motmId ? (
+              <View style={styles.motmRow}>
+                <Text style={styles.motmLabel}>{t('match.motm')}</Text>
+                <Text style={styles.motmName} numberOfLines={1}>{playerName(motmId)}</Text>
+                <Text style={styles.motmRating}>{ps[motmId]!.rating.toFixed(1)}</Text>
+              </View>
+            ) : null}
+            {scorers.length > 0 ? (
+              <View style={styles.psRow}>
+                <Text style={styles.psLabel}>⚽ {t('match.scorers')}</Text>
+                <Text style={styles.psVal}>{scorers.map((id) => withCount(id, ps[id]!.goals)).join(', ')}</Text>
+              </View>
+            ) : null}
+            {assisters.length > 0 ? (
+              <View style={styles.psRow}>
+                <Text style={styles.psLabel}>🅰 {t('match.assists')}</Text>
+                <Text style={styles.psVal}>{assisters.map((id) => withCount(id, ps[id]!.assists)).join(', ')}</Text>
+              </View>
+            ) : null}
+          </Card>
+        ) : null}
+
         {/* TIMELINE AO VIVO — mais recente no topo */}
         {live.timeline.length > 0 ? (
           <Card>
@@ -227,7 +280,130 @@ export default function Match() {
         {finished ? <Button label={t('match.continue')} onPress={() => router.replace('/')} /> : null}
         <View style={{ height: 24 }} />
       </ScrollView>
+
+      {/* PAINEL DE INTERVALO — substituições + mentalidade/ritmo (re-simula a 2ª parte) */}
+      {showHT && state && managedId ? (
+        <HalftimeSheet
+          state={state}
+          managedId={managedId}
+          onApply={(lineup, mentality, tempo) => {
+            applyHalftime(lineup, mentality, tempo);
+            setHalftimeDone(true);
+            setShowHT(false);
+            setPaused(false);
+          }}
+          onSkip={() => { setHalftimeDone(true); setShowHT(false); setPaused(false); }}
+        />
+      ) : null}
     </Screen>
+  );
+}
+
+/** Painel de INTERVALO: muda mentalidade/ritmo e faz até 3 substituições. */
+function HalftimeSheet({
+  state, managedId, onApply, onSkip,
+}: {
+  state: GameState;
+  managedId: string;
+  onApply: (lineup: { position: any; playerId: string }[], mentality: Mentality, tempo: Tempo) => void;
+  onSkip: () => void;
+}) {
+  const t = useT();
+  const tac = state.tactics[managedId]!;
+  const [lineup, setLineup] = useState(tac.lineup.map((s) => ({ ...s })));
+  const [mentality, setMentality] = useState<Mentality>(tac.mentality);
+  const [tempo, setTempo] = useState<Tempo>(tac.tempo);
+  const [subbing, setSubbing] = useState<number | null>(null);
+  const [subs, setSubs] = useState(0);
+
+  const inLineup = new Set(lineup.map((s) => s.playerId));
+  const bench = (state.clubs[managedId]?.squad ?? [])
+    .map((id) => state.players[id])
+    .filter((p): p is NonNullable<typeof p> => !!p && !inLineup.has(p.id) && p.condition.status !== 'INJURED');
+
+  const doSub = (benchId: string) => {
+    if (subbing === null) return;
+    setLineup((l) => l.map((s, i) => (i === subbing ? { ...s, playerId: benchId } : s)));
+    setSubs((n) => n + 1);
+    setSubbing(null);
+  };
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onSkip}>
+      <View style={styles.htBackdrop}>
+        <View style={styles.htSheet}>
+          <Text style={styles.htTitle}>{t('match.halftime')}</Text>
+
+          <Text style={styles.htLabel}>{t('tac.mentality')}</Text>
+          <Segment options={MENTALITIES.map((m) => ({ key: m, label: t(`mentality.${m}`), active: mentality === m, onPress: () => setMentality(m) }))} />
+          <Text style={styles.htLabel}>{t('tac.tempo')}</Text>
+          <Segment options={TEMPOS.map((tp) => ({ key: tp, label: t(`tempo.${tp}`), active: tempo === tp, onPress: () => setTempo(tp) }))} />
+
+          <Text style={styles.htLabel}>{t('match.ht.subs', { n: subs })}</Text>
+          {subbing === null ? (
+            <ScrollView style={{ maxHeight: 190 }} showsVerticalScrollIndicator={false}>
+              {lineup.map((s, i) => {
+                const p = state.players[s.playerId];
+                return (
+                  <View key={i} style={styles.htRow}>
+                    <Text style={styles.htPos}>{s.position}</Text>
+                    <Text style={styles.htName} numberOfLines={1}>{p ? shortName(p) : '—'}</Text>
+                    <Text style={[styles.htFit, { color: p ? theme.colors.text : theme.colors.textDim }]}>
+                      {p ? `${p.condition.fitness}%` : ''}
+                    </Text>
+                    <Pressable
+                      disabled={subs >= MAX_SUBS}
+                      onPress={() => setSubbing(i)}
+                      style={[styles.htSwap, subs >= MAX_SUBS && { opacity: 0.35 }]}
+                    >
+                      <Text style={styles.htSwapText}>⇄</Text>
+                    </Pressable>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          ) : (
+            <View>
+              <Text style={styles.htPick}>{t('match.ht.pickSub')}</Text>
+              <ScrollView style={{ maxHeight: 190 }} showsVerticalScrollIndicator={false}>
+                {bench.length === 0 ? (
+                  <Text style={styles.htEmpty}>{t('match.ht.noBench')}</Text>
+                ) : bench.map((p) => (
+                  <Pressable key={p.id} style={styles.htRow} onPress={() => doSub(p.id)}>
+                    <Text style={styles.htPos}>{p.positions[0]}</Text>
+                    <Text style={styles.htName} numberOfLines={1}>{shortName(p)}</Text>
+                    <Text style={styles.htFit}>{p.condition.fitness}%</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+              <Pressable onPress={() => setSubbing(null)} style={styles.htCancel}>
+                <Text style={styles.htCancelText}>✕</Text>
+              </Pressable>
+            </View>
+          )}
+
+          <Pressable style={styles.htApply} onPress={() => onApply(lineup, mentality, tempo)}>
+            <Text style={styles.htApplyText}>{t('match.ht.apply')}</Text>
+          </Pressable>
+          <Pressable style={styles.htSkip} onPress={onSkip}>
+            <Text style={styles.htSkipText}>{t('match.ht.skip')}</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+/** Seletor segmentado (mentalidade/ritmo) para o painel de intervalo. */
+function Segment({ options }: { options: { key: string; label: string; active: boolean; onPress: () => void }[] }) {
+  return (
+    <View style={styles.segment}>
+      {options.map((o) => (
+        <Pressable key={o.key} onPress={o.onPress} style={[styles.segItem, o.active && styles.segItemOn]}>
+          <Text style={[styles.segText, o.active && styles.segTextOn]} numberOfLines={1}>{o.label}</Text>
+        </Pressable>
+      ))}
+    </View>
   );
 }
 
@@ -364,6 +540,19 @@ const styles = StyleSheet.create({
   statBest: { color: theme.colors.text, fontWeight: '900' },
   statLabel: { color: theme.colors.textDim, fontSize: theme.font.small, flex: 1, textAlign: 'center' },
 
+  // Pós-jogo: homem do jogo + marcadores/assistências
+  motmRow: {
+    flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1),
+    paddingBottom: theme.spacing(1), marginBottom: theme.spacing(0.5),
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border,
+  },
+  motmLabel: { color: theme.colors.accent, fontSize: theme.font.small, fontWeight: '800' },
+  motmName: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '800', flex: 1 },
+  motmRating: { color: theme.colors.accent, fontSize: theme.font.h3, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  psRow: { flexDirection: 'row', gap: theme.spacing(1), paddingVertical: theme.spacing(0.6), alignItems: 'flex-start' },
+  psLabel: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700', width: 100 },
+  psVal: { color: theme.colors.text, fontSize: theme.font.small, flex: 1 },
+
   tlHeader: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     borderBottomWidth: 1, borderBottomColor: theme.colors.border, paddingBottom: theme.spacing(1),
@@ -389,4 +578,36 @@ const styles = StyleSheet.create({
   },
   replayText: { color: theme.colors.accent, fontSize: theme.font.small, fontWeight: '800', textAlign: 'center' },
   replaySub: { color: theme.colors.textDim, fontSize: 10, marginTop: 2 },
+
+  // Painel de intervalo
+  htBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'flex-end' },
+  htSheet: {
+    backgroundColor: theme.colors.surface, borderTopLeftRadius: 16, borderTopRightRadius: 16,
+    borderWidth: 1, borderColor: theme.colors.border, padding: theme.spacing(2),
+  },
+  htTitle: { color: theme.colors.accent, fontSize: theme.font.h2, fontWeight: '900', letterSpacing: 1, textAlign: 'center', marginBottom: theme.spacing(1) },
+  htLabel: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '800', letterSpacing: 0.5, marginTop: theme.spacing(1), marginBottom: 4 },
+  htRow: {
+    flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1),
+    paddingVertical: theme.spacing(0.85), borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border,
+  },
+  htPos: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '800', width: 34 },
+  htName: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600', flex: 1 },
+  htFit: { fontSize: theme.font.small, fontWeight: '700', width: 42, textAlign: 'right', fontVariant: ['tabular-nums'] },
+  htSwap: { paddingHorizontal: theme.spacing(1), paddingVertical: 2 },
+  htSwapText: { color: theme.colors.blue, fontSize: 18, fontWeight: '900' },
+  htPick: { color: theme.colors.blue, fontSize: theme.font.small, fontWeight: '800', marginBottom: 4 },
+  htEmpty: { color: theme.colors.textDim, fontSize: theme.font.small, paddingVertical: theme.spacing(1) },
+  htCancel: { alignSelf: 'center', paddingVertical: theme.spacing(0.75) },
+  htCancelText: { color: theme.colors.textDim, fontSize: theme.font.h3, fontWeight: '800' },
+  htApply: { backgroundColor: theme.colors.green, borderRadius: theme.radius.sm, height: 46, alignItems: 'center', justifyContent: 'center', marginTop: theme.spacing(1.5) },
+  htApplyText: { color: '#fff', fontSize: theme.font.h3, fontWeight: '800' },
+  htSkip: { alignItems: 'center', paddingVertical: theme.spacing(1) },
+  htSkipText: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700' },
+
+  segment: { flexDirection: 'row', backgroundColor: theme.colors.bg, borderRadius: theme.radius.sm, borderWidth: 1, borderColor: theme.colors.border, padding: 3, gap: 3 },
+  segItem: { flex: 1, paddingVertical: theme.spacing(0.9), alignItems: 'center', justifyContent: 'center', borderRadius: 4 },
+  segItemOn: { backgroundColor: theme.colors.accent },
+  segText: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700' },
+  segTextOn: { color: '#20242A', fontWeight: '800' },
 });

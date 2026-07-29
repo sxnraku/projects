@@ -14,7 +14,7 @@ import { naturalOverall, Player } from '../models';
  * plausível de clube médio (overall 14 ≈ 1-2M).
  */
 
-const OVERALL_BASE = 400_000; // multiplicador base — calibrado p/ overall 14 ≈ 1.5M
+const OVERALL_BASE = 220_000; // multiplicador base — calibrado p/ a economia realista por escalão
 
 /**
  * Fator exponencial do overall — cada ponto acima de 10 pesa MUITO mais.
@@ -73,8 +73,8 @@ export function computeMarketValue(player: Player, currentSeason: number): numbe
 /** Salário semanal sugerido, proporcional ao valor de mercado e overall. */
 export function suggestedWage(player: Player, currentSeason: number): number {
   const value = computeMarketValue(player, currentSeason);
-  // ~0.8% do valor por semana (~40% do valor por ano). Com os 0.1% originais
-  // os salários eram ~3% da receita e nenhum clube sentia pressão financeira;
-  // agora a folha salarial é a maior despesa, como no futebol real.
-  return Math.max(500, Math.round((value * 0.008) / 100) * 100);
+  // ~0.5% do valor por semana. A folha salarial é a maior despesa (como no
+  // futebol real) mas fica sustentável face às receitas realistas por escalão —
+  // um clube da 3ª divisão não gasta milhões em ordenados.
+  return Math.max(300, Math.round((value * 0.005) / 100) * 100);
 }

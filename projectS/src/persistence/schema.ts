@@ -12,7 +12,10 @@
  */
 export const SCHEMA_SQL = `
 PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
+-- foreign_keys OFF de propósito: o save é um snapshot atómico e consistente
+-- (wipe + reescrita numa transação), a integridade é garantida em TS. Com FK ON,
+-- o DELETE de limpeza rebentava e o save era silenciosamente perdido.
+PRAGMA foreign_keys = OFF;
 
 CREATE TABLE IF NOT EXISTS meta (
   id             INTEGER PRIMARY KEY CHECK (id = 1),

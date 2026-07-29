@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useGameStore } from '../../src/state/gameStore';
 import { useMonetizationStore } from '../../src/state/monetizationStore';
@@ -7,18 +7,21 @@ import { AdReward } from '../../src/monetization';
 import { OBJECTIVE_KEYS, dailyBonusAmount } from '../../src/core/career';
 import { computeTeamStrength } from '../../src/core/engine';
 import { TrainingFocus } from '../../src/core/training';
-import { money, wage } from '../../src/ui/format';
+import { Club, goalDifference, naturalOverallFine, Player } from '../../src/core/models';
+import type { ReturnedLoan } from '../../src/core/game';
+import { money, to100, wage } from '../../src/ui/format';
 import { isInsolvent, suggestedWage, wageBudgetRemaining } from '../../src/core/economy';
 import { useT, useTMsg } from '../../src/ui/i18n';
 import { fitnessColor, reputationStars, theme } from '../../src/ui/theme';
 import { Face } from '../../src/ui/Face';
 import { PreMatchSheet, WeekReportModal } from '../../src/ui/dialogs';
+import { Toast } from '../../src/ui/Toast';
 import {
-  Bar, Body, Button, CrestCircle, DashCard, FormDots, RowKV, Screen, Stars, StrengthTriplet,
+  Bar, Body, contrastOn, CrestCircle, darken, DashCard, FormDots, RowKV, Screen, Stars, StrengthTriplet,
 } from '../components';
 import { showInterstitial, showRewarded } from '../../src/native/ads';
 import AdBanner from '../../src/native/AdBanner';
-import Onboarding from '../onboarding';
+import Tutorial from '../tutorial';
 
 const FOCUSES: TrainingFocus[] = ['PHYSICAL', 'TECHNICAL', 'TACTICAL', 'RECOVERY'] as TrainingFocus[];
 
@@ -43,6 +46,13 @@ export default function Dashboard() {
   const rotate = useGameStore((s) => s.rotate);
   const pendingReport = useGameStore((s) => s.pendingReport);
   const clearReport = useGameStore((s) => s.clearReport);
+  const expiringDecisions = useGameStore((s) => s.expiringDecisions);
+  const renewExpiring = useGameStore((s) => s.renewExpiring);
+  const releaseExpiring = useGameStore((s) => s.releaseExpiring);
+  const returnedLoansPending = useGameStore((s) => s.returnedLoansPending);
+  const buyReturnedLoan = useGameStore((s) => s.buyReturnedLoan);
+  const dismissReturnedLoan = useGameStore((s) => s.dismissReturnedLoan);
+  const markTutorialSeen = useGameStore((s) => s.markTutorialSeen);
 
   const inboxItems = useGameStore((s) => s.inboxItems);
   const acceptBid = useGameStore((s) => s.acceptBid);
@@ -56,15 +66,20 @@ export default function Dashboard() {
   const onAdvanceAd = useMonetizationStore((s) => s.onAdvance);
   const rewardedAvailable = useMonetizationStore((s) => s.rewardedAvailable);
   const claimReward = useMonetizationStore((s) => s.claimReward);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{ kind: 'ok' | 'error' | 'info'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [askRotate, setAskRotate] = useState(false);
 
   // O ecrã inicial fica montado por baixo de /match, e um Modal do RN aparece
   // por cima de TUDO — sem este guarda o balanço tapava o jogo ao vivo.
   const [focused, setFocused] = useState(true);
+  // Enquanto arranca o jogo, o balanço da semana (pendingReport) já está posto
+  // mas ainda estamos focados por 1+ frame → sem este flag, o modal pisca antes
+  // de /match tomar o ecrã. Limpa-se ao voltar ao painel.
+  const [launching, setLaunching] = useState(false);
   useFocusEffect(useCallback(() => {
     setFocused(true);
+    setLaunching(false);
     return () => setFocused(false);
   }, []));
 
@@ -84,14 +99,29 @@ export default function Dashboard() {
     : '';
   const pre = preview();
 
-  /** Avança a jornada e abre o jogo. Separado para o micro-stop poder reutilizá-lo. */
+  /** Avança a jornada e abre o jogo. Guarda contra multi-toque (evitava avançar
+   *  várias jornadas de uma vez) e deixa a UI pintar o "a processar" antes da
+   *  simulação síncrona (que bloqueia o thread por uns instantes). */
   const runMatch = async () => {
-    const r = advance();
-    if (onAdvanceAd()) await showInterstitial();
-    if (next && r) router.push('/match');
+    if (busy) return;
+    setBusy(true);
+    setLaunching(true); // esconde o balanço enquanto o jogo arranca (evita o flash)
+    await new Promise((r) => setTimeout(r, 16)); // deixa pintar o estado ocupado
+    try {
+      const r = advance();
+      if (onAdvanceAd()) await showInterstitial();
+      if (next && r) {
+        router.push('/match'); // launching fica true; limpa ao voltar (useFocusEffect)
+      } else {
+        setLaunching(false); // não foi para o jogo → mostra já o balanço, se houver
+      }
+    } finally {
+      setBusy(false);
+    }
   };
 
   const onPressPlay = async () => {
+    if (busy) return;
     if (pre && pre.warnings.length > 0) { setAskRotate(true); return; }
     await runMatch();
   };
@@ -119,10 +149,12 @@ export default function Dashboard() {
   }, [state, club, managedLeague]);
 
   if (!state || !club) return <Screen><Body>{t('common.loading')}</Body></Screen>;
-  if (state.meta.managerName === '') return <Onboarding />;
 
   const finance = state.finances[club.id]!;
   const career = state.career;
+  // Fator do escalão (bónus escalam com a divisão, como as receitas).
+  const divFactor = Math.pow(0.5, (state.leagues[club.leagueId]?.tier ?? 1) - 1);
+  const scaled = (v: number) => Math.round(v * divFactor / 10_000) * 10_000;
   const schedule = state.schedules[managedLeague()];
   const nextOppId = next ? (next.homeClubId === club.id ? next.awayClubId : next.homeClubId) : null;
   const nextOpp = nextOppId ? state.clubs[nextOppId] : null;
@@ -150,10 +182,16 @@ export default function Dashboard() {
   const miniStart = Math.max(0, Math.min(position - 3, table.length - 5));
   const mini = table.slice(miniStart, miniStart + 5);
 
+  // Linha da tabela do clube gerido (para o cabeçalho: pontos, diferença de golos).
+  const myRow = table.find((r) => r.clubId === club.id) ?? null;
+
   const inbox = inboxItems();
 
   return (
     <Screen>
+      <Toast text={feedback?.text ?? null} kind={feedback?.kind ?? 'ok'} onHide={() => setFeedback(null)} />
+      {/* Tutorial de abas — só na 1ª entrada de cada carreira. */}
+      {!state.career.tutorialSeen ? <Tutorial onDone={markTutorialSeen} /> : null}
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingTop: theme.spacing(1.25) }}>
         {fired ? (
           <DashCard title={t('fired.title')} accent={theme.colors.red}>
@@ -175,7 +213,17 @@ export default function Dashboard() {
           </DashCard>
         ) : (
           <View>
-            {msg ? <Text style={styles.toast}>{msg}</Text> : null}
+            {/* CABEÇALHO DO CLUBE — cor do clube, posição, forma, objetivo */}
+            <ClubHero
+              club={club}
+              leagueName={state.leagues[club.leagueId]?.name ?? ''}
+              position={position}
+              objective={t(OBJECTIVE_KEYS[career.objective])}
+              form={lastResults}
+              points={myRow?.points ?? 0}
+              gd={myRow ? goalDifference(myRow) : 0}
+              t={t}
+            />
 
             {/* CAIXA DE ENTRADA */}
             {inbox.length > 0 ? (
@@ -196,7 +244,7 @@ export default function Dashboard() {
                         </View>
                         <MiniBtn label={t('btn.sell')} bg={theme.colors.green} onPress={() => {
                           const r = acceptBid(item.id);
-                          if (r.ok) setMsg(t('toast.sold', { name, fee: money(r.fee ?? item.fee) }));
+                          if (r.ok) setFeedback({ kind: 'ok', text: t('toast.sold', { name, fee: money(r.fee ?? item.fee) }) });
                         }} />
                         <MiniX onPress={() => rejectBid(item.id)} />
                       </InboxRow>
@@ -213,7 +261,9 @@ export default function Dashboard() {
                         </View>
                         <MiniBtn label={t('btn.renew3')} bg={theme.colors.blue} onPress={() => {
                           const r = resolveRenewal(item.id, 3);
-                          setMsg(r.ok ? t('toast.renewed', { name, wage: wage(r.wage ?? asked) }) : r.error ?? null);
+                          setFeedback(r.ok
+                            ? { kind: 'ok', text: t('toast.renewed', { name, wage: wage(r.wage ?? asked) }) }
+                            : r.error ? { kind: 'error', text: r.error } : null);
                         }} />
                         <MiniX onPress={() => dismissItem(item.id)} />
                       </InboxRow>
@@ -236,7 +286,9 @@ export default function Dashboard() {
                         {item.status === 'COUNTER' ? (
                           <MiniBtn label={t('btn.accept')} bg={theme.colors.yellow} ink="#20242A" onPress={() => {
                             const r = acceptCounter(item.id);
-                            setMsg(r.ok ? t('toast.signed', { name }) : r.errorKey ? t(r.errorKey, r.errorParams) : null);
+                            setFeedback(r.ok
+                              ? { kind: 'ok', text: t('toast.signed', { name }) }
+                              : r.errorKey ? { kind: 'error', text: t(r.errorKey, r.errorParams) } : null);
                           }} />
                         ) : null}
                         <MiniX onPress={() => withdrawOffer(item.id)} />
@@ -251,8 +303,8 @@ export default function Dashboard() {
                         <Text style={styles.bidName}>{name}</Text>
                         <Text style={styles.sub}>{t('inbox.reqMeta', { label, morale: p.condition.morale })}</Text>
                       </View>
-                      <MiniBtn label={t('btn.accept')} bg={theme.colors.green} onPress={() => { const m = resolveRequest(item.id, true); setMsg(m ? tMsg(m) : null); }} />
-                      <MiniBtn label={t('btn.reject')} bg={theme.colors.surfaceAlt} onPress={() => { const m = resolveRequest(item.id, false); setMsg(m ? tMsg(m) : null); }} />
+                      <MiniBtn label={t('btn.accept')} bg={theme.colors.green} onPress={() => { const m = resolveRequest(item.id, true); setFeedback(m ? { kind: 'info', text: tMsg(m) } : null); }} />
+                      <MiniBtn label={t('btn.reject')} bg={theme.colors.surfaceAlt} onPress={() => { const m = resolveRequest(item.id, false); setFeedback(m ? { kind: 'info', text: tMsg(m) } : null); }} />
                     </InboxRow>
                   );
                 })}
@@ -276,36 +328,43 @@ export default function Dashboard() {
               </DashCard>
             ) : null}
 
-            {/* PRÓXIMO JOGO */}
+            {/* PRÓXIMO JOGO — cartão-herói com os dois escudos */}
             <View style={styles.matchCard}>
-              <View style={styles.matchTop}>
-                {nextOpp ? <CrestCircle club={nextOpp} size={54} /> : <View style={{ width: 54 }} />}
-                <View style={{ flex: 1 }}>
-                  {next && nextOpp ? (
-                    <>
-                      <Text style={styles.matchGame}>
-                        {t('match.gameOf', {
-                          n: next.round,
-                          total: schedule?.totalRounds ?? '?',
-                          venue: t(isHome ? 'common.home' : 'common.away'),
-                        })}
-                      </Text>
-                      <Text style={styles.matchOpp} numberOfLines={1}>{nextOpp.name}</Text>
-                      <View style={styles.matchMetaRow}>
-                        <Stars value={reputationStars(nextOpp.reputation)} />
-                        {pre?.opponent && pre.opponent.form.length > 0 ? (
-                          <FormDots results={pre.opponent.form} />
-                        ) : null}
-                      </View>
-                    </>
-                  ) : (
-                    <>
-                      <Text style={styles.matchGame}>{t('match.seasonOver')}</Text>
-                      <Text style={styles.matchOpp}>{t('match.newSeason')}</Text>
-                    </>
-                  )}
+              {next && nextOpp ? (
+                <>
+                  <Text style={styles.matchEyebrow}>
+                    {t('match.gameOf', {
+                      n: next.round,
+                      total: schedule?.totalRounds ?? '?',
+                      venue: t(isHome ? 'common.home' : 'common.away'),
+                    })}
+                  </Text>
+                  <View style={styles.versus}>
+                    <View style={styles.vTeam}>
+                      <CrestCircle club={isHome ? club : nextOpp} size={48} />
+                      <Text style={styles.vName} numberOfLines={1}>{(isHome ? club : nextOpp).shortName}</Text>
+                    </View>
+                    <Text style={styles.vVs}>VS</Text>
+                    <View style={styles.vTeam}>
+                      <CrestCircle club={isHome ? nextOpp : club} size={48} />
+                      <Text style={styles.vName} numberOfLines={1}>{(isHome ? nextOpp : club).shortName}</Text>
+                    </View>
+                  </View>
+                  <View style={[styles.matchMetaRow, { justifyContent: 'center' }]}>
+                    <Stars value={reputationStars(nextOpp.reputation)} />
+                    {pre?.opponent && pre.opponent.form.length > 0 ? (
+                      <FormDots results={pre.opponent.form} />
+                    ) : null}
+                  </View>
+                </>
+              ) : (
+                <View style={styles.matchTop}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.matchGame}>{t('match.seasonOver')}</Text>
+                    <Text style={styles.matchOpp}>{t('match.newSeason')}</Text>
+                  </View>
                 </View>
-              </View>
+              )}
 
               {oppStrength ? (
                 <View style={{ marginTop: theme.spacing(1) }}>
@@ -320,7 +379,7 @@ export default function Dashboard() {
                     tone={pre.warnings.length > 0 ? 'warn' : 'ok'}
                     label={t('check.lineup')}
                     value={pre.warnings.length === 0
-                      ? t('check.lineup.ready', { ovr: pre.lineupOverall })
+                      ? t('check.lineup.ready', { ovr: to100(pre.lineupOverall) })
                       : t('check.lineup.warn', {
                           name: pre.warnings[0]!.name,
                           state: pre.warnings[0]!.injured ? t('check.state.injured') : t('check.state.fit', { fit: pre.warnings[0]!.fitness }),
@@ -330,7 +389,9 @@ export default function Dashboard() {
                       text: t('action.rotate'),
                       onPress: () => {
                         const r = rotate();
-                        setMsg(r.swapped > 0 ? r.changes.join(' · ') : t('toast.noBench'));
+                        setFeedback(r.swapped > 0
+                          ? { kind: 'ok', text: r.changes.join(' · ') }
+                          : { kind: 'info', text: t('toast.noBench') });
                       },
                     } : undefined}
                   />
@@ -353,9 +414,10 @@ export default function Dashboard() {
                 </View>
               ) : null}
 
-              <Button
-                label={blocked ? t('btn.blocked') : next ? t('btn.play') : t('btn.newSeason')}
-                disabled={!!blocked}
+              <PlayButton
+                label={busy ? t('btn.processing') : blocked ? t('btn.blocked') : next ? t('btn.play') : t('btn.newSeason')}
+                icon={!busy && !blocked && !!next}
+                disabled={!!blocked || busy}
                 onPress={onPressPlay}
               />
               {blocked ? <Text style={styles.blockedNote}>{t('blocked.note', { reason: blockedNote })}</Text> : null}
@@ -480,25 +542,25 @@ export default function Dashboard() {
                 {dailyAvailable() ? (
                   <Pressable style={styles.bonusRow} onPress={() => {
                     const v = claimDaily();
-                    if (v > 0) setMsg(t('bonus.dailyToast', { v: money(v), streak: state.career.loginStreak }));
+                    if (v > 0) setFeedback({ kind: 'ok', text: t('bonus.dailyToast', { v: money(v), streak: state.career.loginStreak }) });
                   }}>
                     <Text style={styles.bonusText}>{t('bonus.daily', { d: state.career.loginStreak + 1 })}</Text>
-                    <Text style={styles.bonusVal}>+{money(dailyBonusAmount(state.career.loginStreak + 1))}</Text>
+                    <Text style={styles.bonusVal}>+{money(scaled(dailyBonusAmount(state.career.loginStreak + 1)))}</Text>
                   </Pressable>
                 ) : null}
                 {rewardedAvailable() ? (
                   <>
                     <Pressable disabled={busy} style={[styles.bonusRow, busy && { opacity: 0.5 }]} onPress={async () => {
                       setBusy(true);
-                      if (await showRewarded()) { const m = claimReward(AdReward.SPONSOR_BONUS); if (m) setMsg(tMsg(m)); }
+                      if (await showRewarded()) { const m = claimReward(AdReward.SPONSOR_BONUS); if (m) setFeedback({ kind: 'ok', text: tMsg(m) }); }
                       setBusy(false);
                     }}>
                       <Text style={styles.bonusText}>{t('bonus.sponsor')}</Text>
-                      <Text style={styles.bonusVal}>+250k €</Text>
+                      <Text style={styles.bonusVal}>+{money(scaled(250_000))}</Text>
                     </Pressable>
                     <Pressable disabled={busy} style={[styles.bonusRow, busy && { opacity: 0.5 }]} onPress={async () => {
                       setBusy(true);
-                      if (await showRewarded()) { const m = claimReward(AdReward.FITNESS_BOOST); if (m) setMsg(tMsg(m)); }
+                      if (await showRewarded()) { const m = claimReward(AdReward.FITNESS_BOOST); if (m) setFeedback({ kind: 'ok', text: tMsg(m) }); }
                       setBusy(false);
                     }}>
                       <Text style={styles.bonusText}>{t('bonus.fitness')}</Text>
@@ -510,9 +572,9 @@ export default function Dashboard() {
             ) : null}
           </View>
         )}
+        <AdBanner />
         <View style={{ height: theme.spacing(3) }} />
       </ScrollView>
-      <AdBanner />
 
       <PreMatchSheet
         visible={askRotate}
@@ -520,7 +582,9 @@ export default function Dashboard() {
         onRotate={async () => {
           const r = rotate();
           setAskRotate(false);
-          setMsg(r.swapped > 0 ? r.changes.join(' · ') : 'Sem alternativas frescas no banco.');
+          setFeedback(r.swapped > 0
+            ? { kind: 'ok', text: r.changes.join(' · ') }
+            : { kind: 'info', text: t('toast.noBench') });
           await runMatch();
         }}
         onPlayAnyway={async () => { setAskRotate(false); await runMatch(); }}
@@ -528,9 +592,29 @@ export default function Dashboard() {
       />
 
       <WeekReportModal
-        report={focused ? pendingReport : null}
+        report={focused && !launching ? pendingReport : null}
         clubName={club.shortName}
         onClose={clearReport}
+      />
+
+      {/* DECISÕES DE FIM DE CONTRATO — renovar ou libertar (bloqueia até decidir) */}
+      <ContractDecisionsModal
+        players={focused ? expiringDecisions() : []}
+        season={state.meta.season}
+        onRenew={renewExpiring}
+        onRelease={releaseExpiring}
+      />
+
+      {/* FIM DE EMPRÉSTIMO — comprar o passe do jogador que regressou ao dono */}
+      <ReturnedLoansModal
+        loans={focused ? returnedLoansPending() : []}
+        onBuy={(id, price, name) => {
+          const r = buyReturnedLoan(id, price);
+          setFeedback(r.ok
+            ? { kind: 'ok', text: t('loan.buy.toast', { name }) }
+            : { kind: 'error', text: r.errorKey ? t(r.errorKey) : t('loan.buy.err', { name }) });
+        }}
+        onSkip={dismissReturnedLoan}
       />
     </Screen>
   );
@@ -586,16 +670,228 @@ function Check({
   );
 }
 
+/**
+ * Cabeçalho do painel — faixa com a COR DO CLUBE (degradé simulado), escudo,
+ * nome, divisão + objetivo, medalha da posição, pills de forma e 3 tiles de
+ * estatística (classificação, pontos, diferença de golos). É a "cara" de cada
+ * carreira: a cor muda com o clube gerido.
+ */
+function ClubHero({
+  club, leagueName, position, objective, form, points, gd, t,
+}: {
+  club: Club; leagueName: string; position: number; objective: string;
+  form: ('W' | 'D' | 'L')[]; points: number; gd: number;
+  t: (k: string, p?: Record<string, string | number>) => string;
+}) {
+  const base = club.primaryColor;
+  const ink = contrastOn(base);
+  const onDim = ink === '#FFFFFF' ? 'rgba(255,255,255,0.82)' : 'rgba(20,23,28,0.72)';
+  const badgeBg = ink === '#FFFFFF' ? 'rgba(0,0,0,0.26)' : 'rgba(255,255,255,0.30)';
+  const gdText = gd > 0 ? `+${gd}` : `${gd}`;
+  return (
+    <View style={styles.heroWrap}>
+      <View style={[styles.hero, { backgroundColor: base }]}>
+        {/* degradé simulado: faixa escurecida em baixo + brilho em cima */}
+        <View style={[styles.heroShade, { backgroundColor: darken(base, 0.55) }]} />
+        <View style={styles.heroGlow} />
+        <View style={styles.heroRow}>
+          <CrestCircle club={club} size={48} />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.heroName, { color: ink }]} numberOfLines={1}>{club.name}</Text>
+            <Text style={[styles.heroSub, { color: onDim }]} numberOfLines={1}>
+              {leagueName}{objective ? ` · ${objective}` : ''}
+            </Text>
+          </View>
+          <View style={[styles.posBadge, { backgroundColor: badgeBg }]}>
+            <Text style={[styles.posNum, { color: ink }]}>{position || '—'}º</Text>
+            <Text style={[styles.posLbl, { color: onDim }]}>{t('dash.pos.label')}</Text>
+          </View>
+        </View>
+        {form.length > 0 ? (
+          <View style={styles.formRowHero}>
+            <Text style={[styles.formLbl, { color: onDim }]}>{t('label.form')}</Text>
+            {form.map((r, i) => (
+              <View key={i} style={[
+                styles.fpill,
+                r === 'W' ? styles.fpillW : r === 'L' ? styles.fpillL : styles.fpillD,
+              ]}>
+                <Text style={[
+                  styles.fpillTx,
+                  { color: r === 'W' ? '#5FE08A' : r === 'L' ? '#FF8F88' : '#EEF1F4' },
+                ]}>{t(`form.${r}`)}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+      </View>
+      {/* tiles de estatística (encaixam por baixo do herói) */}
+      <View style={styles.tiles}>
+        <StatTile v={position ? `${position}º` : '—'} k={t('dash.tile.pos')} color={theme.colors.green} />
+        <StatTile v={String(points)} k={t('dash.tile.pts')} />
+        <StatTile v={gdText} k={t('dash.tile.gd')} color={gd >= 0 ? theme.colors.green : theme.colors.red} />
+      </View>
+    </View>
+  );
+}
+
+function StatTile({ v, k, color }: { v: string; k: string; color?: string }) {
+  return (
+    <View style={styles.tile}>
+      <Text style={[styles.tileV, color ? { color } : null]}>{v}</Text>
+      <Text style={styles.tileK}>{k}</Text>
+    </View>
+  );
+}
+
+/** Botão de ação principal do painel: verde vivo com sombra e ícone ▶. */
+function PlayButton({
+  label, icon, disabled, onPress,
+}: { label: string; icon: boolean; disabled: boolean; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      style={({ pressed }) => [styles.playBtn, disabled && styles.playBtnOff, pressed && styles.playBtnPressed]}
+    >
+      <Text style={[styles.playBtnText, disabled && styles.playBtnTextOff]}>{icon ? '▶  ' : ''}{label}</Text>
+    </Pressable>
+  );
+}
+
+/** Modal bloqueante de fim de época: renovar ou libertar cada jogador em fim de contrato. */
+function ContractDecisionsModal({
+  players, onRenew, onRelease,
+}: { players: Player[]; season: number; onRenew: (id: string) => void; onRelease: (id: string) => void }) {
+  const t = useT();
+  if (players.length === 0) return null;
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={() => {}}>
+      <View style={styles.cdBackdrop}>
+        <View style={styles.cdCard}>
+          <Text style={styles.cdTitle}>{t('contracts.title')}</Text>
+          <Text style={styles.cdSub}>{t('contracts.sub')}</Text>
+          <ScrollView style={{ maxHeight: 360 }} showsVerticalScrollIndicator={false}>
+            {players.map((p) => (
+              <View key={p.id} style={styles.cdRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cdName} numberOfLines={1}>{p.firstName} {p.lastName}</Text>
+                  <Text style={styles.sub}>{p.positions[0]} · OVR {to100(naturalOverallFine(p))} · {p.age}</Text>
+                </View>
+                <MiniBtn label={t('contracts.renew')} bg={theme.colors.green} onPress={() => onRenew(p.id)} />
+                <MiniBtn label={t('contracts.release')} bg={theme.colors.surfaceAlt} onPress={() => onRelease(p.id)} />
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+/** Modal de fim de empréstimo: para cada jogador que regressou, comprar ou deixar ir. */
+function ReturnedLoansModal({
+  loans, onBuy, onSkip,
+}: {
+  loans: ReturnedLoan[];
+  onBuy: (id: string, price: number, name: string) => void;
+  onSkip: (id: string) => void;
+}) {
+  const t = useT();
+  if (loans.length === 0) return null;
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={() => {}}>
+      <View style={styles.cdBackdrop}>
+        <View style={styles.cdCard}>
+          <Text style={styles.cdTitle}>{t('loan.buy.title')}</Text>
+          <ScrollView style={{ maxHeight: 360 }} showsVerticalScrollIndicator={false}>
+            {loans.map((l) => (
+              <View key={l.playerId} style={styles.cdRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cdName} numberOfLines={2}>
+                    {t('loan.buy.body', { name: l.playerName, club: l.ownerName, price: money(l.price) })}
+                  </Text>
+                </View>
+                <MiniBtn label={t('loan.buy.button', { price: money(l.price) })} bg={theme.colors.green}
+                  onPress={() => onBuy(l.playerId, l.price, l.playerName)} />
+                <MiniBtn label={t('loan.buy.skip')} bg={theme.colors.surfaceAlt}
+                  onPress={() => onSkip(l.playerId)} />
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 const styles = StyleSheet.create({
   body: { color: theme.colors.text, fontSize: theme.font.body },
+
+  // ---- Cabeçalho do clube (hero) ----
+  heroWrap: { marginBottom: theme.spacing(1.25) },
+  hero: {
+    borderRadius: theme.radius.md, padding: theme.spacing(1.5), overflow: 'hidden',
+    // levanta os tiles: cantos de baixo retos para encaixarem por baixo
+    borderBottomLeftRadius: 4, borderBottomRightRadius: 4,
+  },
+  heroShade: {
+    position: 'absolute', left: 0, right: 0, bottom: 0, height: '55%', opacity: 0.5,
+  },
+  heroGlow: {
+    position: 'absolute', top: -40, right: -40, width: 150, height: 150, borderRadius: 75,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  heroRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1.25) },
+  heroName: { fontSize: 19, fontWeight: '800', letterSpacing: -0.2 },
+  heroSub: { fontSize: 11, fontWeight: '600', marginTop: 3 },
+  posBadge: { alignItems: 'center', borderRadius: 12, paddingVertical: 5, paddingHorizontal: 11, minWidth: 46 },
+  posNum: { fontSize: 20, fontWeight: '900', fontVariant: ['tabular-nums'], lineHeight: 22 },
+  posLbl: { fontSize: 8, fontWeight: '800', letterSpacing: 0.8, textTransform: 'uppercase', marginTop: 1 },
+  formRowHero: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: theme.spacing(1.25) },
+  formLbl: { fontSize: 9, fontWeight: '800', letterSpacing: 1, textTransform: 'uppercase', marginRight: 2 },
+  fpill: { width: 22, height: 22, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
+  fpillW: { backgroundColor: 'rgba(18,53,31,0.85)', borderWidth: 1.5, borderColor: '#37C25A' },
+  fpillD: { backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.35)' },
+  fpillL: { backgroundColor: 'rgba(58,21,18,0.85)', borderWidth: 1.5, borderColor: '#F85149' },
+  fpillTx: { fontSize: 11, fontWeight: '900' },
+  tiles: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  tile: {
+    flex: 1, backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border,
+    borderRadius: theme.radius.sm, paddingVertical: 9, alignItems: 'center',
+  },
+  tileV: { color: theme.colors.text, fontSize: 16, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  tileK: { color: theme.colors.textDim, fontSize: 9, fontWeight: '800', letterSpacing: 0.5, textTransform: 'uppercase', marginTop: 2 },
+
+  // ---- Cartão-herói do próximo jogo ----
+  matchEyebrow: {
+    color: theme.colors.green, fontSize: 9, fontWeight: '800', letterSpacing: 1.2,
+    textTransform: 'uppercase', textAlign: 'center', marginBottom: theme.spacing(1),
+  },
+  versus: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: theme.spacing(1.5), marginBottom: theme.spacing(0.75) },
+  vTeam: { flex: 1, alignItems: 'center', gap: 6 },
+  vName: { color: theme.colors.text, fontSize: 12, fontWeight: '700', maxWidth: 110, textAlign: 'center' },
+  vVs: { color: theme.colors.textDim, fontSize: 12, fontWeight: '800', letterSpacing: 1.5 },
+  playBtn: {
+    marginTop: theme.spacing(1.25), paddingVertical: theme.spacing(1.4), borderRadius: 12,
+    backgroundColor: theme.colors.green, alignItems: 'center', justifyContent: 'center',
+    shadowColor: theme.colors.green, shadowOpacity: 0.45, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 4,
+  },
+  playBtnOff: { backgroundColor: theme.colors.surfaceAlt, shadowOpacity: 0, elevation: 0 },
+  playBtnPressed: { opacity: 0.85 },
+  playBtnText: { color: '#04170c', fontSize: 15, fontWeight: '900', letterSpacing: 0.3 },
+  playBtnTextOff: { color: theme.colors.textDim },
+  cdBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.72)', justifyContent: 'center', padding: theme.spacing(2) },
+  cdCard: { backgroundColor: theme.colors.surface, borderRadius: theme.radius.md, borderWidth: 1, borderColor: theme.colors.yellow, padding: theme.spacing(1.75) },
+  cdTitle: { color: theme.colors.yellow, fontSize: theme.font.h2, fontWeight: '900' },
+  cdSub: { color: theme.colors.textDim, fontSize: theme.font.small, marginTop: 2, marginBottom: theme.spacing(1) },
+  cdRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing(0.75), paddingVertical: theme.spacing(0.9), borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border },
+  cdName: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '700' },
+  diag: {
+    color: theme.colors.yellow, fontSize: 10, fontWeight: '700', textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.3)', paddingVertical: 2, marginBottom: 4, borderRadius: 4,
+  },
   sub: { color: theme.colors.textDim, fontSize: theme.font.small, marginTop: 1 },
   bold: { fontWeight: '700' },
-  toast: {
-    color: theme.colors.green, fontSize: theme.font.small, fontWeight: '700',
-    backgroundColor: theme.colors.surface, borderRadius: theme.radius.sm,
-    borderLeftWidth: 3, borderLeftColor: theme.colors.green,
-    padding: theme.spacing(1), marginBottom: theme.spacing(1),
-  },
 
   // Cartão de próximo jogo (destaque, cor primária no fio)
   matchCard: {

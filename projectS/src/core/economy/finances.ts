@@ -43,15 +43,16 @@ export function matchdayGate(
  */
 export function facilityUpkeep(club: Club): number {
   const f = club.facilities;
-  const base = 25_000;
+  const base = 4_000;
   return Math.round(
     base +
-    (f.stadium - 1) * 45_000 +
-    (f.training - 1) * 30_000 +
-    (f.academy - 1) * 22_000 +
-    (f.medical - 1) * 18_000 +
+    (f.stadium - 1) * 18_000 +
+    (f.training - 1) * 12_000 +
+    (f.academy - 1) * 9_000 +
+    (f.medical - 1) * 7_000 +
+    ((f.scouting ?? 1) - 1) * 8_000 +
     // Estádios grandes custam a manter, independentemente do nível comprado.
-    club.stadiumCapacity * 1.2,
+    club.stadiumCapacity * 0.6,
   );
 }
 
@@ -88,7 +89,9 @@ export function recalcBudgets(finance: Finance): void {
  */
 export function liquidityCeiling(finance: Finance): number {
   const weekly = finance.expenses.wages + finance.expenses.facilities + finance.expenses.staff;
-  return Math.max(2_000_000, Math.round(weekly * 40));
+  // Teto = ~40 semanas de despesa corrente. O piso é baixo para não deixar
+  // clubes pequenos guardar milhões de época para época.
+  return Math.max(120_000, Math.round(weekly * 40));
 }
 
 /**

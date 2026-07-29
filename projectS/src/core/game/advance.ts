@@ -28,11 +28,14 @@ import {
   processPromotions,
   sortStandings,
   TierMove,
+  transferWindow,
 } from '../season';
 import { evaluateSeason, SeasonRecord, updateConfidence } from '../career';
 import { trainPlayer, TrainingFocus } from '../training';
 import { setManagedObjective } from './newGame';
-import { processYouthAndRetirements, YouthIntakeResult } from './youth';
+import { ensureMinimumSquad, processYouthAndRetirements, YouthIntakeResult } from './youth';
+import { returnExpiredLoans, ReturnedLoan } from './loans';
+import { ensureValidLineup } from './lineup';
 import {
   blockingReason,
   generateIncomingBids,
@@ -42,6 +45,7 @@ import {
 } from './inbox';
 import { pruneOffers, resolveDueOffers } from './offers';
 import { BOSMAN_WINDOW_ROUNDS, roundsRemaining, runBosmanApproaches } from './matchday';
+import { tickScouting } from './scouting';
 
 /** Liga do clube gerido (muda com promoções/despromoções). */
 export function managedLeagueId(state: GameState): string {
@@ -135,6 +139,29 @@ export function advanceWeek(
     if (p) overallBefore.set(id, naturalOverall(p));
   }
 
+  // 0. Suspensões: quem está suspenso falha esta jornada. Tira-o do onze (troca
+  //    por um suplente apto) e desconta um jogo de suspensão. Aplica-se a todos
+  //    os clubes (a IA também cumpre castigos).
+  for (const club of Object.values(state.clubs)) {
+    const tactic = state.tactics[club.id];
+    for (const id of club.squad) {
+      const p = state.players[id];
+      if (!p || (p.condition.suspended ?? 0) <= 0) continue;
+      if (tactic) {
+        const slot = tactic.lineup.find((s) => s.playerId === id);
+        if (slot) {
+          const inLineup = new Set(tactic.lineup.map((s) => s.playerId));
+          const sub = club.squad.find((bid) => {
+            const b = state.players[bid];
+            return !!b && !inLineup.has(bid) && b.condition.status !== 'INJURED' && (b.condition.suspended ?? 0) === 0;
+          });
+          if (sub) slot.playerId = sub;
+        }
+      }
+      p.condition.suspended = (p.condition.suspended ?? 0) - 1;
+    }
+  }
+
   // 1. Simular a próxima jornada de cada divisão.
   for (const league of Object.values(state.leagues)) {
     const schedule = state.schedules[league.id];
@@ -202,6 +229,21 @@ export function advanceWeek(
           params: { player: p.lastName, days: p.condition.injuryDaysRemaining },
         });
       }
+    }
+  }
+
+  // 1c-bis. Totalizadores da época: golos e assistências por jogador (todas as
+  // divisões + Taça). Alimenta futuras listas de melhores marcadores.
+  for (const fx of allPlayed) {
+    const ps = fx.result?.playerStats;
+    if (!ps) continue;
+    for (const pid in ps) {
+      const p = state.players[pid];
+      if (!p) continue;
+      const s = ps[pid]!;
+      if (s.goals) p.condition.seasonGoals = (p.condition.seasonGoals ?? 0) + s.goals;
+      if (s.assists) p.condition.seasonAssists = (p.condition.seasonAssists ?? 0) + s.assists;
+      if (s.red) p.condition.suspended = Math.max(p.condition.suspended ?? 0, 1); // vermelho → falha o jogo seguinte
     }
   }
 
@@ -332,14 +374,30 @@ export function advanceWeek(
   const confidence = updateConfidence(state.career, position, mLeague.clubIds.length);
 
   // 7. Mercado: caducar propostas antigas e gerar novas pelos nossos jogadores.
+  //    A IA só compra com a JANELA ABERTA — simétrico ao jogador, que também só
+  //    negoceia dentro da janela (antes a IA comprava sempre, o que era injusto).
   pruneInbox(state);
+  const mSched = state.schedules[mLeagueId];
+  const mRound = nextRound(state, mLeagueId) ?? ((mSched?.totalRounds ?? 30) + 1);
+  const windowOpen = transferWindow(mRound, mSched?.totalRounds ?? 30).open;
   const bidRng = new Rng(deriveSeed(state.meta.rngSeed, 'bids', weekKey));
-  const newBids = generateIncomingBids(state, bidRng);
+  const newBids = windowOpen ? generateIncomingBids(state, bidRng) : [];
   for (const b of newBids) {
     const p = state.players[b.playerId];
     const buyer = state.clubs[b.fromClubId];
     if (p && buyer) {
       addNews(state, 'TRANSFER', 'news.bid', { buyer: buyer.name, fee: b.fee.toLocaleString('pt-PT'), player: `${p.firstName} ${p.lastName}` });
+    }
+  }
+
+  // 7a. Olheiros: avança as missões; relatórios prontos geram notícia.
+  const reports = tickScouting(state);
+  for (const r of reports) {
+    if (r.kind === 'PLAYER') {
+      const p = state.players[r.playerIds[0]!];
+      if (p) addNews(state, 'CLUB', 'news.scout.player', { player: `${p.firstName} ${p.lastName}` });
+    } else if (r.playerIds.length > 0) {
+      addNews(state, 'CLUB', 'news.scout.league', { n: r.playerIds.length, league: state.leagues[r.leagueId ?? '']?.name ?? '' });
     }
   }
 
@@ -349,6 +407,25 @@ export function advanceWeek(
     for (const r of reminders) {
       const p = state.players[r.playerId];
       if (p) addNews(state, 'CLUB', 'news.renewal.expiring', { player: `${p.firstName} ${p.lastName}` });
+    }
+    // Aviso ANTECIPADO (uma época antes): contratos que terminam na PRÓXIMA época.
+    // Dá tempo de renovar com calma e evita que o jogador "desapareça" de surpresa.
+    for (const id of state.clubs[managedId]?.squad ?? []) {
+      const p = state.players[id];
+      if (p && p.contractUntil === state.meta.season + 1) {
+        addNews(state, 'CLUB', 'news.renewal.nextSeason', { player: `${p.firstName} ${p.lastName}` });
+      }
+    }
+  }
+
+  // 7b-meio. Reforço a MEIO da época para quem ainda não renovou (≈6 meses antes).
+  const midRound = mSchedule ? Math.floor(mSchedule.totalRounds / 2) : 0;
+  if (midRound > 3 && managedRound === midRound) {
+    for (const id of state.clubs[managedId]?.squad ?? []) {
+      const p = state.players[id];
+      if (p && p.contractUntil === state.meta.season) {
+        addNews(state, 'CLUB', 'news.renewal.urgent', { player: `${p.firstName} ${p.lastName}` });
+      }
     }
   }
 
@@ -489,6 +566,8 @@ export interface SeasonSummary {
   boardMessageKey: string; // chave i18n da mensagem da direção
   moves: TierMove[];
   youth: YouthIntakeResult;
+  // Empréstimos RECEBIDOS que terminaram — a UI oferece a compra destes jogadores.
+  returnedLoans: ReturnedLoan[];
 }
 
 /**
@@ -597,13 +676,21 @@ export function rolloverSeason(state: GameState): SeasonSummary {
     p.age += 1;
     p.condition.fitness = 100;
     p.condition.form = p.condition.morale;
+    p.condition.seasonGoals = 0; // totalizadores reiniciam a cada época
+    p.condition.seasonAssists = 0;
   }
+  const returnedLoans = returnExpiredLoans(state); // empréstimos vencidos regressam aos donos
   processContractExpiries(state);
   for (const name of bosmanLosses) {
     addNews(state, 'TRANSFER', 'news.bosman.left', { player: name });
   }
   const youthRng = new Rng(deriveSeed(state.meta.rngSeed, 'youth', state.meta.season));
   const youth = processYouthAndRetirements(state, youthRng);
+  // Mínimo por posição: nenhum clube fica desfalcado (contratos/reformas/vendas).
+  const fillRng = new Rng(deriveSeed(state.meta.rngSeed, 'fill', state.meta.season));
+  for (const club of Object.values(state.clubs)) ensureMinimumSquad(state, club, fillRng);
+  // Repõe um onze válido no clube gerido após todas as saídas/entradas.
+  ensureValidLineup(managedId, state.clubs[managedId]?.squad ?? [], state.players, state.tactics);
   // Receitas recalculadas com a NOVA divisão (subir traz mais TV/patrocínios),
   // e a direção absorve o excesso de liquidez antes de refazer os orçamentos.
   for (const club of Object.values(state.clubs)) {
@@ -643,7 +730,7 @@ export function rolloverSeason(state: GameState): SeasonSummary {
     addNews(state, 'YOUTH', 'news.youth', { n: youth.joinedManagedClub.length });
   }
 
-  return { record, fired: verdict.fired, boardMessageKey: verdict.messageKey, moves, youth };
+  return { record, fired: verdict.fired, boardMessageKey: verdict.messageKey, moves, youth, returnedLoans };
 }
 
 /**

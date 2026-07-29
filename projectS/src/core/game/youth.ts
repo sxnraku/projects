@@ -1,4 +1,4 @@
-import { GameState, naturalOverall, Player, Position } from '../models';
+import { Club, GameState, naturalOverall, Player, Position, POSITION_GROUP, PositionGroup } from '../models';
 import { Rng } from '../engine/rng';
 import { computeMarketValue, recalcWages, suggestedWage } from '../economy';
 import { makePlayer } from './newGame';
@@ -12,6 +12,22 @@ import { makePlayer } from './newGame';
 export const YOUTH_PER_CLUB = 2; // jovens que entram por época em cada clube
 export const RETIRE_AGE_SOFT = 34; // a partir daqui, risco de reforma
 export const RETIRE_AGE_HARD = 37; // reforma garantida
+
+/** Mínimo de jogadores por setor — o plantel nunca fica sem uma posição coberta. */
+export const SQUAD_MINIMUMS: Record<PositionGroup, number> = {
+  GOALKEEPER: 2,
+  DEFENCE: 6,
+  MIDFIELD: 6,
+  ATTACK: 5,
+};
+
+/** Posições usadas para preencher cada setor em falta (com peso na mais comum). */
+const FILL_POSITIONS: Record<PositionGroup, Position[]> = {
+  GOALKEEPER: ['GK'],
+  DEFENCE: ['CB', 'RB', 'LB', 'CB'],
+  MIDFIELD: ['CM', 'DM', 'AM', 'CM'],
+  ATTACK: ['ST', 'RW', 'LW', 'ST'],
+};
 
 const YOUTH_POSITIONS: Position[] = ['GK', 'CB', 'RB', 'LB', 'DM', 'CM', 'AM', 'RW', 'LW', 'ST'];
 
@@ -86,6 +102,44 @@ export function processYouthAndRetirements(state: GameState, rng: Rng): YouthInt
   }
 
   return { joinedManagedClub, totalJoined, totalRetired };
+}
+
+/**
+ * Garante um mínimo de jogadores por setor. Se um setor estiver abaixo do
+ * mínimo (por contratos a expirar, reformas ou vendas), preenche com jovens de
+ * base — assim o plantel nunca fica desfalcado numa posição. Devolve nº criados.
+ */
+export function ensureMinimumSquad(state: GameState, club: Club, rng: Rng): number {
+  const counts: Record<PositionGroup, number> = { GOALKEEPER: 0, DEFENCE: 0, MIDFIELD: 0, ATTACK: 0 };
+  for (const id of club.squad) {
+    const p = state.players[id];
+    if (p) counts[POSITION_GROUP[p.positions[0]!]]++;
+  }
+  const base = Math.max(4, 6 + Math.round(((club.reputation - 40) / 55) * 6) + (club.facilities.academy - 1));
+  const groups: PositionGroup[] = ['GOALKEEPER', 'DEFENCE', 'MIDFIELD', 'ATTACK'];
+  let added = 0;
+  for (const g of groups) {
+    let i = 0;
+    while (counts[g] < SQUAD_MINIMUMS[g]) {
+      const pos = FILL_POSITIONS[g][i % FILL_POSITIONS[g].length]!;
+      const id = `fill_${state.meta.season}_${club.id}_${g}_${i}`;
+      const filler = makePlayer(id, club.id, pos, Math.max(3, base - 3), state.meta.season, rng);
+      filler.age = rng.int(16, 20);
+      filler.contractUntil = state.meta.season + rng.int(2, 4);
+      filler.wage = Math.max(300, Math.round(suggestedWage(filler, state.meta.season) * 0.4));
+      filler.marketValue = computeMarketValue(filler, state.meta.season);
+      state.players[id] = filler;
+      club.squad.push(id);
+      counts[g]++;
+      added++;
+      i++;
+    }
+  }
+  if (added > 0) {
+    const fin = state.finances[club.id];
+    if (fin) recalcWages(club, fin, state.players);
+  }
+  return added;
 }
 
 /**

@@ -78,6 +78,15 @@ export function requiredReputation(overall: number): number {
   return Math.max(0, (overall - 6) * 6);
 }
 
+/**
+ * Quão acima do seu estatuto um clube ainda consegue convencer um jogador
+ * (em pontos de reputação em falta). ~12 = cerca de 2 níveis de OVR: um clube
+ * pequeno reforça ao seu nível e um pouco acima, mas NÃO assalta a elite só
+ * com dinheiro de passe. Antes eram 25 (~4 níveis), o que deixava um clube da
+ * 3ª divisão contratar quase craques — quebrava a progressão.
+ */
+export const REACH_BAND = 12;
+
 export interface InterestCheck {
   interested: boolean;
   /** Prémio de assinatura necessário para o convencer (0 se já aceita). */
@@ -106,8 +115,8 @@ export function checkInterest(
     return { interested: true, requiredSigningBonus: 0, reasonKey: 'interest.open' };
   }
 
-  // Fora de alcance: nem com dinheiro (mais de 25 pontos de diferença).
-  if (gap > 25) {
+  // Fora de alcance: nem com dinheiro (acima da banda de alcance do clube).
+  if (gap > REACH_BAND) {
     return {
       interested: false,
       requiredSigningBonus: Infinity,
@@ -116,9 +125,11 @@ export function checkInterest(
     };
   }
 
-  // Convencível — a um preço que cresce com a diferença e com o escalão.
+  // Convencível — a um preço que cresce com a diferença e com o escalão, mas
+  // com inflação SUAVE por divisão (sqrt) para não assustar: um clube da 3ª
+  // paga ~2× (não 4×) o prémio de um da 1ª pela mesma diferença de estatuto.
   const bonus = Math.round(
-    player.marketValue * (gap / 25) * 1.5 / divisionMultiplier(tier) / 10_000,
+    player.marketValue * (gap / REACH_BAND) * 1.4 / Math.sqrt(divisionMultiplier(tier)) / 10_000,
   ) * 10_000;
 
   return {

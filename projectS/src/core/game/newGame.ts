@@ -1,5 +1,6 @@
 import {
   Club,
+  computeOverall,
   defaultFacilities,
   emptyGameState,
   Finance,
@@ -17,15 +18,16 @@ import { computeMarketValue, recalcUpkeep, suggestedWage } from '../economy';
 import { emptyStandings, generateSchedule } from '../season';
 import { Rng } from '../engine/rng';
 import { autoPickLineup } from './lineup';
-import { CITIES, CLUB_SUFFIXES, FIRST_NAMES, LAST_NAMES, NATIONALITIES } from './names';
+import { CITIES, FIRST_NAMES, LAST_NAMES, NameStyle, NATIONALITIES, suffixesFor } from './names';
 
 export interface NewGameOptions {
   managerName: string;
   numClubs?: number; // clubes POR DIVISÃO, default 14
-  squadSize?: number; // jogadores por clube, default 20
+  squadSize?: number; // jogadores por clube, default = plantel completo (23)
   divisions?: number; // nº de divisões, default 3
   season?: number; // default 2026
   seed?: number; // default aleatório
+  nameStyle?: NameStyle; // estilo dos nomes de clube, default 'serious'
 }
 
 /** Nome e banda de reputação/nível por tier. */
@@ -36,12 +38,45 @@ const TIER_CONFIG = [
   { name: 'Liga 4', repMin: 30, repMax: 48, lvlMin: 6, lvlMax: 10 },
 ];
 
-/** Composição típica de um plantel por posição (soma = squadSize aproximado). */
+/**
+ * Economia REALISTA ancorada à DIVISÃO (valores em €). O dinheiro e a dimensão
+ * (saldo, receitas semanais, capacidade do estádio) passam a depender do escalão
+ * — não da reputação. Antes tudo derivava da reputação (0-100) e a banda da 3ª
+ * divisão (38-58) era alta demais: dava clubes da 3ª com €13M em caixa e estádios
+ * de 37 mil lugares. A reputação fica só para atratividade/mercado e bilheteira.
+ * `t` (0..1) é a posição do clube DENTRO da sua divisão (0 = fundo, 1 = topo).
+ */
+const TIER_ECON = [
+  // 1ª divisão
+  { balMin: 9_000_000, balMax: 60_000_000, incMin: 70_000, incMax: 650_000, stadMin: 20_000, stadMax: 65_000 },
+  // 2ª divisão
+  { balMin: 1_500_000, balMax: 13_000_000, incMin: 16_000, incMax: 140_000, stadMin: 7_000, stadMax: 28_000 },
+  // 3ª divisão
+  { balMin: 150_000, balMax: 2_000_000, incMin: 3_500, incMax: 28_000, stadMin: 2_000, stadMax: 9_000 },
+  // 4ª divisão
+  { balMin: 40_000, balMax: 500_000, incMin: 1_000, incMax: 8_000, stadMin: 600, stadMax: 3_500 },
+] as const;
+
+function econOf(tier: number) {
+  return TIER_ECON[Math.max(0, Math.min(TIER_ECON.length - 1, tier - 1))]!;
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * Math.max(0, Math.min(1, t));
+}
+
+/**
+ * Composição de um plantel COMPLETO por posição.
+ * ORDENADO de propósito: os primeiros 11 formam um 4-3-3 jogável; os restantes
+ * são suplentes com pelo menos 1 backup por posição. Assim, mesmo com plantéis
+ * mais pequenos (ex.: testes com squadSize 18), há sempre jogadores para todas
+ * as posições — o Diogo tinha razão: "podem ser fracos, mas não podem faltar".
+ */
 const SQUAD_TEMPLATE: Position[] = [
-  'GK', 'GK',
-  'RB', 'RB', 'CB', 'CB', 'CB', 'LB', 'LB',
-  'DM', 'CM', 'CM', 'AM', 'RW', 'LW',
-  'ST', 'ST',
+  // Onze base (4-3-3)
+  'GK', 'RB', 'CB', 'CB', 'LB', 'DM', 'CM', 'CM', 'RW', 'ST', 'LW',
+  // Suplentes (cobrem todas as posições)
+  'GK', 'RB', 'CB', 'LB', 'DM', 'AM', 'CM', 'RW', 'LW', 'ST', 'AM', 'ST',
 ];
 
 /**
@@ -53,11 +88,12 @@ const SQUAD_TEMPLATE: Position[] = [
  */
 export function createNewGame(opts: NewGameOptions): GameState {
   const numClubs = opts.numClubs ?? 14;
-  const squadSize = opts.squadSize ?? 20;
+  const squadSize = opts.squadSize ?? SQUAD_TEMPLATE.length; // plantel completo (23)
   const divisions = Math.min(opts.divisions ?? 3, TIER_CONFIG.length);
   const season = opts.season ?? 2026;
   const seed = opts.seed ?? Math.floor(Math.random() * 0xffffffff);
   const rng = new Rng(seed);
+  const suffixes = suffixesFor(opts.nameStyle ?? 'serious');
 
   const meta: GameMeta = {
     saveId: `save_${seed}`,
@@ -73,6 +109,7 @@ export function createNewGame(opts: NewGameOptions): GameState {
   const state = emptyGameState(meta);
 
   const usedClubNames = new Set<string>();
+  const usedShorts = new Set<string>();
 
   for (let tier = 1; tier <= divisions; tier++) {
     const cfg = TIER_CONFIG[tier - 1]!;
@@ -86,20 +123,24 @@ export function createNewGame(opts: NewGameOptions): GameState {
       const clubLevel = cfg.lvlMin + Math.round(t * (cfg.lvlMax - cfg.lvlMin));
       const reputation = cfg.repMin + Math.round(t * (cfg.repMax - cfg.repMin));
 
-      const club = makeClub(clubId, leagueId, reputation, usedClubNames, rng);
+      const club = makeClub(clubId, leagueId, reputation, tier, t, suffixes, usedClubNames, usedShorts, rng);
       league.clubIds.push(clubId);
 
       const squadIds: string[] = [];
       for (let i = 0; i < squadSize; i++) {
         const position = SQUAD_TEMPLATE[i % SQUAD_TEMPLATE.length]!;
-        const player = makePlayer(`${clubId}_p${i}`, clubId, position, clubLevel, season, rng);
+        // Os primeiros 11 são o onze titular (nível do clube); os restantes são
+        // suplentes/profundidade, gerados mais fracos → mais baratos (mantém as
+        // contas viáveis) e realistas (o banco é pior que os titulares).
+        const slotLevel = i < 11 ? clubLevel : Math.max(3, clubLevel - 2);
+        const player = makePlayer(`${clubId}_p${i}`, clubId, position, slotLevel, season, rng);
         player.marketValue = computeMarketValue(player, season);
         state.players[player.id] = player;
         squadIds.push(player.id);
       }
       club.squad = squadIds;
       state.clubs[clubId] = club;
-      const fin = makeFinance(clubId, reputation, state.players, squadIds, season);
+      const fin = makeFinance(clubId, tier, t, state.players, squadIds);
       recalcUpkeep(club, fin); // manutenção a partir das instalações/estádio
       state.finances[clubId] = fin;
       state.tactics[clubId] = autoPickLineup(clubId, squadIds, state.players);
@@ -142,21 +183,52 @@ export function setManagedObjective(state: GameState): void {
   state.career.objective = assignObjective(expectedRank, league.clubIds.length);
 }
 
+/**
+ * Sigla de 3 letras a partir do nome, ÚNICA na liga. Antes, "Tung Tung Tung X"
+ * dava sempre "TTT" em vários clubes; agora ignora conectores ("de/da/do") e,
+ * se colidir, cai para letras da cidade e por fim um dígito — nunca repete.
+ */
+function makeShortName(name: string, usedShorts: Set<string>): string {
+  const words = name.split(' ').filter((w) => !['de', 'da', 'do', 'dos', 'das'].includes(w.toLowerCase()));
+  const initials = words.map((w) => w[0]!.toUpperCase()).join('');
+  const city = words[words.length - 1] ?? name; // última palavra ~ cidade
+  const candidates = [
+    initials.slice(0, 3),
+    (initials[0] ?? '') + city.slice(0, 2).toUpperCase(),
+    city.slice(0, 3).toUpperCase(),
+  ];
+  for (const c of candidates) {
+    if (c.length >= 2 && !usedShorts.has(c)) { usedShorts.add(c); return c; }
+  }
+  // Último recurso: base + dígito.
+  const base = (candidates[0] || 'CLB').slice(0, 2);
+  for (let n = 2; ; n++) {
+    const s = base + n;
+    if (!usedShorts.has(s)) { usedShorts.add(s); return s; }
+  }
+}
+
 function makeClub(
   id: string,
   leagueId: string,
   reputation: number,
+  tier: number,
+  t: number,
+  suffixes: string[],
   used: Set<string>,
+  usedShorts: Set<string>,
   rng: Rng,
 ): Club {
   let name = '';
   do {
-    name = `${rng.pick(CLUB_SUFFIXES)} ${rng.pick(CITIES)}`;
+    name = `${rng.pick(suffixes)} ${rng.pick(CITIES)}`;
   } while (used.has(name));
   used.add(name);
 
-  const short = name.split(' ').map((w) => w[0]).join('').toUpperCase().slice(0, 3);
-  const capacity = 8000 + Math.round((reputation / 100) * 55000); // 8k..63k
+  const short = makeShortName(name, usedShorts);
+  // Capacidade do estádio ancorada ao ESCALÃO (não à reputação).
+  const econ = econOf(tier);
+  const capacity = Math.round(lerp(econ.stadMin, econ.stadMax, t) / 500) * 500;
 
   return {
     id, name, shortName: short, country: 'PRT', leagueId,
@@ -180,9 +252,23 @@ export function makePlayer(
   rng: Rng,
 ): Player {
   const age = rng.int(17, 34);
-  // Atributos: base do clube ±3, com variação por atributo.
-  const base = clamp(clubLevel + rng.int(-3, 3), 3, 19);
+  // Nível-alvo do jogador (leve viés para baixo; teto controlado pelo chamador
+  // via `clubLevel`, que já vem limitado à banda do escalão).
+  const base = clamp(clubLevel + rng.int(-2, 1), 3, 19);
   const attributes = makeAttributes(position, base, rng);
+
+  // ALINHA o overall ao nível-alvo: o overall pondera exatamente os atributos que
+  // recebem bónus de posição, por isso sem este ajuste um clube "nível 12" gerava
+  // avançados "nível 16" (75-80). Desloca todos os atributos para que o overall
+  // NATURAL fique ≈ base — mantém o perfil da posição mas ancora o nível.
+  const rawOverall = computeOverall(attributes, position);
+  const shift = base - rawOverall;
+  if (shift !== 0) {
+    for (const k in attributes) {
+      const key = k as keyof PlayerAttributes;
+      attributes[key] = clamp(attributes[key] + shift, 1, 20);
+    }
+  }
 
   // Potencial: overall de base + margem se jovem.
   const youthBonus = age <= 21 ? rng.int(1, 4) : age <= 24 ? rng.int(0, 2) : 0;
@@ -226,35 +312,34 @@ function makeAttributes(position: Position, base: number, rng: Rng): PlayerAttri
 
 function makeFinance(
   clubId: string,
-  reputation: number,
+  tier: number,
+  t: number,
   players: Record<string, Player>,
   squadIds: string[],
-  _season: number,
 ): Finance {
-  const scale = reputation / 100;
+  const econ = econOf(tier);
   const wages = squadIds.reduce((s, id) => s + (players[id]?.wage ?? 0), 0);
-  // Saldo cresce ao QUADRADO da reputação: os grandes têm muito mais margem
-  // que os pequenos. Sem isto, um clube da 3ª divisão começava com dinheiro
-  // suficiente para comprar craques logo na 1ª época.
-  const balance = Math.round(500_000 + scale * scale * 45_000_000);
+
+  // Saldo em caixa e receitas semanais ancorados ao ESCALÃO (valores realistas).
+  // Um clube da 3ª divisão fica com centenas de milhares — não com milhões.
+  const balance = Math.round(lerp(econ.balMin, econ.balMax, t) / 10_000) * 10_000;
+  const weeklyIncome = lerp(econ.incMin, econ.incMax, t);
+
   return {
     clubId,
     balance,
-    transferBudget: Math.round(balance * 0.4),
+    transferBudget: Math.round(balance * 0.35),
     wageBudget: Math.round(wages * 1.3),
-    // Receitas escalam ao QUADRADO da reputação: um clube da 1ª divisão tem
-    // muito mais do que um da 3ª. Antes eram quase iguais, o que dava dinheiro
-    // a mais aos pequenos.
     income: {
       tickets: 0,
-      sponsorship: Math.round(8_000 + scale * scale * 320_000),
-      tvRights: Math.round(12_000 + scale * scale * 480_000),
-      merchandising: Math.round(4_000 + scale * scale * 120_000),
+      sponsorship: Math.round(weeklyIncome * 0.40),
+      tvRights: Math.round(weeklyIncome * 0.45),
+      merchandising: Math.round(weeklyIncome * 0.15),
     },
     expenses: {
       wages,
       facilities: 0, // calculado a partir das instalações (recalcUpkeep)
-      staff: Math.round(8_000 + scale * scale * 140_000),
+      staff: Math.round(weeklyIncome * 0.30),
     },
   };
 }

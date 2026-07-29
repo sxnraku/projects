@@ -1,10 +1,11 @@
 /**
- * Onboarding da primeira execução: nome do treinador + escolha do clube.
- * Renderizado pelo dashboard enquanto meta.managerName === ''.
- * Não é uma rota — é um componente de ecrã inteiro (evita truques de navegação).
+ * Onboarding: nome do treinador + escolha do clube. É uma rota própria (/onboarding),
+ * alcançada a partir da tela inicial ao escolher "Nova Carreira". Ao concluir, entra
+ * nas abas do jogo. O mundo já foi gerado; managerName === '' marca "por concluir".
  */
 import React, { useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useGameStore } from '../src/state/gameStore';
 import { money } from '../src/ui/format';
 import { useT } from '../src/ui/i18n';
@@ -14,8 +15,10 @@ import { Button, Crest, Screen, Stars } from './components';
 
 export default function Onboarding() {
   const t = useT();
+  const router = useRouter();
   const state = useGameStore((s) => s.state);
   const completeOnboarding = useGameStore((s) => s.completeOnboarding);
+  const passMenu = useGameStore((s) => s.passMenu);
   const lang = useGameStore((s) => s.lang);
   const setLang = useGameStore((s) => s.setLang);
 
@@ -37,7 +40,7 @@ export default function Onboarding() {
   if (!state) return null;
 
   return (
-    <Screen>
+    <Screen edges={['left', 'right', 'bottom']}>
       <View style={styles.header}>
         <Text style={styles.title}>{t('onb.welcome')}</Text>
         <Text style={styles.subtitle}>{t('onb.intro')}</Text>
@@ -99,7 +102,12 @@ export default function Onboarding() {
         <Button
           label={t('onb.start')}
           disabled={!clubId}
-          onPress={() => clubId && completeOnboarding(name, clubId)}
+          onPress={() => {
+            if (!clubId) return;
+            completeOnboarding(name, clubId);
+            passMenu(); // garante que a guarda das abas deixa entrar
+            router.replace('/' as never);
+          }}
         />
       </View>
     </Screen>

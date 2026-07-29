@@ -114,6 +114,41 @@ export function isReachable(state: GameState, player: Player): boolean {
   return reachability(state, player).status !== 'LOCKED';
 }
 
+/** Quantos alvos fora de alcance (aspiracionais) mostrar no fim da lista. */
+export const LOCKED_SHOWN = 6;
+
+export interface MarketEntry {
+  player: Player;
+  reach: Reachability;
+  affordable: boolean; // o passe cabe no orçamento livre AGORA?
+}
+
+/**
+ * Lista de scouting ordenada pelo que o clube gerido REALMENTE pode assinar.
+ *
+ * Ordem: primeiro os que estão ao alcance E dentro do ORÇAMENTO (do mais caro
+ * que consegues pagar para baixo — não os inatingíveis no topo), depois os ao
+ * alcance mas caros (aspiração), e só um punhado de "sem interesse" no fim.
+ * Antes a lista enchia-se de jogadores fora do orçamento; agora os que podes
+ * mesmo contratar lideram. A UI filtra/ordena por cima disto.
+ */
+export function marketShortlist(state: GameState, limit = 120): MarketEntry[] {
+  const managedId = state.meta.managedClubId;
+  const budget = availableBudget(state);
+  const entries: MarketEntry[] = Object.values(state.players)
+    .filter((p) => p.clubId && p.clubId !== managedId)
+    .map((player) => ({ player, reach: reachability(state, player), affordable: player.marketValue <= budget }));
+
+  const byValue = (a: MarketEntry, b: MarketEntry) => b.player.marketValue - a.player.marketValue;
+
+  const reachable = entries.filter((e) => e.reach.status !== 'LOCKED');
+  const affordable = reachable.filter((e) => e.affordable).sort(byValue);
+  const pricey = reachable.filter((e) => !e.affordable).sort(byValue);
+  const locked = entries.filter((e) => e.reach.status === 'LOCKED').sort(byValue).slice(0, LOCKED_SHOWN);
+
+  return [...affordable, ...pricey, ...locked].slice(0, limit);
+}
+
 export interface SubmitResult {
   ok: boolean;
   errorKey?: string; // chave i18n (a UI traduz)

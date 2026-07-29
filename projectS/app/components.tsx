@@ -62,8 +62,8 @@ export function CrestCircle({ club, size = 32 }: { club: Club; size?: number }) 
   );
 }
 
-export function Screen({ children }: { children: React.ReactNode }) {
-  return <SafeAreaView style={styles.screen} edges={['left', 'right']}>{children}</SafeAreaView>;
+export function Screen({ children, edges }: { children: React.ReactNode; edges?: ('top' | 'right' | 'bottom' | 'left')[] }) {
+  return <SafeAreaView style={styles.screen} edges={edges ?? ['left', 'right']}>{children}</SafeAreaView>;
 }
 
 /**
@@ -242,7 +242,8 @@ export function StatBar({ label, value, max = 20 }: { label: string; value: numb
       <View style={styles.statBarTrack}>
         <View style={[styles.statBarFill, { width: `${pct}%` }]} />
       </View>
-      <Text style={styles.statBarVal}>{value}</Text>
+      {/* Mostra na escala 0-100 (a % do máximo interno). */}
+      <Text style={styles.statBarVal}>{Math.round(pct)}</Text>
     </View>
   );
 }

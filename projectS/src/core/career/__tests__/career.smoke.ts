@@ -23,6 +23,7 @@ import {
 } from '../index';
 import { acceptJobOffer } from '../../game/advance';
 import { deriveSeed, Rng } from '../../engine/rng';
+import { sortStandings } from '../../season';
 import { TrainingFocus } from '../../training';
 
 let failures = 0;
@@ -62,8 +63,10 @@ console.log('\nÉpoca completa + promoções/despromoções:');
 while (nextRound(state, managedLeagueId(state)) !== null) {
   advanceWeek(state, TrainingFocus.TECHNICAL);
 }
-// Identifica os 2 primeiros da liga_2 e os 2 últimos da liga_1 ANTES do rollover.
-const sortedL2 = Object.values(state.standings['liga_2']!).sort((a, b) => b.points - a.points);
+// Identifica os 2 primeiros da liga_2 ANTES do rollover, pelo MESMO critério que
+// a promoção usa (pontos → diferença de golos → golos marcados → nome). Ordenar
+// só por pontos era frágil: num empate, o desempate por golos divergia da promoção.
+const sortedL2 = sortStandings(state.standings['liga_2']!, (id) => state.clubs[id]?.name ?? id);
 const topL2 = sortedL2.slice(0, 2).map((r) => r.clubId);
 
 const summary = rolloverSeason(state);

@@ -34,17 +34,18 @@ export const theme = {
     loss: '#F85149',
     borderLight: '#4A525C',
     pitch: '#2F6B3F', // campo tático — verde dessaturado, não gritante
-    pitchLine: 'rgba(255,255,255,0.18)',
+    pitchStripe: '#357B48', // risca de relvado (banda alternada, mais clara)
+    pitchLine: 'rgba(255,255,255,0.22)',
   },
   spacing: (n: number) => n * 8,
   radius: { sm: 6, md: 8, lg: 8, pill: 6 },
   font: {
-    h1: 20,
-    h2: 16,
-    h3: 14,
-    body: 13,
-    small: 11,
-    score: 30,
+    h1: 22,
+    h2: 17,
+    h3: 15,
+    body: 14,
+    small: 12,
+    score: 32,
   },
 } as const;
 

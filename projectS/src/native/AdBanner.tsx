@@ -4,6 +4,7 @@
  * ID de teste da Google por defeito — substituir pelo ad unit real no lançamento.
  */
 import React, { useEffect, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { useMonetizationStore } from '../state/monetizationStore';
 import { AD_UNITS } from './adConfig';
 import { isExpoGo } from './runtime';
@@ -27,9 +28,22 @@ export default function AdBanner() {
 
   const { BannerAd, BannerAdSize } = Ads;
   return (
-    <BannerAd
-      unitId={BANNER_ID}
-      size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
-    />
+    <View style={styles.container}>
+      <BannerAd
+        unitId={BANNER_ID}
+        size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
+      />
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    marginVertical: 8,
+    overflow: 'hidden',
+  },
+});
+

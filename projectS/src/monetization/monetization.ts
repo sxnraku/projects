@@ -87,11 +87,14 @@ export function applyReward(state: GameState, reward: AdReward): Msg {
 
   if (reward === 'SPONSOR_BONUS') {
     const fin = state.finances[clubId];
+    // Escala pelo escalão (como o bónus diário): um valor fixo achatava as divisões.
+    const tier = state.leagues[state.clubs[clubId]?.leagueId ?? '']?.tier ?? 1;
+    const amount = Math.round(SPONSOR_BONUS_AMOUNT * Math.pow(0.5, tier - 1) / 10_000) * 10_000;
     if (fin) {
-      fin.balance += SPONSOR_BONUS_AMOUNT;
-      fin.transferBudget += Math.round(SPONSOR_BONUS_AMOUNT * 0.5);
+      fin.balance += amount;
+      fin.transferBudget += Math.round(amount * 0.5);
     }
-    return { key: 'reward.sponsor', params: { amount: SPONSOR_BONUS_AMOUNT.toLocaleString('pt-PT') } };
+    return { key: 'reward.sponsor', params: { amount: amount.toLocaleString('pt-PT') } };
   }
 
   // FITNESS_BOOST — recupera o plantel inteiro.

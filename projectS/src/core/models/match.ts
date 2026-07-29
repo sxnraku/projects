@@ -7,10 +7,11 @@
 export const MatchEventType = {
   KICKOFF: 'KICKOFF',
   GOAL: 'GOAL',
+  ASSIST: 'ASSIST', // passe para golo (mesmo minuto do golo)
   CHANCE: 'CHANCE', // oportunidade falhada
   SAVE: 'SAVE', // defesa do guarda-redes
   YELLOW_CARD: 'YELLOW_CARD',
-  RED_CARD: 'RED_CARD',
+  RED_CARD: 'RED_CARD', // gerado ao 2º amarelo do mesmo jogador
   INJURY: 'INJURY',
   HALF_TIME: 'HALF_TIME',
   FULL_TIME: 'FULL_TIME',
@@ -42,6 +43,15 @@ export interface MatchTeamStats {
   xg: number; // golos esperados (soma da qualidade dos lances), 2 casas decimais
 }
 
+/** Estatística individual de um jogador NESTA partida. */
+export interface PlayerMatchStat {
+  goals: number;
+  assists: number;
+  yellow: number; // nº de amarelos (2 → expulso)
+  red: boolean; // expulso?
+  rating: number; // nota 0–10 (1 casa decimal)
+}
+
 /** Resultado completo de uma partida simulada. */
 export interface MatchResult {
   homeClubId: string;
@@ -50,6 +60,10 @@ export interface MatchResult {
   away: MatchTeamStats;
   events: MatchEvent[];
   seed: number; // seed usada — permite reproduzir a mesma partida
+  /** Estatística por jogador (id → stat). Opcional: saves antigos não a têm. */
+  playerStats?: Record<string, PlayerMatchStat>;
+  /** Homem do jogo (playerId da melhor nota). Opcional em saves antigos. */
+  motm?: string | null;
 }
 
 /** Vencedor, ou null em empate. */

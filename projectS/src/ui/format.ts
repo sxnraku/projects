@@ -1,5 +1,14 @@
 /** Helpers de formatação partilhados pela UI. TS puro e testável. */
 
+/**
+ * Converte um valor da escala INTERNA do motor (0–20) para a escala de DISPLAY
+ * 0–100, mais intuitiva (estilo FIFA/FM). O motor mantém 0–20 por dentro — isto
+ * é só para mostrar ao jogador. Ex.: overall 12 → 60, overall 17 → 85.
+ */
+export function to100(v: number): number {
+  return Math.round(Math.max(0, Math.min(20, v)) * 5);
+}
+
 /** Formata dinheiro em estilo compacto: 1 350 000 → "1,35M €". */
 export function money(v: number): string {
   const abs = Math.abs(v);

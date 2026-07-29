@@ -3,6 +3,7 @@
  * troféus, historial e bónus diário. Lógica pura, sem UI nem SDKs.
  */
 import { Lang } from '../i18n';
+import type { Finance } from '../models';
 
 /** Objetivo definido pela direção no início da época. */
 export const Objective = {
@@ -43,6 +44,33 @@ export interface Trophy {
   params?: import('../i18n').MsgParams;
 }
 
+/** Uma missão de olheiro em curso (persistida no save). */
+export interface ScoutMission {
+  id: string;
+  kind: 'PLAYER' | 'LEAGUE';
+  targetId: string; // playerId (PLAYER) ou leagueId (LEAGUE)
+  roundsLeft: number; // jornadas até o relatório ficar pronto
+  total: number; // jornadas totais (para a barra de progresso)
+}
+
+/** Conhecimento acumulado pela rede de olheiros do clube gerido. */
+export interface ScoutingState {
+  known: string[]; // ids de jogadores com relatório completo (info exata)
+  missions: ScoutMission[]; // missões em curso
+  prospects: string[]; // promessas descobertas por missões a ligas (para a shortlist)
+}
+
+/**
+ * Academia de jovens: grupo de candidatos à experiência (ainda NÃO no plantel).
+ * Os candidatos vivem aqui embutidos (não em state.players) para não poluírem o
+ * mercado; ao recrutar, o jogador passa para o plantel.
+ */
+export interface AcademyState {
+  candidates: import('../models').Player[];
+  season: number; // época em que o grupo foi gerado (refresca a cada época)
+  gen: number; // contador de grupos gerados (varia a seed a cada "novo grupo")
+}
+
 /** Estado completo da carreira, persistido no save. */
 export interface CareerState {
   objective: Objective;
@@ -62,6 +90,18 @@ export interface CareerState {
 
   /** Idioma escolhido pelo utilizador (persiste no save). */
   lang?: Lang;
+
+  /** O tutorial de abas já foi visto nesta carreira? (mostra 1x por carreira). */
+  tutorialSeen?: boolean;
+
+  /** Rede de olheiros: conhecimento e missões. Inicializado sob demanda. */
+  scouting?: ScoutingState;
+
+  /** Academia: grupo atual de candidatos à experiência. Inicializado sob demanda. */
+  academy?: AcademyState;
+
+  /** Última época em que se pediu orçamento à direção (limita a 1×/época). */
+  lastBudgetRequestSeason?: number;
 }
 
 export function initialCareer(): CareerState {
@@ -147,6 +187,49 @@ export function evaluateSeason(
 
   career.confidence = Math.max(0, career.confidence - 15);
   return { metObjective: false, fired: false, messageKey: 'board.lastChance' };
+}
+
+// ---------- Interação com a direção: pedir orçamento ----------
+
+export interface BudgetRequestResult {
+  granted: number; // valor somado ao orçamento de transferências (0 = recusado)
+  messageKey: string;
+  messageParams?: import('../i18n').MsgParams;
+}
+
+/**
+ * Pede um reforço de orçamento de transferências à direção.
+ *
+ * Regras: uma vez por época. A direção só cede se a confiança for razoável
+ * (>= 40); o valor cresce com a confiança e com o escalão (1ª divisão = mais).
+ * Pedir custa um pouco de confiança (a direção não gosta de choradeira).
+ */
+export function requestTransferBudget(
+  career: CareerState,
+  finance: Finance,
+  tier: number,
+  season: number,
+): BudgetRequestResult {
+  if (career.lastBudgetRequestSeason === season) {
+    return { granted: 0, messageKey: 'board.budget.already' };
+  }
+  career.lastBudgetRequestSeason = season;
+
+  if (career.confidence < 40) {
+    return { granted: 0, messageKey: 'board.budget.refused' };
+  }
+
+  const divFactor = Math.pow(0.5, Math.max(0, tier - 1)); // 1ª=1, 2ª=0.5, 3ª=0.25…
+  const confFactor = (career.confidence - 40) / 60; // 0..1
+  const granted = Math.round(4_000_000 * divFactor * (0.3 + confFactor) / 100_000) * 100_000;
+  finance.transferBudget += granted;
+  career.confidence = Math.max(0, career.confidence - 3);
+
+  return {
+    granted,
+    messageKey: 'board.budget.granted',
+    messageParams: { amount: granted.toLocaleString('pt-PT') },
+  };
 }
 
 // ---------- Bónus diário (retenção) ----------

@@ -15,6 +15,7 @@ export const FACILITY_LABELS: Record<FacilityType, string> = {
   training: 'Centro de treino',
   academy: 'Academia',
   medical: 'Departamento médico',
+  scouting: 'Rede de olheiros',
 };
 
 export const FACILITY_EFFECTS: Record<FacilityType, string> = {
@@ -22,6 +23,7 @@ export const FACILITY_EFFECTS: Record<FacilityType, string> = {
   training: 'Evolução mais rápida no treino',
   academy: 'Jovens da fornada com mais qualidade',
   medical: 'Lesões recuperam mais depressa',
+  scouting: 'Mais olheiros, alcance e relatórios precisos',
 };
 
 /** Custo do próximo nível (cresce de forma acentuada). */
@@ -34,6 +36,7 @@ export function facilityUpgradeCost(type: FacilityType, currentLevel: number): n
     training: 6_000_000,
     academy: 5_000_000,
     medical: 4_000_000,
+    scouting: 3_500_000,
   };
   return Math.round(base[type] * Math.pow(2.2, currentLevel - 1));
 }

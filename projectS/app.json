@@ -2,7 +2,7 @@
   "expo": {
     "name": "Football Legacy",
     "slug": "football-legacy",
-    "version": "1.0.0",
+    "version": "1.0.16",
     "orientation": "portrait",
     "scheme": "footballlegacy",
     "userInterfaceStyle": "dark",
@@ -22,7 +22,7 @@
     },
     "android": {
       "package": "com.rakulabs.footballlegacy",
-      "versionCode": 1,
+      "versionCode": 22,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#20242A"
@@ -35,11 +35,22 @@
       [
         "react-native-google-mobile-ads",
         {
+          "android_app_id": "ca-app-pub-7583056430043166~9482078235",
           "androidAppId": "ca-app-pub-7583056430043166~9482078235",
+          "ios_app_id": "ca-app-pub-3940256099942544~1458002511",
           "iosAppId": "ca-app-pub-3940256099942544~1458002511"
         }
       ],
-      "expo-build-properties"
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "useLegacyPackaging": true
+          }
+        }
+      ],
+      "expo-web-browser",
+      "./plugins/withGoogleAuthScheme"
     ],
     "experiments": {
       "typedRoutes": true
@@ -51,5 +62,11 @@
       }
     },
     "owner": "sxnraku"
+  },
+  "react-native-google-mobile-ads": {
+    "android_app_id": "ca-app-pub-7583056430043166~9482078235",
+    "androidAppId": "ca-app-pub-7583056430043166~9482078235",
+    "ios_app_id": "ca-app-pub-3940256099942544~1458002511",
+    "iosAppId": "ca-app-pub-3940256099942544~1458002511"
   }
 }

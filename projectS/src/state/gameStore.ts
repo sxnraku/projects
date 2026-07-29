@@ -48,14 +48,44 @@ import {
   WeekResult,
   withdrawOffer as coreWithdrawOffer,
   youthTrial,
+  activeMissions as coreScoutMissions,
+  canScoutLeague,
+  canScoutPlayer,
+  cancelMission,
+  freeSlots as coreFreeSlots,
+  isPotentialKnown,
+  potentialRange,
+  PotentialRange,
+  scoutableProspects,
+  scoutingLevel,
+  scoutSlots,
+  startLeagueMission,
+  startPlayerMission,
+  tierInRange,
+  academyCandidates as coreAcademyCandidates,
+  recruitAcademyCandidate,
+  generateAcademyBatch,
+  RecruitResult,
+  loanOutCandidates,
+  loanInMarket,
+  loanOut as coreLoanOut,
+  loanIn as coreLoanIn,
+  terminateLoan as coreTerminateLoan,
+  buyReturnedPlayer as coreBuyReturnedPlayer,
+  LoanResult,
+  ReturnedLoan,
+  applyHalftime as coreApplyHalftime,
 } from '../core/game';
+import type { BudgetRequestResult, ScoutMission } from '../core/career';
 import {
   claimDailyBonus,
   dailyBonusAvailable,
+  requestTransferBudget,
 } from '../core/career';
 import {
   FacilityType,
   renewContract as coreRenew,
+  suggestedWage,
   TransferOffer,
   upgradeFacility,
   UpgradeResult,
@@ -89,6 +119,19 @@ export interface GameStore {
   /** Idioma da interface (persiste no save). */
   setLang: (lang: Lang) => void;
 
+  /** Menu inicial já ultrapassado nesta sessão (em memória; reinicia a cada arranque). */
+  menuPassed: boolean;
+  releasedIds: string[]; // jogadores em fim de contrato que o utilizador libertou (transitório)
+  returnedLoans: ReturnedLoan[]; // empréstimos recebidos que terminaram (oferta de compra pendente)
+  /** Jogadores em fim de contrato por decidir (só quando a época terminou). */
+  expiringDecisions: () => Player[];
+  renewExpiring: (playerId: string) => void;
+  releaseExpiring: (playerId: string) => void;
+  /** Sai do menu inicial (após "Nova Carreira" ou "Continuar"). */
+  passMenu: () => void;
+  /** Marca o tutorial de abas como visto (persiste no save da carreira). */
+  markTutorialSeen: () => void;
+
   // Core loop
   advance: () => WeekResult | null;
   /** Motivo do bloqueio do avanco (null = pode avancar). */
@@ -110,10 +153,22 @@ export interface GameStore {
   acceptOffer: (clubId: string) => boolean;
   claimDaily: () => number; // devolve o valor creditado (0 se indisponível)
   dailyAvailable: () => boolean;
+  requestBudget: () => BudgetRequestResult; // pedir orçamento à direção (1×/época)
+  budgetRequestUsed: () => boolean; // já foi pedido esta época?
 
   // Slots de anúncio rewarded
   replayLastMatch: (fixtureId: string) => MatchResult | null;
+  /** Ajuste ao intervalo: re-simula a 2ª parte com nova tática. Null se não aplicável. */
+  applyHalftime: (lineup: Tactic['lineup'], mentality: Tactic['mentality'], tempo: Tactic['tempo']) => MatchResult | null;
   runYouthTrial: () => Player | null;
+
+  // Academia de jovens (recrutamento com escolha)
+  /** Grupo atual de candidatos à experiência. */
+  academyCandidates: () => Player[];
+  /** Recruta um candidato (paga a taxa). O anúncio é tratado na UI antes. */
+  recruitYouth: (candidateId: string) => RecruitResult;
+  /** Gera um novo grupo de candidatos. */
+  refreshAcademy: () => void;
 
   /** Compra o próximo nível de uma instalação do clube gerido. */
   upgrade: (type: FacilityType) => UpgradeResult;
@@ -137,6 +192,43 @@ export interface GameStore {
   /** O clube tem estatuto para contratar este jogador? */
   reachOf: (playerId: string) => Reachability | null;
   renewPlayer: (playerId: string, years: number, wage: number) => { ok: boolean; error?: string };
+
+  // Olheiros (scouting)
+  // Empréstimos (dar/receber jovens).
+  loanOutList: () => Player[];
+  loanInList: () => Player[];
+  doLoanOut: (playerId: string) => LoanResult;
+  doLoanIn: (playerId: string) => LoanResult;
+  /** Termina um empréstimo mais cedo (dispensa recebido / chama de volta cedido). */
+  doTerminateLoan: (playerId: string) => LoanResult;
+  /** Empréstimos RECEBIDOS que terminaram no último rollover (oferta de compra). */
+  returnedLoansPending: () => ReturnedLoan[];
+  /** Compra um jogador que estava emprestado, no fim do empréstimo. */
+  buyReturnedLoan: (playerId: string, price: number) => LoanResult;
+  /** Descarta a oferta de compra de um empréstimo terminado (não comprar). */
+  dismissReturnedLoan: (playerId: string) => void;
+  /** Nível da rede de olheiros + slots (missões em simultâneo). */
+  scoutInfo: () => { level: number; freeSlots: number; totalSlots: number } | null;
+  /** Intervalo de potencial (ou exato se conhecido/já sondado). */
+  potentialRangeOf: (playerId: string) => PotentialRange | null;
+  /** O potencial já é conhecido (não-promessa, nosso, ou sondado)? */
+  potentialKnown: (playerId: string) => boolean;
+  /** Promessas ao alcance com potencial por revelar (para "Sondáveis"). */
+  scoutableList: () => Player[];
+  /** Inicia missão a um jogador. Devolve true se aceite. */
+  scoutPlayer: (playerId: string) => boolean;
+  /** Inicia missão a uma liga (descobre promessas). Devolve true se aceite. */
+  scoutLeague: (leagueId: string) => boolean;
+  /** Cancela uma missão em curso. */
+  cancelScout: (missionId: string) => void;
+  /** Missões de olheiro em curso. */
+  scoutMissions: () => ScoutMission[];
+  /** Promessas já descobertas por missões a ligas. */
+  scoutProspects: () => Player[];
+  /** Ligas ao alcance dos olheiros (nível da instalação). */
+  scoutableLeagues: () => import('../core/models').League[];
+  canScoutP: (playerId: string) => boolean;
+  canScoutL: (leagueId: string) => boolean;
 
   // Vendas / caixa de entrada
   acceptBid: (bidId: string) => BidDecision;
@@ -177,6 +269,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
   lastSeason: null,
   replayedFixtures: [],
   pendingReport: null,
+  menuPassed: false,
+  releasedIds: [],
+  returnedLoans: [],
+
+  passMenu: () => set({ menuPassed: true }),
+
+  markTutorialSeen: () => {
+    const { state } = get();
+    if (state) { state.career.tutorialSeen = true; set({ state: bump(state) }); }
+  },
 
   newGame: (opts) => {
     const state = createNewGame(opts);
@@ -184,7 +286,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ state, lastWeek: null, lastSeason: null, replayedFixtures: [], pendingReport: null });
   },
 
-  loadState: (state) => set({ state, lang: state.career.lang ?? get().lang }),
+  loadState: (state) => {
+    // Migração de saves anteriores à rede de olheiros: garante o campo em todos
+    // os clubes (senão o ecrã de instalações lê undefined e rebenta).
+    for (const c of Object.values(state.clubs)) {
+      if (c.facilities.scouting == null) c.facilities.scouting = 1;
+    }
+    if (!state.career.scouting) state.career.scouting = { known: [], missions: [], prospects: [] };
+    set({ state, lang: state.career.lang ?? get().lang });
+  },
 
   setLang: (lang) => {
     const { state } = get();
@@ -197,10 +307,21 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!state) return null;
     if (state.career.pendingOffers.length > 0) return null; // despedido: tem de aceitar oferta
 
-    // Fim de época → rollover automático antes de continuar.
+    // Fim de época → decisões de contrato (renovar/libertar) ANTES do rollover.
     if (nextRound(state, managedLeagueId(state)) === null) {
+      const { releasedIds } = get();
+      const undecided = (state.clubs[state.meta.managedClubId]?.squad ?? [])
+        .map((id) => state.players[id])
+        .filter((p): p is Player => !!p && p.contractUntil === state.meta.season && !releasedIds.includes(p.id));
+      if (undecided.length > 0) {
+        set({ blockedReason: 'contracts' }); // o painel mostra o modal de decisões
+        return null;
+      }
       const summary = rolloverSeason(state);
-      set({ state: bump(state), lastWeek: null, lastSeason: summary, replayedFixtures: [] });
+      set({
+        state: bump(state), lastWeek: null, lastSeason: summary, replayedFixtures: [],
+        releasedIds: [], returnedLoans: summary.returnedLoans,
+      });
       return null;
     }
 
@@ -277,7 +398,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
   claimDaily: () => {
     const { state } = get();
     if (!state) return 0;
-    const amount = claimDailyBonus(state.career, todayISO());
+    const raw = claimDailyBonus(state.career, todayISO());
+    // Escala pelo ESCALÃO: um bónus fixo de 700k afogava a Liga 3 (receita ~28k/
+    // semana) e tornava o dinheiro igual em todas as divisões. Agora cresce com a
+    // subida de divisão — a progressão passa a valer.
+    const club = state.clubs[state.meta.managedClubId];
+    const tier = club ? state.leagues[club.leagueId]?.tier ?? 1 : 1;
+    const amount = Math.round(raw * Math.pow(0.5, tier - 1) / 10_000) * 10_000;
     if (amount > 0) {
       const fin = state.finances[state.meta.managedClubId];
       if (fin) {
@@ -287,6 +414,23 @@ export const useGameStore = create<GameStore>((set, get) => ({
       set({ state: bump(state) });
     }
     return amount;
+  },
+
+  budgetRequestUsed: () => {
+    const { state } = get();
+    return !!state && state.career.lastBudgetRequestSeason === state.meta.season;
+  },
+
+  requestBudget: () => {
+    const { state } = get();
+    if (!state) return { granted: 0, messageKey: 'board.budget.refused' };
+    const club = state.clubs[state.meta.managedClubId];
+    const fin = state.finances[state.meta.managedClubId];
+    const tier = club ? state.leagues[club.leagueId]?.tier ?? 1 : 1;
+    if (!fin) return { granted: 0, messageKey: 'board.budget.refused' };
+    const res = requestTransferBudget(state.career, fin, tier, state.meta.season);
+    set({ state: bump(state) });
+    return res;
   },
 
   // ---- Slots rewarded ----
@@ -306,6 +450,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return result;
   },
 
+  applyHalftime: (lineup, mentality, tempo) => {
+    const { state, lastWeek } = get();
+    if (!state || !lastWeek) return null;
+    const managedId = state.meta.managedClubId;
+    const fx = lastWeek.fixtures.find((f) => f.homeClubId === managedId || f.awayClubId === managedId);
+    if (!fx) return null;
+    const result = coreApplyHalftime(state, fx.id, lineup, mentality, tempo);
+    if (!result) return null;
+    const fixtures = lastWeek.fixtures.map((f) => (f.id === fx.id ? { ...f, result } : f));
+    set({ state: bump(state), lastWeek: { ...lastWeek, fixtures } });
+    return result;
+  },
+
   runYouthTrial: () => {
     const { state } = get();
     if (!state) return null;
@@ -313,6 +470,24 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const youth = youthTrial(state, rng);
     set({ state: bump(state) });
     return youth;
+  },
+
+  academyCandidates: () => {
+    const { state } = get();
+    return state ? coreAcademyCandidates(state) : [];
+  },
+  recruitYouth: (candidateId) => {
+    const { state } = get();
+    if (!state) return { ok: false, errorKey: 'submit.noGame' };
+    const res = recruitAcademyCandidate(state, candidateId);
+    if (res.ok) set({ state: bump(state) });
+    return res;
+  },
+  refreshAcademy: () => {
+    const { state } = get();
+    if (!state) return;
+    generateAcademyBatch(state, true);
+    set({ state: bump(state) });
   },
 
   upgrade: (type) => {
@@ -375,6 +550,113 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return state && p ? reachability(state, p) : null;
   },
 
+  // ---- Olheiros ----
+  scoutInfo: () => {
+    const { state } = get();
+    if (!state) return null;
+    const level = scoutingLevel(state);
+    return { level, freeSlots: coreFreeSlots(state), totalSlots: scoutSlots(level) };
+  },
+  potentialRangeOf: (playerId) => {
+    const { state } = get();
+    const p = state?.players[playerId];
+    return state && p ? potentialRange(state, p) : null;
+  },
+  potentialKnown: (playerId) => {
+    const { state } = get();
+    const p = state?.players[playerId];
+    return state && p ? isPotentialKnown(state, p) : true;
+  },
+  scoutableList: () => {
+    const { state } = get();
+    return state ? scoutableProspects(state) : [];
+  },
+
+  loanOutList: () => { const { state } = get(); return state ? loanOutCandidates(state) : []; },
+  loanInList: () => { const { state } = get(); return state ? loanInMarket(state) : []; },
+  doLoanOut: (playerId) => {
+    const { state } = get();
+    if (!state) return { ok: false, errorKey: 'loan.err.invalid' };
+    const r = coreLoanOut(state, playerId);
+    if (r.ok) set({ state: bump(state) });
+    return r;
+  },
+  doLoanIn: (playerId) => {
+    const { state } = get();
+    if (!state) return { ok: false, errorKey: 'loan.err.invalid' };
+    const r = coreLoanIn(state, playerId);
+    if (r.ok) set({ state: bump(state) });
+    return r;
+  },
+  doTerminateLoan: (playerId) => {
+    const { state } = get();
+    if (!state) return { ok: false, errorKey: 'loan.err.invalid' };
+    const r = coreTerminateLoan(state, playerId);
+    if (r.ok) set({ state: bump(state) });
+    return r;
+  },
+  returnedLoansPending: () => get().returnedLoans,
+  buyReturnedLoan: (playerId, price) => {
+    const { state, returnedLoans } = get();
+    if (!state) return { ok: false, errorKey: 'loan.err.invalid' };
+    const r = coreBuyReturnedPlayer(state, playerId, price);
+    if (r.ok) set({ state: bump(state), returnedLoans: returnedLoans.filter((l) => l.playerId !== playerId) });
+    return r;
+  },
+  dismissReturnedLoan: (playerId) => {
+    const { returnedLoans } = get();
+    set({ returnedLoans: returnedLoans.filter((l) => l.playerId !== playerId) });
+  },
+  scoutPlayer: (playerId) => {
+    const { state } = get();
+    if (!state) return false;
+    const ok = startPlayerMission(state, playerId);
+    if (ok) set({ state: bump(state) });
+    return ok;
+  },
+  scoutLeague: (leagueId) => {
+    const { state } = get();
+    if (!state) return false;
+    const ok = startLeagueMission(state, leagueId);
+    if (ok) set({ state: bump(state) });
+    return ok;
+  },
+  cancelScout: (missionId) => {
+    const { state } = get();
+    if (!state) return;
+    cancelMission(state, missionId);
+    set({ state: bump(state) });
+  },
+  scoutMissions: () => {
+    const { state } = get();
+    return state ? coreScoutMissions(state) : [];
+  },
+  scoutProspects: () => {
+    const { state } = get();
+    if (!state) return [];
+    const ids = state.career.scouting?.prospects ?? [];
+    // Só promessas AINDA noutros clubes (as já contratadas saem da lista).
+    return ids
+      .map((id) => state.players[id])
+      .filter((p): p is Player => !!p && !!p.clubId && p.clubId !== state.meta.managedClubId);
+  },
+  scoutableLeagues: () => {
+    const { state } = get();
+    if (!state) return [];
+    const club = state.clubs[state.meta.managedClubId];
+    const ownTier = club ? state.leagues[club.leagueId]?.tier ?? 1 : 1;
+    const level = scoutingLevel(state);
+    return Object.values(state.leagues).filter((l) => tierInRange(ownTier, l.tier, level));
+  },
+  canScoutP: (playerId) => {
+    const { state } = get();
+    return state ? canScoutPlayer(state, playerId) : false;
+  },
+  canScoutL: (leagueId) => {
+    const { state } = get();
+    return state ? canScoutLeague(state, leagueId) : false;
+  },
+
   // ---- Vendas / caixa de entrada ----
   acceptBid: (bidId) => {
     const { state } = get();
@@ -394,6 +676,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   setListed: (playerId, listed) => {
     const { state } = get();
     if (!state) return;
+    // Jogadores emprestados (recebidos) não podem ir para a lista de transferências —
+    // o passe não é nosso. A UI deve esconder o botão, isto é a rede de segurança.
+    if (listed && state.players[playerId]?.condition.loanOwnerId) return;
     setTransferListed(state, playerId, listed);
     set({ state: bump(state) });
   },
@@ -427,6 +712,30 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const res = coreRenew(playerId, years, wage, state);
     if (res.ok) set({ state: bump(state) });
     return res;
+  },
+
+  expiringDecisions: () => {
+    const { state, releasedIds } = get();
+    if (!state) return [];
+    // Só no fim da época (todas as jornadas jogadas), à espera do rollover.
+    if (nextRound(state, managedLeagueId(state)) !== null) return [];
+    return (state.clubs[state.meta.managedClubId]?.squad ?? [])
+      .map((id) => state.players[id])
+      .filter((p): p is Player => !!p && p.contractUntil === state.meta.season && !releasedIds.includes(p.id));
+  },
+
+  renewExpiring: (playerId) => {
+    const { state } = get();
+    if (!state) return;
+    const p = state.players[playerId];
+    if (!p) return;
+    const res = coreRenew(playerId, 3, suggestedWage(p, state.meta.season), state);
+    if (res.ok) { set({ state: bump(state), blockedReason: null }); }
+  },
+
+  releaseExpiring: (playerId) => {
+    const { releasedIds } = get();
+    set({ releasedIds: [...releasedIds, playerId], blockedReason: null });
   },
 
   // ---- Seletores ----

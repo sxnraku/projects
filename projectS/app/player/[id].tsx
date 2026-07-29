@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { useGameStore } from '../../src/state/gameStore';
-import { bidForPlayer, isWonderkid } from '../../src/core/game';
+import { bidForPlayer, isWonderkid, potentialRange } from '../../src/core/game';
 import { suggestedWage } from '../../src/core/economy';
-import { naturalOverall } from '../../src/core/models';
-import { money, wage } from '../../src/ui/format';
+import { naturalOverall, naturalOverallFine } from '../../src/core/models';
+import { money, to100, wage } from '../../src/ui/format';
 import { useT } from '../../src/ui/i18n';
 import { attrColor, fitnessColor, theme } from '../../src/ui/theme';
 import { Face } from '../../src/ui/Face';
+import { Toast } from '../../src/ui/Toast';
 import { Body, Button, PosText, RowKV, Screen, StatBar, Stepper } from '../components';
 
 type Tab = 'OVERVIEW' | 'STATS' | 'CONTRACT' | 'SELL';
@@ -25,17 +26,19 @@ export default function PlayerDetail() {
   const state = useGameStore((s) => s.state);
   const renewPlayer = useGameStore((s) => s.renewPlayer);
   const setListed = useGameStore((s) => s.setListed);
+  const doTerminateLoan = useGameStore((s) => s.doTerminateLoan);
   const acceptBid = useGameStore((s) => s.acceptBid);
 
   const [tab, setTab] = useState<Tab>('OVERVIEW');
   const [years, setYears] = useState(3);
-  const [renewMsg, setRenewMsg] = useState<string | null>(null);
-  const [sellMsg, setSellMsg] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{ kind: 'ok' | 'error' | 'info'; text: string } | null>(null);
 
   const player = state?.players[id ?? ''];
-  if (!state || !player) return <Screen><Body>{t('player.notFound')}</Body></Screen>;
+  if (!state || !player) return <Screen edges={['left', 'right', 'bottom']}><Body>{t('player.notFound')}</Body></Screen>;
 
   const ovr = naturalOverall(player);
+  const potR = potentialRange(state, player); // intervalo (ou exato) do potencial
+  const potText = potR.exact ? String(potR.min) : `${potR.min}-${potR.max}`;
   const club = player.clubId ? state.clubs[player.clubId] : null;
   const a = player.attributes;
   const askedWage = suggestedWage(player, state.meta.season);
@@ -43,7 +46,8 @@ export default function PlayerDetail() {
   const pendingBid = isOurs ? bidForPlayer(state, player.id) : null;
 
   return (
-    <Screen>
+    <Screen edges={['left', 'right', 'bottom']}>
+      <Toast text={feedback?.text ?? null} kind={feedback?.kind ?? 'ok'} onHide={() => setFeedback(null)} />
       {/* Cabeçalho */}
       <View style={styles.header}>
         <Face
@@ -53,7 +57,7 @@ export default function PlayerDetail() {
           ring={player.condition.status === 'INJURED' ? theme.colors.red : undefined}
         />
         <View style={[styles.ovrBox, { backgroundColor: attrColor(ovr) }]}>
-          <Text style={styles.ovrText}>{ovr}</Text>
+          <Text style={styles.ovrText}>{to100(naturalOverallFine(player))}</Text>
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.name}>
@@ -82,8 +86,8 @@ export default function PlayerDetail() {
       <ScrollView showsVerticalScrollIndicator={false}>
         {tab === 'OVERVIEW' ? (
           <View>
-            <RowKV k={t('player.overall')} v={String(ovr)} vColor={attrColor(ovr)} />
-            <RowKV k={t('player.potential')} v={String(player.potential)} vColor={attrColor(player.potential)} />
+            <RowKV k={t('player.overall')} v={String(to100(naturalOverallFine(player)))} vColor={attrColor(ovr)} />
+            <RowKV k={t('player.potential')} v={potText} vColor={attrColor(player.potential)} />
             <RowKV k={t('player.form')} v={String(player.condition.form)} />
             <RowKV k={t('player.morale')} v={String(player.condition.morale)} />
             <RowKV k={t('player.fitness')} v={`${player.condition.fitness}%`} vColor={fitnessColor(player.condition.fitness)} />
@@ -134,23 +138,40 @@ export default function PlayerDetail() {
                   <Stepper value={years} onChange={setYears} step={1} min={1} max={5}
                     format={(v) => t('tac.years', { n: v })} />
                 </View>
-                {renewMsg ? <Text style={styles.renewMsg}>{renewMsg}</Text> : null}
                 <Button label={t('player.renew')} onPress={() => {
                   const r = renewPlayer(player.id, years, askedWage);
-                  setRenewMsg(r.ok ? t('player.renewToast', { until: state.meta.season + years, wage: wage(askedWage) }) : r.error ?? t('player.renewFailed'));
+                  setFeedback(r.ok
+                    ? { kind: 'ok', text: t('player.renewToast', { until: state.meta.season + years, wage: wage(askedWage) }) }
+                    : { kind: 'error', text: r.error ?? t('player.renewFailed') });
                 }} />
               </View>
             ) : null}
           </View>
         ) : null}
 
-        {tab === 'SELL' && isOurs ? (
+        {tab === 'SELL' && isOurs && player.condition.loanOwnerId ? (
+          <View>
+            <Text style={styles.sub}>
+              {t('loan.from', { club: state.clubs[player.condition.loanOwnerId]?.name ?? '' })} · {t('loan.wageLabel', { v: wage(player.wage) })}
+            </Text>
+            <View style={{ marginTop: theme.spacing(2) }}>
+              <Button
+                label={t('loan.dispense.button')}
+                variant="ghost"
+                onPress={() => {
+                  const r = doTerminateLoan(player.id);
+                  setFeedback(r.ok
+                    ? { kind: 'ok', text: t('loan.dispense.toast', { name: player.lastName }) }
+                    : { kind: 'error', text: r.errorKey ? t(r.errorKey) : t('loan.err.invalid') });
+                }}
+              />
+            </View>
+          </View>
+        ) : tab === 'SELL' && isOurs ? (
           <View>
             <RowKV k={t('mkt.marketValue')} v={money(player.marketValue)} />
             <RowKV k={t('player.listed')} v={player.transferListed ? t('common.yes') : t('common.no')}
               vColor={player.transferListed ? theme.colors.yellow : undefined} />
-
-            {sellMsg ? <Text style={styles.renewMsg}>{sellMsg}</Text> : null}
 
             {/* Proposta pendente, se houver */}
             {pendingBid ? (
@@ -159,7 +180,9 @@ export default function PlayerDetail() {
                 <Text style={styles.bidFee}>{money(pendingBid.fee)}</Text>
                 <Button label={t('player.acceptSell')} onPress={() => {
                   const r = acceptBid(pendingBid.id);
-                  setSellMsg(r.ok ? t('player.sellToast', { fee: money(r.fee ?? pendingBid.fee) }) : r.error ?? t('player.sellFailed'));
+                  setFeedback(r.ok
+                    ? { kind: 'ok', text: t('player.sellToast', { fee: money(r.fee ?? pendingBid.fee) }) }
+                    : { kind: 'error', text: r.error ?? t('player.sellFailed') });
                 }} />
               </View>
             ) : (
@@ -172,7 +195,7 @@ export default function PlayerDetail() {
                 variant={player.transferListed ? 'ghost' : 'primary'}
                 onPress={() => {
                   setListed(player.id, !player.transferListed);
-                  setSellMsg(player.transferListed ? t('player.removedFromList') : t('player.addedToList'));
+                  setFeedback({ kind: 'info', text: player.transferListed ? t('player.removedFromList') : t('player.addedToList') });
                 }}
               />
             </View>
@@ -211,7 +234,6 @@ const styles = StyleSheet.create({
 
   renewBox: { marginTop: theme.spacing(2), gap: theme.spacing(1.5) },
   renewRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  renewMsg: { color: theme.colors.green, fontSize: theme.font.body, marginVertical: theme.spacing(0.5) },
   bidBox: {
     backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.green,
     borderRadius: theme.radius.md, padding: theme.spacing(1.5), marginTop: theme.spacing(1.5),

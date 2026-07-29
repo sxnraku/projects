@@ -37,6 +37,15 @@ export interface PlayerCondition {
   fitness: number; // condição física / frescura 0..100 (100 = descansado)
   status: PlayerStatus;
   injuryDaysRemaining: number; // 0 se apto
+  // Totalizadores da ÉPOCA (reiniciam no rollover). Opcionais: saves antigos = 0.
+  seasonGoals?: number;
+  seasonAssists?: number;
+  // Empréstimo: se definido, o jogador está emprestado. `clubId` é o clube onde
+  // joga; `loanOwnerId` é o dono a quem regressa em `loanUntil` (época).
+  loanOwnerId?: string;
+  loanUntil?: number;
+  // Suspensão: nº de jogos que ainda tem de falhar (vermelho → 1). 0/undefined = apto.
+  suspended?: number;
 }
 
 /** Jogador completo — entidade central do modelo de dados. */
@@ -143,6 +152,25 @@ export function naturalOverall(player: Player): number {
   return computeOverall(player.attributes, player.positions[0]);
 }
 
+/**
+ * Overall FINO (sem arredondar) — só para DISPLAY. Dá números finos na escala
+ * 0-100 (ex.: 14.4 → 72), em vez de múltiplos de 5. A lógica do jogo continua
+ * a usar `naturalOverall` (inteiro); isto é apenas cosmético.
+ */
+export function computeOverallFine(attributes: PlayerAttributes, position: Position): number {
+  const weights = OVERALL_WEIGHTS[positionGroupOf(position)];
+  let sum = 0, totalWeight = 0;
+  for (const key in weights) {
+    const k = key as keyof PlayerAttributes;
+    sum += attributes[k] * weights[k]!;
+    totalWeight += weights[k]!;
+  }
+  return sum / totalWeight;
+}
+export function naturalOverallFine(player: Player): number {
+  return computeOverallFine(player.attributes, player.positions[0]);
+}
+
 /** Penalização por jogar fora da posição natural (em pontos de overall). */
 export const OUT_OF_POSITION_PENALTY = { sameGroup: 2, otherGroup: 5 } as const;
 
@@ -174,6 +202,30 @@ export function effectiveOverall(player: Player, position: Position): number {
   return Math.max(1, base - penalty);
 }
 
+/**
+ * Overall efetivo FINO (sem arredondar) numa posição — para DISPLAY. Como
+ * `effectiveOverall` mas com a escala fina, para a tática mostrar 74 e não 70.
+ */
+export function effectiveOverallFine(player: Player, position: Position): number {
+  const base = computeOverallFine(player.attributes, position);
+  if (isNaturalPosition(player, position)) return base;
+  const natural = player.positions[0];
+  const penalty = POSITION_GROUP[natural] === POSITION_GROUP[position]
+    ? OUT_OF_POSITION_PENALTY.sameGroup
+    : OUT_OF_POSITION_PENALTY.otherGroup;
+  return Math.max(1, base - penalty);
+}
+
 export function fullName(player: Player): string {
   return `${player.firstName} ${player.lastName}`;
+}
+
+/**
+ * Nome curto: inicial do primeiro nome + apelido (ex.: "P. Diddy"). Usado nas
+ * listas densas (plantel, tática, mercado, partida) para diferenciar homónimos
+ * sem ocupar o espaço do nome completo.
+ */
+export function shortName(player: Player): string {
+  const initial = player.firstName ? `${player.firstName[0]}. ` : '';
+  return `${initial}${player.lastName}`;
 }

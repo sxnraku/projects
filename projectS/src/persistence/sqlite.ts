@@ -28,7 +28,12 @@ export async function saveGame(db: SqliteDb, state: GameState): Promise<void> {
   const rows = serialize(state);
   await db.withTransactionAsync(async () => {
     // Limpa e reescreve. Simples e seguro; o volume (centenas de linhas) é trivial.
-    for (const table of ['meta', 'leagues', 'clubs', 'players', 'finances', 'tactics', 'standings', 'schedules', 'career', 'news', 'cup', 'inbox']) {
+    // ⚠️ ORDEM FILHOS→PAIS: com foreign_keys imposto (no dispositivo), apagar um
+    // pai (leagues) antes dos filhos (clubs) viola a FK e faz o saveGame rebentar
+    // — o erro era engolido pelo `persist().catch()` e o save NUNCA era escrito
+    // (época nova a cada arranque). O insertAll reinsere na ordem inversa (pais
+    // primeiro), que também respeita as FKs.
+    for (const table of ['inbox', 'cup', 'news', 'career', 'schedules', 'standings', 'tactics', 'finances', 'players', 'clubs', 'leagues', 'meta']) {
       await db.execAsync(`DELETE FROM ${table};`);
     }
     await insertAll(db, rows);

@@ -12,16 +12,19 @@ import {
 import { useGameStore } from '../../src/state/gameStore';
 import {
   effectiveOverall,
+  effectiveOverallFine,
   Formation,
   isNaturalPosition,
   Mentality,
   Position,
+  shortName,
   Tactic,
   Tempo,
 } from '../../src/core/models';
 import { autoPickLineup, lineupOverall } from '../../src/core/game';
 import { physicalLoad } from '../../src/core/engine';
 import { attrColor, fitnessColor, theme } from '../../src/ui/theme';
+import { to100 } from '../../src/ui/format';
 import { useT } from '../../src/ui/i18n';
 import { Face } from '../../src/ui/Face';
 import { Body, PosText, Screen, Section } from '../components';
@@ -72,7 +75,15 @@ const LAYOUTS: Record<Formation, { x: number; y: number }[]> = {
   ],
 };
 
-const DOT = 44;
+const MARK_W = 50;
+
+/** Texto legível (claro/escuro) sobre uma cor de camisola. */
+function readableOn(hex: string): string {
+  const h = hex.replace('#', '');
+  if (h.length < 6) return '#fff';
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.62 ? '#20242A' : '#fff';
+}
 
 export default function Tactics() {
   const t = useT();
@@ -155,7 +166,7 @@ export default function Tactics() {
           <View>
             <Text style={styles.summaryLabel}>{t('tac.xiOverall')}</Text>
             <Text style={[styles.summaryVal, { color: attrColor(Math.round(xiOverall)) }]}>
-              {xiOverall.toFixed(1)}
+              {to100(xiOverall)}
             </Text>
           </View>
           <View style={{ alignItems: 'flex-end' }}>
@@ -168,6 +179,7 @@ export default function Tactics() {
 
         {/* CAMPO — toca num jogador para o substituir (lista, não drag) */}
         <View style={styles.pitch} onLayout={onPitchLayout}>
+          <PitchStripes />
           <FieldMarkings />
           {pitchW > 0 && tactic.lineup.map((slot, i) => {
             const p = state.players[slot.playerId];
@@ -179,21 +191,22 @@ export default function Tactics() {
               <Pressable
                 key={i}
                 onPress={() => setPickSlot(i)}
-                style={[styles.dotWrap, {
+                style={[styles.mkWrap, {
                   // x espelhado: direita do ecrã = lado direito do campo (RB/RW).
-                  left: (1 - pos.x) * pitchW - DOT / 2,
-                  top: (1 - pos.y) * pitchH - DOT / 2,
+                  left: (1 - pos.x) * pitchW - MARK_W / 2,
+                  top: (1 - pos.y) * pitchH - 26,
                 }]}
               >
-                <View style={[
-                  styles.dot,
-                  slot.position === 'GK' && styles.dotGk,
-                  outOfPos && styles.dotOutOfPos,
-                ]}>
-                  <Text style={styles.dotPos}>{slot.position}{outOfPos ? '!' : ''}</Text>
-                  <Text style={[styles.dotOvr, { color: attrColor(rating) }]}>{rating}</Text>
-                </View>
-                <Text style={styles.dotName} numberOfLines={1}>{p?.lastName ?? '—'}</Text>
+                <PlayerMarker
+                  shirtColor={club.primaryColor}
+                  gk={slot.position === 'GK'}
+                  outOfPos={outOfPos}
+                  injured={p?.condition.status === 'INJURED'}
+                  suspended={!!p?.condition.suspended}
+                  ovr={p ? String(to100(effectiveOverallFine(p, slot.position))) : '—'}
+                  pos={`${slot.position}${outOfPos ? '!' : ''}`}
+                  name={p ? shortName(p) : '—'}
+                />
               </Pressable>
             );
           })}
@@ -201,20 +214,20 @@ export default function Tactics() {
         <Text style={styles.hint}>{t('tac.hint')}</Text>
 
         <Section title={t('tac.mentality')} />
-        <View style={styles.chips}>
-          {MENTALITIES.map((m) => (
-            <Chip key={m} label={t(`mentality.${m}`)} active={tactic.mentality === m}
-              onPress={() => setTactic({ ...tactic, mentality: m })} radio />
-          ))}
-        </View>
+        <Segment
+          options={MENTALITIES.map((m) => ({
+            key: m, label: t(`mentality.${m}`), active: tactic.mentality === m,
+            onPress: () => setTactic({ ...tactic, mentality: m }),
+          }))}
+        />
 
         <Section title={t('tac.tempo')} />
-        <View style={styles.chips}>
-          {TEMPOS.map((tp) => (
-            <Chip key={tp} label={t(`tempo.${tp}`)} active={tactic.tempo === tp}
-              onPress={() => setTactic({ ...tactic, tempo: tp })} radio />
-          ))}
-        </View>
+        <Segment
+          options={TEMPOS.map((tp) => ({
+            key: tp, label: t(`tempo.${tp}`), active: tactic.tempo === tp,
+            onPress: () => setTactic({ ...tactic, tempo: tp }),
+          }))}
+        />
 
         <Section title={t('tac.instructions')} />
         <Slider
@@ -272,11 +285,11 @@ export default function Tactics() {
                     style={({ pressed }) => [styles.pickRow, pressed && { backgroundColor: theme.colors.surfaceAlt }]}
                     onPress={() => pickSlot !== null && assignPlayer(pickSlot, item.p.id)}
                   >
-                    <Text style={[styles.pickOvr, { color: attrColor(item.rating) }]}>{item.rating}</Text>
+                    <Text style={[styles.pickOvr, { color: attrColor(item.rating) }]}>{to100(effectiveOverallFine(item.p, slotPosition ?? item.p.positions[0]!))}</Text>
                     <Face seed={item.p.id} size={30} shirt={club.primaryColor} />
                     <View style={{ flex: 1 }}>
                       <Text style={styles.pickName}>
-                        {item.p.lastName}
+                        {shortName(item.p)}
                         {current ? <Text style={{ color: theme.colors.blue }}>  {t('tac.current')}</Text> : null}
                         {inLineup && !current ? <Text style={{ color: theme.colors.textDim }}>  {t('tac.inLineup')}</Text> : null}
                       </Text>
@@ -335,6 +348,53 @@ function Chip({ label, active, onPress, radio }: { label: string; active: boolea
         {radio ? (active ? '● ' : '○ ') : ''}{label}
       </Text>
     </Pressable>
+  );
+}
+
+/** Seletor segmentado — opções lado a lado, a ativa com destaque dourado. */
+function Segment({ options }: { options: { key: string; label: string; active: boolean; onPress: () => void }[] }) {
+  return (
+    <View style={styles.segment}>
+      {options.map((o) => (
+        <Pressable key={o.key} onPress={o.onPress} style={[styles.segItem, o.active && styles.segItemOn]}>
+          <Text style={[styles.segText, o.active && styles.segTextOn]} numberOfLines={1}>{o.label}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+/** Marcador de jogador em forma de camisola (cabeça + camisola + posição + nome). */
+function PlayerMarker({
+  shirtColor, gk, outOfPos, injured, suspended, ovr, pos, name,
+}: { shirtColor: string; gk: boolean; outOfPos: boolean; injured?: boolean; suspended?: boolean; ovr: string; pos: string; name: string }) {
+  const fill = gk ? theme.colors.yellow : shirtColor;
+  const ink = readableOn(fill);
+  return (
+    <>
+      <View style={styles.mkHead} />
+      <View style={[styles.mkShirt, { backgroundColor: fill }, outOfPos && styles.mkShirtWarn, (injured || suspended) && styles.mkShirtUnavail]}>
+        <View style={[styles.mkSleeve, styles.mkSleeveL, { backgroundColor: fill }]} />
+        <View style={[styles.mkSleeve, styles.mkSleeveR, { backgroundColor: fill }]} />
+        <Text style={[styles.mkOvr, { color: ink }]}>{ovr}</Text>
+        {injured ? <Text style={styles.mkBadge}>🚑</Text> : suspended ? <Text style={styles.mkBadge}>🟥</Text> : null}
+      </View>
+      <View style={[styles.mkPosPill, outOfPos && { backgroundColor: theme.colors.red }]}>
+        <Text style={styles.mkPosText}>{pos}</Text>
+      </View>
+      <Text style={styles.mkName} numberOfLines={1}>{name}</Text>
+    </>
+  );
+}
+
+/** Riscas de relvado (bandas horizontais alternadas) por baixo das marcações. */
+function PitchStripes() {
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      {Array.from({ length: 7 }, (_, i) => (
+        <View key={i} style={{ flex: 1, backgroundColor: i % 2 ? theme.colors.pitchStripe : theme.colors.pitch }} />
+      ))}
+    </View>
   );
 }
 
@@ -398,20 +458,43 @@ const styles = StyleSheet.create({
   boxTop: { top: -1.5, borderTopWidth: 0 },
   boxBottom: { bottom: -1.5, borderBottomWidth: 0 },
 
-  dotWrap: { position: 'absolute', width: DOT, alignItems: 'center' },
-  dot: {
-    width: DOT, height: DOT * 0.72, borderRadius: theme.radius.sm,
-    backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.borderLight,
-    alignItems: 'center', justifyContent: 'center',
+  // Marcador de jogador (camisola)
+  mkWrap: { position: 'absolute', width: MARK_W, alignItems: 'center' },
+  mkHead: {
+    width: 11, height: 11, borderRadius: 6, backgroundColor: '#D2D6DC',
+    borderWidth: 1, borderColor: 'rgba(0,0,0,0.35)', marginBottom: 1,
   },
-  dotGk: { borderColor: theme.colors.yellow },
-  dotOutOfPos: { borderColor: theme.colors.red },
-  dotPos: { color: theme.colors.textDim, fontSize: 8, fontWeight: '700' },
-  dotOvr: { fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] },
-  dotName: {
-    color: '#fff', fontSize: 9, fontWeight: '700', marginTop: 2, maxWidth: DOT + 18,
-    textShadowColor: 'rgba(0,0,0,0.7)', textShadowRadius: 2,
+  mkShirt: {
+    width: 34, height: 26, borderRadius: 7, alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: 'rgba(0,0,0,0.30)',
+    shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 2, shadowOffset: { width: 0, height: 1 }, elevation: 2,
   },
+  mkShirtWarn: { borderColor: theme.colors.red, borderWidth: 2 },
+  mkShirtUnavail: { borderColor: theme.colors.red, borderWidth: 2, opacity: 0.7 },
+  mkBadge: { position: 'absolute', top: -8, right: -8, fontSize: 13 },
+  mkSleeve: { position: 'absolute', top: 3, width: 9, height: 11, borderRadius: 3, borderWidth: 1, borderColor: 'rgba(0,0,0,0.30)' },
+  mkSleeveL: { left: -5, transform: [{ rotate: '-20deg' }] },
+  mkSleeveR: { right: -5, transform: [{ rotate: '20deg' }] },
+  mkOvr: { fontSize: 15, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  mkPosPill: {
+    marginTop: 3, backgroundColor: 'rgba(0,0,0,0.62)', borderRadius: 4,
+    paddingHorizontal: 5, paddingVertical: 1,
+  },
+  mkPosText: { color: '#fff', fontSize: 9.5, fontWeight: '800', letterSpacing: 0.3 },
+  mkName: {
+    color: '#fff', fontSize: 10.5, fontWeight: '700', marginTop: 2, maxWidth: MARK_W + 18,
+    textShadowColor: 'rgba(0,0,0,0.8)', textShadowRadius: 2,
+  },
+
+  // Seletor segmentado (Mentalidade / Ritmo)
+  segment: {
+    flexDirection: 'row', backgroundColor: theme.colors.surface, borderRadius: theme.radius.sm,
+    borderWidth: 1, borderColor: theme.colors.border, padding: 3, gap: 3, marginTop: 4,
+  },
+  segItem: { flex: 1, paddingVertical: theme.spacing(1), alignItems: 'center', justifyContent: 'center', borderRadius: 4 },
+  segItemOn: { backgroundColor: theme.colors.accent },
+  segText: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700' },
+  segTextOn: { color: '#20242A', fontWeight: '800' },
 
   sliderRow: { marginBottom: theme.spacing(1.5) },
   sliderHead: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },

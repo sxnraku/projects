@@ -45,6 +45,9 @@ projectS/.claude/
 *.mobileprovision
 credentials.json
 google-services.json
+# Notas de build locais — contem as passwords da keystore em texto simples.
+# Este repo tem remote publico (GitHub Pages); nunca versionar.
+projectS/docs/BUILD-AAB.md
 GoogleService-Info.plist
 play-store-key*.json
 service-account*.json

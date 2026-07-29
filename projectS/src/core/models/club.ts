@@ -4,12 +4,13 @@ export interface Facilities {
   training: number; // acelera a evolução dos jogadores no treino
   academy: number; // melhora a qualidade da fornada anual de jovens
   medical: number; // encurta o tempo de recuperação de lesões
+  scouting: number; // rede de olheiros: alcance, nº de missões, velocidade e precisão
 }
 
 export const FACILITY_MAX_LEVEL = 5;
 
 export function defaultFacilities(): Facilities {
-  return { stadium: 1, training: 1, academy: 1, medical: 1 };
+  return { stadium: 1, training: 1, academy: 1, medical: 1, scouting: 1 };
 }
 
 /**
