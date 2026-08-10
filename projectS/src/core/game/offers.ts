@@ -7,6 +7,7 @@ import {
 } from '../models';
 import {
   checkInterest,
+  playerStanding,
   evaluateOffer,
   executeTransfer,
   TransferOffer,
@@ -90,7 +91,7 @@ export function reachability(state: GameState, player: Player): Reachability {
   if (!club) return { status: 'LOCKED', requiredSigningBonus: 0, reasonKey: 'interest.open' };
 
   const tier = state.leagues[club.leagueId]?.tier ?? 1;
-  const interest = checkInterest(player, club, tier);
+  const interest = checkInterest(player, club, tier, playerStanding(player, state.clubs, state.leagues));
 
   if (interest.interested) {
     return { status: 'OPEN', requiredSigningBonus: 0, reasonKey: interest.reasonKey, reasonParams: interest.reasonParams };
@@ -117,6 +118,16 @@ export function isReachable(state: GameState, player: Player): boolean {
 /** Quantos alvos fora de alcance (aspiracionais) mostrar no fim da lista. */
 export const LOCKED_SHOWN = 6;
 
+/**
+ * Fatia máxima da lista ocupada por jogadores que já cabem no orçamento.
+ *
+ * Sem este teto, um clube com dinheiro enchia os 120 lugares só com alvos
+ * acessíveis: o mercado parecia sempre o mesmo e o filtro "ao meu alcance" não
+ * mudava nada, porque nunca havia lá nada FORA do alcance para esconder
+ * (queixa do playtest). Reservar espaço para os caros dá horizonte à lista.
+ */
+export const AFFORDABLE_SHARE = 0.6;
+
 export interface MarketEntry {
   player: Player;
   reach: Reachability;
@@ -135,9 +146,17 @@ export interface MarketEntry {
 export function marketShortlist(state: GameState, limit = 120): MarketEntry[] {
   const managedId = state.meta.managedClubId;
   const budget = availableBudget(state);
+  // Inclui AGENTES LIVRES (clubId null): custam 0 de passe e são a resposta
+  // natural ao "mercado seco" das épocas avançadas — antes estavam de fora e o
+  // jogador nem sabia que existiam.
   const entries: MarketEntry[] = Object.values(state.players)
-    .filter((p) => p.clubId && p.clubId !== managedId)
-    .map((player) => ({ player, reach: reachability(state, player), affordable: player.marketValue <= budget }));
+    .filter((p) => p.clubId !== managedId && (!p.clubId || !state.clubs[p.clubId]?.european))
+    .filter((p) => !p.condition.loanOwnerId) // emprestados não estão à venda
+    .map((player) => ({
+      player,
+      reach: reachability(state, player),
+      affordable: (player.clubId ? player.marketValue : 0) <= budget,
+    }));
 
   const byValue = (a: MarketEntry, b: MarketEntry) => b.player.marketValue - a.player.marketValue;
 
@@ -146,7 +165,15 @@ export function marketShortlist(state: GameState, limit = 120): MarketEntry[] {
   const pricey = reachable.filter((e) => !e.affordable).sort(byValue);
   const locked = entries.filter((e) => e.reach.status === 'LOCKED').sort(byValue).slice(0, LOCKED_SHOWN);
 
-  return [...affordable, ...pricey, ...locked].slice(0, limit);
+  // Quotas: os acessíveis lideram mas não ocupam a lista toda; o que sobrar de
+  // uma categoria é reaproveitado pelas outras, para a lista vir sempre cheia.
+  const lockedShown = locked.slice(0, LOCKED_SHOWN);
+  const budgetForReachable = Math.max(0, limit - lockedShown.length);
+  const affordableSlots = Math.min(affordable.length, Math.floor(budgetForReachable * AFFORDABLE_SHARE));
+  const priceyShown = pricey.slice(0, budgetForReachable - affordableSlots);
+  const affordableShown = affordable.slice(0, budgetForReachable - priceyShown.length);
+
+  return [...affordableShown, ...priceyShown, ...lockedShown].slice(0, limit);
 }
 
 export interface SubmitResult {
@@ -162,7 +189,17 @@ export interface SubmitResult {
  */
 export function submitPendingOffer(state: GameState, offer: TransferOffer): SubmitResult {
   const player = state.players[offer.playerId];
-  if (!player || !player.clubId) return { ok: false, errorKey: 'submit.unavailable' };
+  if (!player) return { ok: false, errorKey: 'submit.unavailable' };
+  // AGENTE LIVRE: não há clube com quem negociar — assina-se na hora, só pelo
+  // ordenado. Sem este ramo os livres apareciam na lista e não dava para nada.
+  if (!player.clubId) {
+    const res = executeTransfer({ ...offer, fee: 0 }, state);
+    if (res.ok) return { ok: true };
+    // O erro REAL (teto salarial, insolvência) em vez de "jogador
+    // indisponível": o utilizador via essa mensagem em metade do mercado e não
+    // fazia ideia de que o problema era a folha salarial do próprio clube.
+    return { ok: false, errorKey: 'submit.failed', errorParams: { reason: res.error ?? '' } };
+  }
   if (player.clubId === state.meta.managedClubId) {
     return { ok: false, errorKey: 'submit.own' };
   }

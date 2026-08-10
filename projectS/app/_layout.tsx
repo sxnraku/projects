@@ -10,6 +10,7 @@ import { loadPrefs, persist, restore, savePrefs } from './db';
 import { initAds } from '../src/native/ads';
 import { detectDeviceLang } from '../src/ui/deviceLang';
 import { ForcedUpdateGate } from '../src/ui/ForcedUpdateGate';
+import { setAudioSettings } from '../src/ui/sound';
 import { theme } from '../src/ui/theme';
 import ErrorBoundary from './ErrorBoundary';
 
@@ -28,10 +29,10 @@ export default function RootLayout() {
         } else {
           // 1º arranque: começa no idioma do sistema (o jogador pode mudar depois).
           useGameStore.getState().setLang(detectDeviceLang());
-          useGameStore.getState().newGame({ managerName: '' });
+          useGameStore.getState().newGame({ managerName: '', useBase: true });
         }
       } catch {
-        useGameStore.getState().newGame({ managerName: '' });
+        useGameStore.getState().newGame({ managerName: '', useBase: true });
       } finally {
         setReady(true);
       }
@@ -66,6 +67,14 @@ export default function RootLayout() {
     return () => { if (timer) clearTimeout(timer); flush(); unsubGame(); unsubMon(); sub.remove(); };
   }, []);
 
+  // Som/vibração: a store é pura (é importada pelos smoke tests em Node), por
+  // isso é aqui — na fronteira nativa — que as preferências chegam ao leitor de
+  // áudio. Aplica o valor atual e depois cada alteração.
+  useEffect(() => {
+    setAudioSettings(useGameStore.getState().audio);
+    return useGameStore.subscribe((s) => setAudioSettings(s.audio));
+  }, []);
+
   if (!ready) {
     return (
       <View style={{ flex: 1, backgroundColor: theme.colors.bg, alignItems: 'center', justifyContent: 'center' }}>
@@ -93,7 +102,12 @@ export default function RootLayout() {
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="match" options={{ title: 'Jornada' }} />
           <Stack.Screen name="player/[id]" options={{ title: 'Jogador' }} />
+          <Stack.Screen name="club/[id]" options={{ title: 'Equipa' }} />
           <Stack.Screen name="academy" options={{ title: 'Academia' }} />
+          <Stack.Screen name="training" options={{ title: 'Treino' }} />
+          <Stack.Screen name="world" options={{ title: 'Mundo' }} />
+          <Stack.Screen name="europe" options={{ title: 'Europa' }} />
+          <Stack.Screen name="history" options={{ title: 'Histórico' }} />
         </Stack>
         {/* Overlay bloqueante — fica por cima de tudo se houver update obrigatório. */}
         <ForcedUpdateGate />

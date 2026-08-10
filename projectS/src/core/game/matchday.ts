@@ -1,8 +1,9 @@
-import { effectiveOverall, GameState, naturalOverall, Player, Position } from '../models';
+import { effectiveOverall, GameState, LineupSlot, naturalOverall, Player, Position } from '../models';
 import { matchdayGate, requiredReputation } from '../economy';
 import { matchFatigue } from '../engine/fatigue';
 import { currentPosition, managedLeagueId, nextRound, recentFormOf } from './advance';
 import { generateRenewalReminders } from './inbox';
+import { FORMATION_POSITIONS } from './lineup';
 
 /**
  * Pré-jogo — obrigar o treinador a OLHAR antes de carregar em "Jogar".
@@ -210,7 +211,7 @@ export function runBosmanApproaches(state: GameState): BosmanApproach[] {
   generateRenewalReminders(state);
 
   const suitors = Object.values(state.clubs)
-    .filter((c) => c.id !== clubId)
+    .filter((c) => c.id !== clubId && !c.european)
     .sort((a, b) => b.reputation - a.reputation);
 
   const approaches: BosmanApproach[] = [];
@@ -278,5 +279,91 @@ export function autoRotate(state: GameState, threshold = TIRED_FITNESS): Rotatio
   if (changes.length > 0) {
     tactic.bench = club.squad.filter((id) => !inLineup.has(id)).slice(0, 7);
   }
+  return { swapped: changes.length, changes };
+}
+
+/**
+ * Elegibilidade de um jogador para o onze: tem de estar apto (não lesionado) e
+ * NÃO suspenso. Cansaço não exclui — só penaliza a pontuação (ver `pickScore`).
+ */
+function isSelectable(p: Player | undefined): p is Player {
+  return !!p && p.condition.status === 'AVAILABLE' && !p.condition.suspended;
+}
+
+/**
+ * Pontuação de seleção numa posição: overall efetivo NA posição, penalizado pela
+ * frescura (um craque a 50% ainda joga; muito cansado desce e dá lugar a um
+ * suplente fresco). Fator 0.6→1.0 entre 0% e 100% de fitness.
+ */
+function pickScore(p: Player, position: Position): number {
+  const fit = 0.6 + 0.4 * (Math.max(0, Math.min(100, p.condition.fitness)) / 100);
+  return effectiveOverall(p, position) * fit;
+}
+
+/**
+ * Recalcula o MELHOR onze possível para o clube gerido, na formação atual —
+ * excluindo lesionados e suspensos e penalizando cansados. Usado tanto pelo
+ * botão "onze automático" (a qualquer momento) como pela rotação quando há
+ * titulares indisponíveis. Preserva instruções/mentalidade; só mexe no onze.
+ *
+ * Devolve as trocas ("X entra por Y") para feedback na UI.
+ */
+export function optimizeLineup(state: GameState, clubId = state.meta.managedClubId): RotationResult {
+  const club = state.clubs[clubId];
+  const tactic = state.tactics[clubId];
+  if (!club || !tactic) return { swapped: 0, changes: [] };
+
+  const positions = FORMATION_POSITIONS[tactic.formation];
+  const prev = tactic.lineup.map((s) => s.playerId); // onze anterior, por slot
+  const used = new Set<string>();
+  const next: LineupSlot[] = [];
+
+  for (const position of positions) {
+    let bestId: string | null = null;
+    let bestScore = -1;
+    for (const id of club.squad) {
+      if (used.has(id)) continue;
+      const p = state.players[id];
+      if (!isSelectable(p)) continue;
+      const score = pickScore(p, position);
+      if (score > bestScore) { bestScore = score; bestId = id; }
+    }
+    if (bestId) { used.add(bestId); next.push({ position, playerId: bestId }); }
+  }
+
+  // Se não há 11 elegíveis (plantel dizimado), completa com quem sobrar (apto),
+  // para nunca deixar o onze incompleto.
+  if (next.length < positions.length) {
+    for (let i = next.length; i < positions.length; i++) {
+      const filler = club.squad.find((id) => !used.has(id) && state.players[id]?.condition.status === 'AVAILABLE');
+      if (!filler) break;
+      used.add(filler);
+      next.push({ position: positions[i]!, playerId: filler });
+    }
+  }
+
+  // Trocas REAIS de onze: quem ENTRA (não era titular) por quem SAI (era e já
+  // não é). Ignora reordenações de posição entre titulares mantidos, para o
+  // feedback não ficar ruidoso.
+  const prevSet = new Set(prev.filter(Boolean));
+  const nextSet = new Set(next.map((s) => s.playerId));
+  const entered = [...nextSet].filter((id) => !prevSet.has(id));
+  const left = [...prevSet].filter((id) => !nextSet.has(id));
+  const changes = entered.map((id, i) => {
+    const inP = state.players[id];
+    const outP = left[i] ? state.players[left[i]!] : null;
+    if (!inP) return '';
+    return outP ? `${inP.lastName} entra por ${outP.lastName}` : `${inP.lastName} entra`;
+  }).filter(Boolean);
+
+  tactic.lineup = next;
+  tactic.bench = club.squad.filter((id) => !used.has(id)).slice(0, 7);
+  const starters = [...next].sort((a, b) => effectiveOverall(state.players[b.playerId]!, b.position) - effectiveOverall(state.players[a.playerId]!, a.position));
+  tactic.captainId = starters[0]?.playerId ?? tactic.captainId;
+  tactic.penaltyTakerId = next.reduce<{ id: string | null; fin: number }>((best, s) => {
+    const p = state.players[s.playerId];
+    return p && p.attributes.finishing > best.fin ? { id: p.id, fin: p.attributes.finishing } : best;
+  }, { id: null, fin: -1 }).id ?? tactic.penaltyTakerId;
+
   return { swapped: changes.length, changes };
 }

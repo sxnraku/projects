@@ -1,8 +1,13 @@
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useGameStore } from '../../src/state/gameStore';
+import { abilityTo100, STAFF_ROLES, StaffMember, StaffRole } from '../../src/core/staff';
 import { FACILITY_MAX_LEVEL, weeklyNet } from '../../src/core/models';
-import { FacilityType, facilityUpgradeCost } from '../../src/core/economy';
+import {
+  cashRunway, cashWarning, FacilityType, facilityUpgradeCost,
+  RUNWAY_WARNING_WEEKS, TRANSFER_SHARE, WAGE_RESERVE_WEEKS,
+} from '../../src/core/economy';
+import { showRewarded } from '../../src/native/ads';
 import { money } from '../../src/ui/format';
 import { theme } from '../../src/ui/theme';
 import { Face } from '../../src/ui/Face';
@@ -10,12 +15,16 @@ import { useT, useTMsg } from '../../src/ui/i18n';
 import { LANGS, LANG_LABELS } from '../../src/core/i18n';
 import { OBJECTIVE_KEYS } from '../../src/core/career';
 import { CloudBackup } from '../../src/ui/CloudBackup';
-import { Bar, Body, contrastOn, CrestCircle, darken, RowKV, Screen, Section, Stars } from '../components';
+import { BalanceSplit, Bar, Body, contrastOn, CrestCircle, darken, RowKV, Screen, Section, Stars } from '../components';
 import { reputationStars } from '../../src/ui/theme';
 import { Toast } from '../../src/ui/Toast';
+import { haptic, playSound } from '../../src/ui/sound';
 import { useMonetizationStore } from '../../src/state/monetizationStore';
 
 const FACILITY_TYPES: FacilityType[] = ['stadium', 'training', 'academy', 'medical', 'scouting'];
+
+/** Passos de volume oferecidos na UI (um slider seria exagero para 5 valores). */
+const VOLUME_STEPS = [0, 0.25, 0.5, 0.75, 1] as const;
 
 export default function ClubScreen() {
   const t = useT();
@@ -23,19 +32,31 @@ export default function ClubScreen() {
   const state = useGameStore((s) => s.state);
   const club = useGameStore((s) => s.managedClub)();
   const upgrade = useGameStore((s) => s.upgrade);
+  const staff = useGameStore((s) => s.staff);
+  const staffCandidates = useGameStore((s) => s.staffCandidates);
+  const hireStaff = useGameStore((s) => s.hireStaff);
+  const fireStaff = useGameStore((s) => s.fireStaff);
+  const freeUpgradePending = useGameStore((s) => s.freeUpgradePending);
+  const claimFreeUpgrade = useGameStore((s) => s.claimFreeUpgrade);
   const newGame = useGameStore((s) => s.newGame);
   const lang = useGameStore((s) => s.lang);
   const setLang = useGameStore((s) => s.setLang);
+  const audio = useGameStore((s) => s.audio);
+  const setAudio = useGameStore((s) => s.setAudio);
   const premium = useMonetizationStore((s) => s.m.premium);
   const setPremium = useMonetizationStore((s) => s.setPremium);
   const requestBudget = useGameStore((s) => s.requestBudget);
   const budgetRequestUsed = useGameStore((s) => s.budgetRequestUsed);
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [adBusy, setAdBusy] = useState(false);
+  /** Lugar cuja lista de candidatos está aberta (null = todas fechadas). */
+  const [openRole, setOpenRole] = useState<StaffRole | null>(null);
 
   if (!state || !club) return <Screen><Body>{t('common.loading')}</Body></Screen>;
 
   const fin = state.finances[club.id]!;
+  const staffList = staff();
   const career = state.career;
   const net = weeklyNet(fin);
   const record = `${career.totalWins}V ${career.totalDraws}E ${career.totalLosses}D`;
@@ -103,7 +124,17 @@ export default function ClubScreen() {
               <Text style={styles.netLbl}>{t('fin.weeklyFlow')}</Text>
             </View>
           </View>
-          <RowKV k={t('fin.transferBudget')} v={money(fin.transferBudget)} />
+          {/* UM saldo, três destinos — não são carteiras separadas. */}
+          <Section title={t('fin.split.title')} />
+          <BalanceSplit fin={fin} />
+          <Text style={styles.boardHint}>
+            {t('fin.split.hint', { weeks: WAGE_RESERVE_WEEKS, share: Math.round(TRANSFER_SHARE * 100) })}
+          </Text>
+          <Text style={[styles.boardHint, cashWarning(fin) && { color: theme.colors.yellow, fontWeight: '700' }]}>
+            {cashWarning(fin)
+              ? t('fin.runway.short', { n: RUNWAY_WARNING_WEEKS })
+              : t('fin.runway', { n: Math.floor(Math.min(99, cashRunway(fin))) })}
+          </Text>
           <View style={styles.finSplit}>
             <View style={styles.finCol}>
               <Text style={styles.finColHead}>{t('club.section.income')}</Text>
@@ -123,11 +154,18 @@ export default function ClubScreen() {
 
         {/* INSTALAÇÕES — cartões com barra de nível */}
         <Section title={t('club.section.facilities')} />
+        {freeUpgradePending() ? (
+          <View style={styles.freeBanner}>
+            <Text style={styles.freeBannerText}>🎁 {t('facility.freeAvailable')}</Text>
+          </View>
+        ) : null}
         {FACILITY_TYPES.map((type) => {
+          const tier = state.leagues[club.leagueId]?.tier ?? 1;
           const level = club.facilities[type];
           const maxed = level >= FACILITY_MAX_LEVEL;
-          const cost = maxed ? 0 : facilityUpgradeCost(type, level);
+          const cost = maxed ? 0 : facilityUpgradeCost(type, level, tier);
           const affordable = !maxed && fin.balance >= cost;
+          const canFree = !maxed && freeUpgradePending();
           return (
             <View key={type} style={styles.facCard}>
               <View style={{ flex: 1 }}>
@@ -140,20 +178,133 @@ export default function ClubScreen() {
                   <Bar value={(level / FACILITY_MAX_LEVEL) * 100} color={theme.colors.blue} height={7} />
                 </View>
               </View>
-              <Pressable
-                disabled={!affordable}
-                onPress={() => {
-                  const r = upgrade(type);
-                  setFeedback(r.ok
-                    ? { kind: 'ok', text: t('club.upgraded', { name: t(`facility.${type}`), level: r.newLevel ?? level + 1, cost: money(r.cost ?? 0) }) }
-                    : r.error ? { kind: 'error', text: r.error } : null);
-                }}
-                style={[styles.facBtn, !affordable && styles.facBtnDisabled]}
-              >
-                <Text style={[styles.facBtnText, !affordable && { color: theme.colors.textDim }]}>
-                  {maxed ? t('facility.max') : money(cost)}
-                </Text>
-              </Pressable>
+              <View style={{ gap: 6, alignItems: 'flex-end' }}>
+                {canFree ? (
+                  <Pressable
+                    disabled={adBusy}
+                    onPress={async () => {
+                      if (adBusy) return;
+                      setAdBusy(true);
+                      const watched = await showRewarded();
+                      setAdBusy(false);
+                      if (!watched) { setFeedback({ kind: 'error', text: t('facility.freeFailed') }); return; }
+                      const r = claimFreeUpgrade(type);
+                      setFeedback(r.ok
+                        ? { kind: 'ok', text: t('club.upgraded', { name: t(`facility.${type}`), level: r.newLevel ?? level + 1, cost: money(0) }) }
+                        : r.error ? { kind: 'error', text: r.error } : null);
+                    }}
+                    style={[styles.freeBtn, adBusy && { opacity: 0.5 }]}
+                  >
+                    <Text style={styles.freeBtnText}>{adBusy ? t('facility.freeWatching') : `▶ ${t('facility.freeBtn')}`}</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  disabled={!affordable}
+                  onPress={() => {
+                    const r = upgrade(type);
+                    setFeedback(r.ok
+                      ? { kind: 'ok', text: t('club.upgraded', { name: t(`facility.${type}`), level: r.newLevel ?? level + 1, cost: money(r.cost ?? 0) }) }
+                      : r.error ? { kind: 'error', text: r.error } : null);
+                  }}
+                  style={[styles.facBtn, !affordable && styles.facBtnDisabled]}
+                >
+                  <Text style={[styles.facBtnText, !affordable && { color: theme.colors.textDim }]}>
+                    {maxed ? t('facility.max') : money(cost)}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          );
+        })}
+
+
+        {/* EQUIPA TÉCNICA — pessoas, não níveis. Somam-se às instalações. */}
+        <Section title={t('staff.title')} />
+        <Text style={styles.staffSubtitle}>{t('staff.subtitle')}</Text>
+        <Text style={styles.staffBill}>
+          {t('staff.wageBill', { amount: money(staffList.reduce((n, m) => n + m.wage, 0)) })}
+        </Text>
+        {STAFF_ROLES.map((role) => {
+          const member = staffList.find((m) => m.role === role) ?? null;
+          const open = openRole === role;
+          const candidates = open ? staffCandidates(role) : [];
+          return (
+            <View key={role} style={styles.staffCard}>
+              <View style={styles.staffHead}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.staffRole}>{t(`staff.role.${role}`)}</Text>
+                  <Text style={styles.staffEffect}>{t(`staff.effect.${role}`)}</Text>
+                </View>
+                <Pressable
+                  onPress={() => setOpenRole(open ? null : role)}
+                  style={[styles.staffToggle, open && styles.staffToggleOn]}>
+                  <Text style={[styles.staffToggleText, open && styles.staffToggleTextOn]}>
+                    {open ? '×' : t('staff.hire')}
+                  </Text>
+                </Pressable>
+              </View>
+
+              {member ? (
+                <View style={styles.staffMember}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.staffName}>{member.name}</Text>
+                    <Text style={styles.staffMeta}>
+                      {t('staff.ability')} {abilityTo100(member.ability)} · {money(member.wage)}/sem · {member.age}
+                    </Text>
+                    <View style={styles.staffBarWrap}>
+                      <Bar value={abilityTo100(member.ability)} color={theme.colors.green} height={6} />
+                    </View>
+                  </View>
+                  <Pressable
+                    onPress={() => {
+                      const r = fireStaff(member.id);
+                      setFeedback(r.ok
+                        ? { kind: 'ok', text: t('staff.fired', { name: member.name }) }
+                        : { kind: 'error', text: t(r.errorKey ?? '') });
+                    }}
+                    style={styles.staffFire}>
+                    <Text style={styles.staffFireText}>{t('staff.fire')}</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <Text style={styles.staffEmpty}>{t('staff.empty')}</Text>
+              )}
+
+              {open ? (
+                <View style={styles.staffCands}>
+                  <Text style={styles.staffCandsTitle}>{t('staff.candidates')}</Text>
+                  {candidates.length === 0 ? (
+                    <Text style={styles.staffEmpty}>{t('staff.noCandidates')}</Text>
+                  ) : candidates.map((c: StaffMember) => (
+                    <View key={c.id} style={styles.staffCandRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.staffName}>{c.name}</Text>
+                        <Text style={styles.staffMeta}>
+                          {t('staff.ability')} {abilityTo100(c.ability)} · {money(c.wage)}/sem · {c.age}
+                        </Text>
+                      </View>
+                      <Pressable
+                        onPress={() => {
+                          const r = hireStaff(c);
+                          if (r.ok) {
+                            setOpenRole(null);
+                            setFeedback({
+                              kind: 'ok',
+                              text: r.replaced
+                                ? t('staff.replaced', { name: r.replaced.name, newName: c.name })
+                                : t('staff.hired', { name: c.name }),
+                            });
+                          } else {
+                            setFeedback({ kind: 'error', text: tMsg({ key: r.errorKey ?? '', params: r.params }) });
+                          }
+                        }}
+                        style={styles.staffHireBtn}>
+                        <Text style={styles.staffHireText}>{t('staff.hire')}</Text>
+                      </Pressable>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
             </View>
           );
         })}
@@ -242,6 +393,61 @@ export default function ClubScreen() {
           ))}
         </View>
 
+        {/* SOM E VIBRAÇÃO — tudo desligável; o volume tem 5 passos, que chega
+            para um jogo de gestão e evita um slider só para isto. */}
+        <View style={styles.settingRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.settingName}>{t('club.sound')}</Text>
+            <Text style={styles.settingSub}>{t('club.soundSub')}</Text>
+          </View>
+          <Pressable
+            onPress={() => {
+              const on = !audio.sound;
+              setAudio({ sound: on });
+              if (on) playSound('click');
+            }}
+            style={[styles.settingBtn, audio.sound && styles.settingBtnDone]}
+          >
+            <Text style={styles.settingBtnText}>{audio.sound ? t('common.on') : t('common.off')}</Text>
+          </Pressable>
+        </View>
+
+        <Text style={styles.langLabel}>{t('club.volume')}</Text>
+        <View style={styles.langRow}>
+          {VOLUME_STEPS.map((v) => {
+            const on = Math.abs(audio.volume - v) < 0.01;
+            return (
+              <Pressable
+                key={v}
+                disabled={!audio.sound}
+                onPress={() => { setAudio({ volume: v }); if (v > 0) playSound('click'); }}
+                style={[styles.langBtn, on && styles.langBtnOn, !audio.sound && styles.langBtnOff]}
+              >
+                <Text style={[styles.langBtnText, on && audio.sound && styles.langBtnTextOn]}>
+                  {Math.round(v * 100)}%
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <View style={styles.settingRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.settingName}>{t('club.haptics')}</Text>
+            <Text style={styles.settingSub}>{t('club.hapticsSub')}</Text>
+          </View>
+          <Pressable
+            onPress={() => {
+              const on = !audio.haptics;
+              setAudio({ haptics: on });
+              if (on) haptic('medium'); // amostra imediata do que se acabou de ligar
+            }}
+            style={[styles.settingBtn, audio.haptics && styles.settingBtnDone]}
+          >
+            <Text style={styles.settingBtnText}>{audio.haptics ? t('common.on') : t('common.off')}</Text>
+          </Pressable>
+        </View>
+
         <View style={styles.settingRow}>
           <View style={{ flex: 1 }}>
             <Text style={styles.settingName}>{t('club.premiumName')}</Text>
@@ -265,7 +471,7 @@ export default function ClubScreen() {
             onPress={() => {
               if (!confirmReset) { setConfirmReset(true); return; }
               setConfirmReset(false);
-              newGame({ managerName: '' }); // volta ao onboarding; auto-save trata do resto
+              newGame({ managerName: '', useBase: true }); // volta ao onboarding; auto-save trata do resto
             }}
             style={[styles.settingBtn, confirmReset && styles.settingBtnDanger]}
           >
@@ -305,6 +511,44 @@ function FinLine({ k, v, up }: { k: string; v: number; up?: boolean }) {
 }
 
 const styles = StyleSheet.create({
+  staffSubtitle: { color: theme.colors.textDim, fontSize: 12, marginBottom: 2 },
+  staffBill: { color: theme.colors.text, fontSize: 12, fontWeight: '700', marginBottom: 8 },
+  staffCard: {
+    backgroundColor: theme.colors.surface, borderRadius: 12, padding: 12, marginBottom: 8,
+    borderWidth: 1, borderColor: theme.colors.border,
+  },
+  staffHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  staffRole: { color: theme.colors.text, fontSize: 14, fontWeight: '700' },
+  staffEffect: { color: theme.colors.textDim, fontSize: 11, marginTop: 1 },
+  staffToggle: {
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8,
+    backgroundColor: theme.colors.accent + '22', borderWidth: 1, borderColor: theme.colors.accent,
+  },
+  staffToggleOn: { backgroundColor: theme.colors.border, borderColor: theme.colors.border },
+  staffToggleText: { color: theme.colors.accent, fontSize: 12, fontWeight: '700' },
+  staffToggleTextOn: { color: theme.colors.textDim },
+  staffMember: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
+  staffName: { color: theme.colors.text, fontSize: 13, fontWeight: '600' },
+  staffMeta: { color: theme.colors.textDim, fontSize: 11, marginTop: 1 },
+  staffBarWrap: { marginTop: 5, maxWidth: 160 },
+  staffEmpty: { color: theme.colors.textDim, fontSize: 12, fontStyle: 'italic', marginTop: 8 },
+  staffFire: {
+    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8,
+    borderWidth: 1, borderColor: theme.colors.red,
+  },
+  staffFireText: { color: theme.colors.red, fontSize: 11, fontWeight: '700' },
+  staffCands: {
+    marginTop: 10, paddingTop: 10,
+    borderTopWidth: 1, borderTopColor: theme.colors.border,
+  },
+  staffCandsTitle: { color: theme.colors.textDim, fontSize: 11, fontWeight: '700', marginBottom: 6 },
+  staffCandRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
+  staffHireBtn: {
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8,
+    backgroundColor: theme.colors.green,
+  },
+  staffHireText: { color: '#04240f', fontSize: 12, fontWeight: '800' },
+
   // ---- Hero / cartões ----
   hero: {
     borderRadius: theme.radius.md, padding: theme.spacing(1.5), overflow: 'hidden',
@@ -352,6 +596,17 @@ const styles = StyleSheet.create({
   facHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   facLvlTag: { color: theme.colors.blue, fontSize: theme.font.small, fontWeight: '800' },
   facBarWrap: { marginTop: 8 },
+  freeBanner: {
+    backgroundColor: 'rgba(55,194,90,0.14)', borderWidth: 1, borderColor: theme.colors.green,
+    borderRadius: theme.radius.sm, paddingVertical: theme.spacing(0.9), paddingHorizontal: theme.spacing(1.25),
+    marginBottom: theme.spacing(0.75),
+  },
+  freeBannerText: { color: theme.colors.green, fontSize: theme.font.small, fontWeight: '800' },
+  freeBtn: {
+    backgroundColor: theme.colors.green, borderRadius: theme.radius.sm,
+    paddingHorizontal: theme.spacing(1.25), paddingVertical: theme.spacing(1), minWidth: 88, alignItems: 'center',
+  },
+  freeBtnText: { color: '#04170c', fontSize: theme.font.small, fontWeight: '800' },
 
   // ---- Direção ----
   confHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 },
@@ -401,6 +656,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: theme.colors.border, alignItems: 'center', backgroundColor: theme.colors.surface,
   },
   langBtnOn: { borderColor: theme.colors.blue, backgroundColor: theme.colors.surfaceAlt },
+  langBtnOff: { opacity: 0.4 },
   langBtnText: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700' },
   langBtnTextOn: { color: theme.colors.blue },
   settingName: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600' },

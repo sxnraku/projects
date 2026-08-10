@@ -4,17 +4,20 @@
  *  - "Nova Carreira" gera um mundo fresco e leva ao onboarding.
  * As abas só ficam acessíveis DEPOIS de passar por aqui (ver guarda em (tabs)/_layout).
  */
-import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useGameStore } from '../src/state/gameStore';
 import { useT } from '../src/ui/i18n';
 import { LANGS, LANG_LABELS } from '../src/core/i18n';
-import { NameStyle } from '../src/core/game';
+import { COUNTRIES } from '../src/core/data/world/playerIndex';
+import { CountryFlag } from '../src/ui/CountryFlag';
 import { theme } from '../src/ui/theme';
 import { Button, Screen } from './components';
 
-const NAME_STYLES: NameStyle[] = ['serious', 'meme', 'mixed'];
+// Portugal primeiro (default cómodo), depois alfabético (COUNTRIES já vem ordenado).
+const COUNTRY_LIST = [...COUNTRIES].sort((a, b) =>
+  a.slug === 'portugal' ? -1 : b.slug === 'portugal' ? 1 : 0);
 
 export default function Start() {
   const t = useT();
@@ -26,14 +29,25 @@ export default function Start() {
   const setLang = useGameStore((s) => s.setLang);
 
   const [confirmNew, setConfirmNew] = useState(false);
-  const [nameStyle, setNameStyle] = useState<NameStyle>('serious');
+  const [pickCountry, setPickCountry] = useState(false);
+  const [query, setQuery] = useState('');
 
   const career = state && state.meta.managerName !== '' ? state : null;
   const clubName = career ? career.clubs[career.meta.managedClubId]?.name ?? '' : '';
 
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? COUNTRY_LIST.filter((c) => c.country.toLowerCase().includes(q)) : COUNTRY_LIST;
+  }, [query]);
+
   const doContinue = () => { passMenu(); router.replace('/' as never); };
-  const doNew = () => { newGame({ managerName: '', nameStyle }); passMenu(); router.replace('/onboarding' as never); };
-  const onNewPressed = () => { if (career) setConfirmNew(true); else doNew(); };
+  const doNew = (country: string) => {
+    newGame({ managerName: '', useBase: true, country });
+    passMenu();
+    router.replace('/onboarding' as never);
+  };
+  const onNewPressed = () => { if (career) setConfirmNew(true); else openPicker(); };
+  const openPicker = () => { setConfirmNew(false); setQuery(''); setPickCountry(true); };
 
   return (
     <Screen edges={['left', 'right', 'bottom']}>
@@ -67,23 +81,11 @@ export default function Start() {
                 <Button label={t('common.cancel')} variant="ghost" onPress={() => setConfirmNew(false)} />
               </View>
               <View style={{ flex: 1 }}>
-                <Button label={t('start.new')} onPress={doNew} />
+                <Button label={t('start.new')} onPress={openPicker} />
               </View>
             </View>
           </View>
         )}
-      </View>
-
-      <View style={styles.langBlock}>
-        <Text style={styles.langLabel}>{t('nameStyle.label')}</Text>
-        <View style={styles.langRow}>
-          {NAME_STYLES.map((s) => (
-            <Pressable key={s} onPress={() => setNameStyle(s)}
-              style={[styles.langBtn, nameStyle === s && styles.langBtnOn]}>
-              <Text style={[styles.langBtnText, nameStyle === s && styles.langBtnTextOn]}>{t(`nameStyle.${s}`)}</Text>
-            </Pressable>
-          ))}
-        </View>
       </View>
 
       <View style={styles.langBlock}>
@@ -99,6 +101,39 @@ export default function Start() {
       </View>
 
       <Text style={styles.footer}>RakuLabs</Text>
+
+      {/* SELETOR DE PAÍS — escolhe onde começar a carreira (começas na divisão mais baixa) */}
+      <Modal visible={pickCountry} transparent animationType="slide" onRequestClose={() => setPickCountry(false)}>
+        <View style={styles.pickBackdrop}>
+          <View style={styles.pickSheet}>
+            <Text style={styles.pickTitle}>{t('start.chooseCountry')}</Text>
+            <TextInput
+              style={styles.search}
+              placeholder={t('start.searchCountry')}
+              placeholderTextColor={theme.colors.textDim}
+              value={query}
+              onChangeText={setQuery}
+              autoCorrect={false}
+            />
+            <ScrollView style={{ maxHeight: 380 }} showsVerticalScrollIndicator={false}>
+              {filtered.map((c) => (
+                <Pressable key={c.slug} style={styles.cRow} onPress={() => { setPickCountry(false); doNew(c.slug); }}>
+                  <CountryFlag slug={c.slug} size={26} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.cName} numberOfLines={1}>{c.country}</Text>
+                    <Text style={styles.cSub}>{t('start.countryMeta', { div: c.tiers, teams: c.teams })}</Text>
+                  </View>
+                  <Text style={styles.cGo}>›</Text>
+                </Pressable>
+              ))}
+              {filtered.length === 0 ? <Text style={styles.cEmpty}>{t('start.noCountry')}</Text> : null}
+            </ScrollView>
+            <Pressable style={styles.pickCancel} onPress={() => setPickCountry(false)}>
+              <Text style={styles.pickCancelText}>{t('common.cancel')}</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
@@ -139,4 +174,27 @@ const styles = StyleSheet.create({
   langBtnTextOn: { color: theme.colors.blue },
 
   footer: { color: theme.colors.textDim, fontSize: theme.font.small, textAlign: 'center', letterSpacing: 2, paddingBottom: theme.spacing(1) },
+
+  // Seletor de país
+  pickBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'flex-end' },
+  pickSheet: {
+    backgroundColor: theme.colors.surface, borderTopLeftRadius: 18, borderTopRightRadius: 18,
+    borderWidth: 1, borderColor: theme.colors.border, padding: theme.spacing(2), paddingBottom: theme.spacing(3),
+  },
+  pickTitle: { color: theme.colors.accent, fontSize: theme.font.h2, fontWeight: '900', textAlign: 'center', marginBottom: theme.spacing(1) },
+  search: {
+    backgroundColor: theme.colors.bg, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.sm,
+    paddingHorizontal: theme.spacing(1.25), paddingVertical: theme.spacing(1), color: theme.colors.text,
+    fontSize: theme.font.body, marginBottom: theme.spacing(1),
+  },
+  cRow: {
+    flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1.25),
+    paddingVertical: theme.spacing(1), borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border,
+  },
+  cName: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '700' },
+  cSub: { color: theme.colors.textDim, fontSize: theme.font.small, marginTop: 1 },
+  cGo: { color: theme.colors.textDim, fontSize: 22, fontWeight: '800' },
+  cEmpty: { color: theme.colors.textDim, textAlign: 'center', paddingVertical: theme.spacing(2) },
+  pickCancel: { alignItems: 'center', paddingTop: theme.spacing(1.5) },
+  pickCancelText: { color: theme.colors.textDim, fontSize: theme.font.body, fontWeight: '700' },
 });

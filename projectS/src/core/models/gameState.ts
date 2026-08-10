@@ -1,6 +1,7 @@
 import { CareerState, initialCareer } from '../career/career';
 import { NewsItem } from '../news/news';
 import { CupState, emptyCup } from './cupTypes';
+import { emptyHistory } from './history';
 import { InboxItem } from './inbox';
 import { Club } from './club';
 import { Finance } from './finance';
@@ -46,6 +47,27 @@ export interface GameState {
 
   // Caixa de entrada — propostas recebidas e outras decisões pendentes
   inbox: InboxItem[];
+
+  /**
+   * MUNDO DE FUNDO — todas as ligas dos OUTROS países, simuladas de forma barata
+   * (só classificações + força, sem jogadores no estado). Opcional: só existe em
+   * jogos com base FIXA (useBase). Ver src/core/game/background.ts.
+   */
+  background?: import('../game/background').BackgroundWorld;
+
+  /**
+   * PROVAS EUROPEIAS (modelo suíço) — Champions/Europa/Conference + Supertaça da
+   * época. Construído no rollover conforme a qualificação; transitório por época.
+   * Opcional: só em jogos com base fixa (useBase). Ver src/core/europe.
+   */
+  europe?: import('../europe/types').EuropeState;
+
+  /**
+   * MEMÓRIA DO MUNDO — campeões, melhores marcadores e vencedores de provas, de
+   * todas as épocas já jogadas. Blob próprio (tabela `history`), opcional para
+   * os saves anteriores carregarem sem migração. Ver `models/history.ts`.
+   */
+  history?: import('./history').WorldHistory;
 }
 
 /** Metadados da partida em curso. */
@@ -82,5 +104,6 @@ export function emptyGameState(meta: GameMeta): GameState {
     news: [],
     cup: emptyCup(),
     inbox: [],
+    history: emptyHistory(),
   };
 }

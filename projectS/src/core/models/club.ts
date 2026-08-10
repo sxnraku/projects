@@ -38,4 +38,12 @@ export interface Club {
   // Plantel: ids dos jogadores. A fonte de verdade é Player.clubId;
   // esta lista é um índice derivado para acesso rápido ao plantel.
   squad: string[];
+
+  /**
+   * Clube ESTRANGEIRO temporário, materializado só para o clube gerido o
+   * enfrentar nas provas europeias (ver src/core/europe). É removido no fim da
+   * campanha. Os varrimentos de meia-época (treino, mínimos de plantel, mercado)
+   * saltam-no. Ausente/false = clube normal.
+   */
+  european?: boolean;
 }

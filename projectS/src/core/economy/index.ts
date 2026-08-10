@@ -1,5 +1,7 @@
 // Barrel do módulo económico.
 export * from './marketValue';
+export * from './clauses';
+export * from './prestige';
 export * from './transfers';
 export * from './contracts';
 export * from './finances';

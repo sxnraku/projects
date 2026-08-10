@@ -18,6 +18,7 @@ export const NewsType = {
   CUP: 'CUP',
   CLUB: 'CLUB',
   SEASON: 'SEASON',
+  EURO: 'EURO', // provas europeias
 } as const;
 export type NewsType = (typeof NewsType)[keyof typeof NewsType];
 

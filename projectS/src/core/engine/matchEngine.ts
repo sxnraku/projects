@@ -55,10 +55,15 @@ interface Sim {
   awayRate: number;
 }
 
-/** Segunda parte com tática alterada (substituições + mentalidade/ritmo) para um lado. */
-export interface HalftimeChange {
+/**
+ * Mudança de tática (substituições + mentalidade/ritmo) para um lado, a entrar
+ * em vigor A PARTIR do minuto seguinte a `minute` (45 = intervalo). Podem
+ * empilhar-se várias ao longo do jogo (subs ao 45', depois ao 60', …).
+ */
+export interface TacticChange {
   side: Side;
   tactic: Tactic;
+  minute: number;
 }
 
 function buildSide(
@@ -101,12 +106,12 @@ function pickWeighted(rng: Rng, pool: { id: string; weight: number }[]): string 
 }
 
 /**
- * Substitui a tática de um lado ao intervalo: recalcula força e conjuntos a
+ * Substitui a tática de um lado num dado momento: recalcula força e conjuntos a
  * partir do novo onze (substituições + mentalidade/ritmo), MANTENDO golos/remates/
  * cartões acumulados. Jogadores expulsos ficam de fora; os que entram ganham
- * ficha de estatística. Não consome RNG → a 1ª parte permanece idêntica.
+ * ficha de estatística. Não consome RNG → os minutos já jogados permanecem iguais.
  */
-function applyHalftime(sim: Sim, side: SideCtx, tactic: Tactic, players: Record<string, Player>): void {
+function applyTacticChange(sim: Sim, side: SideCtx, tactic: Tactic, players: Record<string, Player>): void {
   const fresh = buildSide(side.clubId, side.side, computeTeamStrength(tactic, players), tactic, players);
   // Aplica vantagem de casa (a força é recalculada de raiz).
   if (side.side === 'HOME') { fresh.strength.attack *= CFG.homeAdvantage; fresh.strength.defence *= CFG.homeAdvantage; }
@@ -268,21 +273,28 @@ function finalize(homeClubId: string, awayClubId: string, seed: number, sim: Sim
 /**
  * Simula uma partida completa de forma determinística.
  *
- * Se `halftime` for dado, a 2ª parte (46-90) desse lado usa a nova tática
- * (substituições + mentalidade/ritmo). A 1ª parte (1-45) é SEMPRE idêntica à
- * simulação sem `halftime` — a mesma seed e a mesma tática até ao 45' garantem-no.
+ * Cada mudança em `changes` (ordenada por minuto) troca a tática de um lado a
+ * partir do minuto seguinte. Os minutos ANTES de uma mudança reproduzem-se
+ * SEMPRE iguais à simulação sem essa mudança — a mesma seed e a mesma tática até
+ * ao ponto de corte garantem-no (aplicar a mudança não consome RNG). Assim, um
+ * treinador pode substituir ao 45', depois ao 60', mantendo o que já viu.
  */
 export function simulateMatch(
   homeClubId: string, awayClubId: string, homeTactic: Tactic, awayTactic: Tactic,
-  players: Record<string, Player>, baseSeed: number, halftime?: HalftimeChange,
+  players: Record<string, Player>, baseSeed: number, changes?: TacticChange[],
 ): MatchResult {
   const seed = deriveSeed(baseSeed, homeClubId, awayClubId);
   const sim = buildSim(homeClubId, awayClubId, homeTactic, awayTactic, players, seed);
-  simulateMinutes(sim, 1, 45);
-  if (halftime) {
-    applyHalftime(sim, halftime.side === 'HOME' ? sim.home : sim.away, halftime.tactic, players);
+  const ordered = (changes ?? [])
+    .filter((c) => c.minute >= 1 && c.minute < CFG.matchMinutes)
+    .sort((a, b) => a.minute - b.minute);
+  let cursor = 0;
+  for (const ch of ordered) {
+    simulateMinutes(sim, cursor + 1, ch.minute); // [cursor+1, minute] — no-op se já passámos
+    applyTacticChange(sim, ch.side === 'HOME' ? sim.home : sim.away, ch.tactic, players);
     recomputeRates(sim);
+    cursor = Math.max(cursor, ch.minute);
   }
-  simulateMinutes(sim, 46, 90);
+  simulateMinutes(sim, cursor + 1, CFG.matchMinutes);
   return finalize(homeClubId, awayClubId, seed, sim);
 }

@@ -1,9 +1,13 @@
 import {
   CUP_EVERY_LEAGUE_ROUNDS,
+  displayOverall,
+  effectiveOverallFine,
   Fixture,
   GameState,
   isRoundComplete,
+  LineupSlot,
   naturalOverall,
+  weeklyNet,
 } from '../models';
 import { generateCup, playCupRound } from '../cup';
 import { addNews } from '../news';
@@ -12,13 +16,22 @@ import { matchFatigue } from '../engine/fatigue';
 import {
   annualBudgetReset,
   applyInsolvency,
+  applySeasonReputation,
   applyWeeklyFinances,
+  bonusesDue,
+  cashWarning,
+  computeMarketValue,
+  countryEconFactor,
   leaguePrize,
   matchdayGate,
+  moveMoney,
   processContractExpiries,
   promotionPrize,
+  realignReputationOnMove,
+  refreshMarketValues,
   recalcIncome,
   recalcUpkeep,
+  seasonReputationDelta,
 } from '../economy';
 import {
   emptyStandings,
@@ -26,24 +39,43 @@ import {
   generateSchedule,
   playRound,
   processPromotions,
+  PROMOTED_PER_TIER,
+  RELEGATED_PER_TIER,
   sortStandings,
   TierMove,
   transferWindow,
 } from '../season';
-import { evaluateSeason, SeasonRecord, updateConfidence } from '../career';
-import { trainPlayer, TrainingFocus } from '../training';
+import { evaluateSeason, SeasonRecord, updateConfidence, updateManagerReputation } from '../career';
+import {
+  fadePotential, individualFocus, INDIVIDUAL_GROWTH_BONUS,
+  tickRetraining, trainPlayer, TrainingFocus,
+} from '../training';
+import { fitnessBonus, injuryDurationFactor, staffWageBill, trainingBonus } from '../staff';
 import { setManagedObjective } from './newGame';
+import { simulateBgWeek, resetBgSeason } from './background';
+import {
+  advanceEuropeMatchday, buildEuropeCampaign, dematerializeEurope, europeInProgress,
+  qualifyNextSeason, retargetManagedEurope, setupSuperCup, EuroFixture,
+  evolveCoefficients, coefficientRanking, EURO_MATCHDAYS,
+} from '../europe';
 import { ensureMinimumSquad, processYouthAndRetirements, YouthIntakeResult } from './youth';
 import { returnExpiredLoans, ReturnedLoan } from './loans';
-import { ensureValidLineup } from './lineup';
+import { ensureValidLineup, refreshAiLineups } from './lineup';
+import { pruneFreeAgents, rebuildAiSquads } from './aiSquads';
 import {
   blockingReason,
   generateIncomingBids,
   generatePlayerRequests,
+  ensureFinancialCrisis,
   generateRenewalReminders,
   pruneInbox,
+  triggerReleaseClauses,
 } from './inbox';
 import { pruneOffers, resolveDueOffers } from './offers';
+import { tickPromises } from './relations';
+import { archivePlayerSeasons, archiveSeason } from './history';
+import { applyStaffCost, ensureStaff } from './staffOps';
+import { aiSignFreeAgents, freeAgentRng, resolvePreContracts } from './freeAgents';
 import { BOSMAN_WINDOW_ROUNDS, roundsRemaining, runBosmanApproaches } from './matchday';
 import { tickScouting } from './scouting';
 
@@ -52,11 +84,34 @@ export function managedLeagueId(state: GameState): string {
   return state.clubs[state.meta.managedClubId]?.leagueId ?? Object.keys(state.leagues)[0]!;
 }
 
+/**
+ * A PRÓXIMA semana é europeia? (nessas não se joga a liga nem a Taça)
+ *
+ * Vive aqui, exportado, para haver UMA definição só: o `advanceWeek` decide o
+ * que simular e a UI avisa o utilizador com exatamente o mesmo critério. Se
+ * fossem duas cópias, mais cedo ou mais tarde divergiam e o aviso mentia.
+ *
+ * A cadência espalha as jornadas europeias pelo calendário doméstico; mas se o
+ * campeonato acabar primeiro, todas as semanas seguintes são europeias até a
+ * prova terminar. Sem essa segunda condição, acabada a liga o jogo dava a época
+ * por encerrada e as eliminatórias por disputar eram resolvidas em silêncio no
+ * rollover — o utilizador passava a fase de liga, ficava sem jogos e via mais
+ * tarde que "duas equipas quaisquer foram à final".
+ */
+export function isEuroWeek(state: GameState): boolean {
+  const eu = state.europe;
+  if (!eu || !europeInProgress(eu)) return false;
+  const mLeagueId = managedLeagueId(state);
+  const next = nextRound(state, mLeagueId);
+  if (next === null) return true; // campeonato acabado: só falta a Europa
+  return next - 1 >= (eu.euroRound + 1) * eu.cadence;
+}
+
 /** Uma linha das "notas do plantel" no resumo da jornada (chave + params). */
 export interface WeekNote {
   key: string;
   params?: import('../i18n').MsgParams;
-  kind: 'INJURY' | 'GROWTH' | 'TRANSFER' | 'INFO';
+  kind: 'INJURY' | 'GROWTH' | 'TRANSFER' | 'INFO' | 'FINANCE';
 }
 
 /**
@@ -94,6 +149,19 @@ export interface WeekResult {
   seasonEnded: boolean;
   confidence: number; // confiança da direção após a jornada
   report: WeekReport | null; // balanço da semana do clube gerido
+  /**
+   * Jogos JOGÁVEIS do clube gerido nesta semana, por ordem de disputa: primeiro a
+   * noite europeia (se houver), depois o jogo da liga. A UI reproduz-os em fila.
+   */
+  managedMatches: Fixture[];
+}
+
+/** Converte um jogo europeu num Fixture (para injúrias/estatísticas/UI de jogo). */
+function euroToFixture(ef: EuroFixture): Fixture {
+  return {
+    id: ef.id, leagueId: `euro_${ef.comp}`, round: ef.matchday,
+    homeClubId: ef.homeId, awayClubId: ef.awayId, result: ef.result,
+  };
 }
 
 /** Próxima jornada por simular numa liga. Null se a época dessa liga acabou. */
@@ -123,8 +191,15 @@ export function advanceWeek(
 ): WeekResult {
   const mLeagueId = managedLeagueId(state);
   const managedId = state.meta.managedClubId;
+  // Equipa técnica: cria a inicial se ainda não existir (saves antigos / clube
+  // novo) e repõe a despesa semanal antes de as finanças correrem.
+  ensureStaff(state);
+  applyStaffCost(state);
   let managedFixtures: Fixture[] = [];
   let managedRound = 0;
+  /** Jornada de liga a MOSTRAR: numa semana europeia a liga não avança, mas o
+   *  balanço e as notícias continuam a precisar de um número coerente. */
+  let displayRound = 0;
   const allPlayed: Fixture[] = [];
   const homeClubsThisWeek = new Set<string>();
   const playedClubs = new Set<string>();
@@ -132,17 +207,32 @@ export function advanceWeek(
   // Dados recolhidos ao longo da semana para o relatório final.
   const notes: WeekNote[] = [];
   let managedGate = { attendance: 0, revenue: 0 };
+  /** Quanto o clube gerido não conseguiu pagar esta semana (0 = fechou as contas). */
+  let managedShortfall = 0;
   // Overall antes do treino, para detetar quem evoluiu esta semana.
+  //
+  // Guarda-se o valor JÁ NA ESCALA DO ECRÃ (0-100). Antes guardava-se o inteiro
+  // interno e a notícia fazia `inteiro * 5`, ou seja arredondava duas vezes: um
+  // jogador em 19.6 era anunciado como "atingiu 100" quando a ficha dele dizia
+  // 98, e o utilizador ia lá ver e não tinha subido nada.
   const overallBefore = new Map<string, number>();
   for (const id of state.clubs[managedId]?.squad ?? []) {
     const p = state.players[id];
-    if (p) overallBefore.set(id, naturalOverall(p));
+    if (p) overallBefore.set(id, displayOverall(p));
   }
 
-  // 0. Suspensões: quem está suspenso falha esta jornada. Tira-o do onze (troca
-  //    por um suplente apto) e desconta um jogo de suspensão. Aplica-se a todos
-  //    os clubes (a IA também cumpre castigos).
+  // 0-pré. A IA escolhe o melhor onze COM ENERGIA para esta jornada — a rotação
+  //        que o utilizador faz manualmente. Antes das suspensões, que mexem no
+  //        onze já escolhido.
+  refreshAiLineups(state);
+
+  // 0. Suspensões: quem está suspenso falha ESTA jornada. Entra o MELHOR suplente
+  //    apto na posição — mas a troca é TRANSITÓRIA: o titular volta ao seu lugar no
+  //    fim da semana (senão ficava fora para sempre, mesmo após cumprir o castigo).
+  //    Aplica-se a todos os clubes (a IA também cumpre castigos).
+  const suspensionSwaps: Array<{ slot: LineupSlot; original: string }> = [];
   for (const club of Object.values(state.clubs)) {
+    if (club.european) continue; // clube europeu temporário — não entra na época doméstica
     const tactic = state.tactics[club.id];
     for (const id of club.squad) {
       const p = state.players[id];
@@ -151,19 +241,31 @@ export function advanceWeek(
         const slot = tactic.lineup.find((s) => s.playerId === id);
         if (slot) {
           const inLineup = new Set(tactic.lineup.map((s) => s.playerId));
-          const sub = club.squad.find((bid) => {
+          let bestSub: string | null = null;
+          let bestScore = -1;
+          for (const bid of club.squad) {
             const b = state.players[bid];
-            return !!b && !inLineup.has(bid) && b.condition.status !== 'INJURED' && (b.condition.suspended ?? 0) === 0;
-          });
-          if (sub) slot.playerId = sub;
+            if (!b || inLineup.has(bid) || b.condition.status !== 'AVAILABLE' || (b.condition.suspended ?? 0) > 0) continue;
+            const score = effectiveOverallFine(b, slot.position) * (0.65 + 0.35 * (b.condition.fitness / 100));
+            if (score > bestScore) { bestScore = score; bestSub = bid; }
+          }
+          if (bestSub) { suspensionSwaps.push({ slot, original: id }); slot.playerId = bestSub; }
         }
       }
       p.condition.suspended = (p.condition.suspended ?? 0) - 1;
     }
   }
 
-  // 1. Simular a próxima jornada de cada divisão.
-  for (const league of Object.values(state.leagues)) {
+  // SEMANA EUROPEIA? A campanha europeia tem semana PRÓPRIA: numa semana de
+  // Europa não se joga a liga (nem a Taça). Antes acumulava-se tudo na mesma
+  // semana e o utilizador levava com dois jogos seguidos ao carregar uma vez em
+  // "iniciar partida" — e o calendário lia-se como uma salada.
+  const leagueRoundsPlayed = (nextRound(state, mLeagueId) ?? (state.schedules[mLeagueId]?.totalRounds ?? 0) + 1) - 1;
+  const euroWeek = isEuroWeek(state);
+  displayRound = leagueRoundsPlayed;
+
+  // 1. Simular a próxima jornada de cada divisão (exceto em semana europeia).
+  for (const league of euroWeek ? [] : Object.values(state.leagues)) {
     const schedule = state.schedules[league.id];
     const table = state.standings[league.id];
     if (!schedule || !table) continue;
@@ -186,8 +288,12 @@ export function advanceWeek(
     if (league.id === mLeagueId) {
       managedFixtures = played;
       managedRound = round;
+      displayRound = round;
     }
   }
+
+  // 1a. Ligas de FUNDO (resto do mundo) — uma ronda barata por semana.
+  if (state.background) simulateBgWeek(state.background, state.meta.rngSeed, state.meta.season);
 
   // 1b. Taça — eliminatórias distribuídas uniformemente pela época
   // (intervalo dinâmico: garante que todas cabem antes da última jornada).
@@ -198,6 +304,7 @@ export function advanceWeek(
     : CUP_EVERY_LEAGUE_ROUNDS;
   let cupFixtures: Fixture[] = [];
   if (
+    !euroWeek &&
     managedRound > 0 &&
     managedRound % cupInterval === 0 &&
     state.cup.season === state.meta.season &&
@@ -208,6 +315,27 @@ export function advanceWeek(
       allPlayed.push(fx);
       playedClubs.add(fx.homeClubId);
       playedClubs.add(fx.awayClubId);
+    }
+  }
+
+  // 1b-bis. Provas EUROPEIAS — uma jornada europeia à cadência definida. Os jogos
+  // do clube gerido são a motor completo (jogáveis); os outros são placar barato.
+  let euroFixtures: Fixture[] = [];
+  if (euroWeek && state.europe) {
+    for (const ef of advanceEuropeMatchday(state)) {
+      const fx = euroToFixture(ef);
+      allPlayed.push(fx);
+      playedClubs.add(fx.homeClubId);
+      playedClubs.add(fx.awayClubId);
+      euroFixtures.push(fx);
+      const r = ef.result;
+      if (r) {
+        const isHome = fx.homeClubId === managedId;
+        const mine = isHome ? r.home.goals : r.away.goals;
+        const theirs = isHome ? r.away.goals : r.home.goals;
+        const opp = state.clubs[isHome ? fx.awayClubId : fx.homeClubId]?.name ?? '';
+        addNews(state, 'EURO', 'euro.news.result', { opp, score: `${mine}-${theirs}` });
+      }
     }
   }
 
@@ -222,11 +350,18 @@ export function advanceWeek(
       p.condition.status = 'INJURED';
       p.condition.injuryDaysRemaining = rng.int(7, 28);
       if (p.clubId === managedId) {
-        addNews(state, 'INJURY', 'news.injury', { player: `${p.firstName} ${p.lastName}`, days: p.condition.injuryDaysRemaining });
+        // Em DIAS a informação era inútil: "17 dias" com um departamento médico
+        // bom são 2 jornadas, com um mau são 3 — e o utilizador só conta jogos.
+        // Mostra-se as duas coisas, com as jornadas calculadas pela instalação.
+        const club = state.clubs[managedId];
+        const perWeek = 7 + ((club?.facilities.medical ?? 1) - 1) * 2;
+        const rounds = Math.max(1, Math.ceil(p.condition.injuryDaysRemaining / perWeek));
+        const params = { player: `${p.firstName} ${p.lastName}`, days: p.condition.injuryDaysRemaining, rounds };
+        addNews(state, 'INJURY', 'news.injury', params);
         notes.push({
           kind: 'INJURY',
           key: 'note.injury',
-          params: { player: p.lastName, days: p.condition.injuryDaysRemaining },
+          params: { player: p.lastName, days: p.condition.injuryDaysRemaining, rounds },
         });
       }
     }
@@ -243,8 +378,34 @@ export function advanceWeek(
       const s = ps[pid]!;
       if (s.goals) p.condition.seasonGoals = (p.condition.seasonGoals ?? 0) + s.goals;
       if (s.assists) p.condition.seasonAssists = (p.condition.seasonAssists ?? 0) + s.assists;
+      if (s.rating) { // média de notas da época (onze da época)
+        p.condition.seasonRating = (p.condition.seasonRating ?? 0) + s.rating;
+        p.condition.seasonApps = (p.condition.seasonApps ?? 0) + 1;
+      }
       if (s.red) p.condition.suspended = Math.max(p.condition.suspended ?? 0, 1); // vermelho → falha o jogo seguinte
     }
+  }
+
+  // 1c-ter. PRÉMIOS DE CONTRATO (por jogo e por golo). É aqui que a parte
+  // variável do salário se paga: sai barata quando o jogador é suplente e cara
+  // quando decide jogos — exatamente o risco que se aceitou ao negociar.
+  let bonusPaid = 0;
+  for (const fx of allPlayed) {
+    const ps = fx.result?.playerStats;
+    if (!ps) continue;
+    for (const pid in ps) {
+      const p = state.players[pid];
+      if (!p?.clauses || !p.clubId) continue;
+      const due = bonusesDue(p.clauses, ps[pid]!.goals, true);
+      if (due <= 0) continue;
+      const fin = state.finances[p.clubId];
+      if (!fin) continue;
+      moveMoney(fin, -due);
+      if (p.clubId === managedId) bonusPaid += due;
+    }
+  }
+  if (bonusPaid > 0) {
+    notes.push({ kind: 'FINANCE', key: 'note.bonusPaid', params: { v: bonusPaid.toLocaleString('pt-PT') } });
   }
 
   // 1d. Notícia com o resultado do clube gerido.
@@ -257,7 +418,7 @@ export function advanceWeek(
     const opp = state.clubs[isHome ? myFx.awayClubId : myFx.homeClubId]?.name ?? '';
     const key = mine > theirs ? 'news.match.win' : mine === theirs ? 'news.match.draw' : 'news.match.loss';
     addNews(state, 'MATCH', key, {
-      club: state.clubs[managedId]?.shortName ?? '', opp, score: `${mine}-${theirs}`, round: managedRound,
+      club: state.clubs[managedId]?.shortName ?? '', opp, score: `${mine}-${theirs}`, round: displayRound,
     });
   }
 
@@ -297,12 +458,23 @@ export function advanceWeek(
     }
   }
   for (const club of Object.values(state.clubs)) {
+    if (club.european) continue;
     for (const id of club.squad) {
       if (lineupPlayedIds.has(id)) continue;
       const p = state.players[id];
-      if (p) p.condition.morale += Math.sign(50 - p.condition.morale);
+      if (!p) continue;
+      // Deriva para o neutro, mais depressa quanto mais longe estiver: a ±1 por
+      // semana um jogador que caísse aos 10 levava quase uma época a recuperar,
+      // e ficava preso a pedir aumento/saída sem fim (queixa do playtest).
+      const gap = 50 - p.condition.morale;
+      p.condition.morale += Math.sign(gap) * (1 + Math.floor(Math.abs(gap) / 20));
     }
   }
+
+  // Desfaz as trocas por suspensão: o titular volta ao SEU lugar (já cumpriu o
+  // jogo de castigo desta jornada). Sem isto, o suplente ficava titular para
+  // sempre e o utilizador via "os mais fracos a jogar" sem ter mexido em nada.
+  for (const { slot, original } of suspensionSwaps) slot.playerId = original;
 
   // 3. Finanças semanais de todos os clubes.
   //    Bilheteira depende da FORMA recente; manutenção escala com instalações;
@@ -318,46 +490,115 @@ export function advanceWeek(
       : { attendance: 0, revenue: 0 };
     if (club.id === managedId) managedGate = gate;
     fin.income.tickets = gate.revenue;
-    applyWeeklyFinances(fin, gate.revenue);
+    // O saldo NUNCA fica negativo: o que não deu para pagar volta como buraco.
+    const shortfall = applyWeeklyFinances(fin, gate.revenue);
+    if (club.id === managedId) managedShortfall = shortfall;
 
-    const sanction = applyInsolvency(state, club.id);
-    if (sanction.insolvent && club.id === managedId) {
-      if (sanction.soldPlayerName) {
-        addNews(state, 'CLUB', 'news.insolvency.sold',
-          { player: sanction.soldPlayerName, amount: sanction.amount.toLocaleString('pt-PT') });
-      } else {
-        addNews(state, 'CLUB', 'news.insolvency.blocked');
-      }
+    const sanction = applyInsolvency(state, club.id, shortfall);
+    if (shortfall <= 0 && cashWarning(fin) && club.id === managedId) {
+      // AVISO ANTES DO PROBLEMA: o clube ainda pagou esta semana, mas a caixa
+      // dá para menos de 3 semanas. É aqui que dá para cortar salários ou
+      // vender por vontade própria, antes de chegar ao dilema.
+      addNews(state, 'CLUB', 'news.insolvency.blocked');
+      notes.push({
+        kind: 'FINANCE', key: 'note.insolvency.warning',
+        params: {
+          balance: Math.round(fin.balance).toLocaleString('pt-PT'),
+          margin: Math.abs(Math.round(weeklyNet(fin))).toLocaleString('pt-PT'),
+        },
+      });
+    } else if (sanction.soldPlayerName && club.id === managedId) {
+      addNews(state, 'CLUB', 'news.insolvency.sold',
+        { player: sanction.soldPlayerName, amount: sanction.amount.toLocaleString('pt-PT') });
     }
   }
 
+  // 3-bis. CRISE FINANCEIRA do clube gerido: a semana não fechou, abre o dilema
+  // no inbox (bloqueia o avanço até o treinador escolher quem sai).
+  // A direção já não despacha o melhor jogador por sua conta.
+  const crisis = ensureFinancialCrisis(state, managedShortfall);
+  if (crisis) {
+    addNews(state, 'CLUB', 'news.crisis.open', { debt: crisis.debt.toLocaleString('pt-PT') });
+    notes.push({
+      kind: 'FINANCE', key: 'note.crisis.open',
+      params: { debt: crisis.debt.toLocaleString('pt-PT') },
+    });
+  }
+
   // 4. Treino de todos os plantéis (determinístico por semana+jogador).
-  // O centro de treino do clube acelera a evolução.
+  //
+  // Três camadas somam-se: o CENTRO DE TREINO (instalação), a EQUIPA TÉCNICA
+  // (pessoas — só o clube gerido tem staff nomeado) e o PLANO INDIVIDUAL do
+  // jogador, se o treinador lhe deu um. O plano individual sobrepõe-se ao foco
+  // da equipa e traz atenção extra, mas fecha a evolução naquela área só.
   const weekKey = state.meta.currentDate;
+  const staff = state.career.staff ?? [];
+  const staffFitness = fitnessBonus(staff);
   for (const club of Object.values(state.clubs)) {
-    const clubFocus = club.id === state.meta.managedClubId ? focus : rotateFocus(club.id, weekKey);
-    const growthBonus = (club.facilities.training - 1) * 0.03;
+    if (club.european) continue; // clubes europeus temporários não treinam
+    const isManaged = club.id === state.meta.managedClubId;
+    const clubFocus = isManaged ? focus : rotateFocus(club.id, weekKey);
+    const facilityBonus = (club.facilities.training - 1) * 0.03;
     for (const id of club.squad) {
       const p = state.players[id];
       if (!p) continue;
       const rng = new Rng(deriveSeed(state.meta.rngSeed, 'train', weekKey, id));
-      trainPlayer(p, clubFocus, rng, growthBonus);
+      const own = isManaged ? individualFocus(p) : null;
+      const coaching = isManaged
+        ? trainingBonus(staff, p.positions[0] === 'GK') + (own ? INDIVIDUAL_GROWTH_BONUS : 0)
+        : 0;
+      trainPlayer(
+        p,
+        own ?? clubFocus,
+        rng,
+        facilityBonus + coaching,
+        isManaged ? staffFitness : 0,
+      );
     }
+  }
+
+  // 4a-bis. Reconversões de posição: mais uma semana de trabalho.
+  for (const done of tickRetraining(state)) {
+    if (state.players[done.playerId]?.clubId !== managedId) continue;
+    addNews(state, 'CLUB', 'news.retrained', { player: done.playerName, pos: done.position });
+    notes.push({ kind: 'GROWTH', key: 'note.retrained', params: { player: done.playerName, pos: done.position } });
+  }
+
+  // 4a-ter. PROMESSAS aos jogadores: cobra as que venceram (e fecha as que já
+  // foram cumpridas). Falhar custa muito mais moral do que cumprir dá — senão
+  // prometer a toda a gente todas as semanas era moral de graça.
+  for (const v of tickPromises(state)) {
+    const key = v.kept ? 'news.promise.kept' : 'news.promise.broken';
+    addNews(state, 'CLUB', key, { player: v.playerName });
+    notes.push({
+      kind: v.kept ? 'GROWTH' : 'INFO',
+      key: v.kept ? 'note.promise.kept' : 'note.promise.broken',
+      params: { player: v.playerName },
+    });
   }
 
   // 4b. Quem subiu de overall esta semana — a recompensa visível do treino.
   for (const [id, before] of overallBefore) {
     const p = state.players[id];
     if (!p) continue;
-    const after = naturalOverall(p);
+    const after = displayOverall(p);
+    // Cresceu → vale mais. O `marketValue` é um campo GRAVADO; sem o reavaliar
+    // aqui, um jovem que evoluísse continuava com o preço de quando entrou.
+    if (after !== before) p.marketValue = computeMarketValue(p, state.meta.season);
+    // Só se anuncia o que o utilizador CONSEGUE ver na ficha — o número aqui é
+    // exatamente o que o ecrã do jogador vai mostrar.
     if (after > before) {
       notes.push({ kind: 'GROWTH', key: 'note.growth', params: { player: p.lastName, ovr: after } });
     }
   }
 
-  // 5. Recuperação de lesões — o departamento médico encurta o tempo.
+  // 5. Recuperação de lesões — o departamento médico encurta o tempo, e o
+  // fisioterapeuta do clube gerido encurta-o outra vez por cima disso.
+  const physioSpeedup = 1 / Math.max(0.5, injuryDurationFactor(staff));
   for (const club of Object.values(state.clubs)) {
-    const recoveryPerWeek = 7 + (club.facilities.medical - 1) * 2;
+    if (club.european) continue;
+    const base = 7 + (club.facilities.medical - 1) * 2;
+    const recoveryPerWeek = club.id === managedId ? Math.round(base * physioSpeedup) : base;
     for (const id of club.squad) {
       const p = state.players[id];
       if (!p || p.condition.injuryDaysRemaining <= 0) continue;
@@ -381,6 +622,17 @@ export function advanceWeek(
   const mRound = nextRound(state, mLeagueId) ?? ((mSched?.totalRounds ?? 30) + 1);
   const windowOpen = transferWindow(mRound, mSched?.totalRounds ?? 30).open;
   const bidRng = new Rng(deriveSeed(state.meta.rngSeed, 'bids', weekKey));
+  // Cláusulas de rescisão baratas: quem paga leva, sem passar pelo inbox.
+  const clauseSales = windowOpen ? triggerReleaseClauses(state, bidRng) : [];
+  for (const s of clauseSales) {
+    addNews(state, 'TRANSFER', 'news.clausePaid', {
+      buyer: s.buyerName, player: s.playerName, fee: s.fee.toLocaleString('pt-PT'),
+    });
+    notes.push({
+      kind: 'TRANSFER', key: 'note.clausePaid',
+      params: { player: s.playerName, buyer: s.buyerName, fee: s.fee.toLocaleString('pt-PT') },
+    });
+  }
   const newBids = windowOpen ? generateIncomingBids(state, bidRng) : [];
   for (const b of newBids) {
     const p = state.players[b.playerId];
@@ -414,6 +666,11 @@ export function advanceWeek(
       const p = state.players[id];
       if (p && p.contractUntil === state.meta.season + 1) {
         addNews(state, 'CLUB', 'news.renewal.nextSeason', { player: `${p.firstName} ${p.lastName}` });
+      }
+      // Aviso de REFORMA próxima: aos 36+ o jogador reforma-se muito provavelmente
+      // no fim da época (aos 37 é garantido). Dá tempo de arranjar substituto.
+      if (p && p.age >= 36) {
+        addNews(state, 'CLUB', 'news.retiring.soon', { player: `${p.firstName} ${p.lastName}`, age: p.age });
       }
     }
   }
@@ -474,14 +731,33 @@ export function advanceWeek(
   }
   pruneOffers(state);
 
+  // 8-bis. Os clubes da IA também vasculham o mercado de livres. Sem isto o
+  // pool era um bufete só para o utilizador: os melhores ficavam disponíveis
+  // para sempre e compensava esperar até ao fim da época para os apanhar.
+  aiSignFreeAgents(state, freeAgentRng(state));
+
   // 9. Balanço da semana do clube gerido.
   const mFin = state.finances[managedId];
   const report: WeekReport | null = mFin ? buildWeekReport({
-    state, managedId, managedRound, myFx, gate: managedGate, fin: mFin, notes,
+    state, managedId, managedRound: displayRound, myFx, gate: managedGate, fin: mFin, notes,
   }) : null;
 
+  // Melhoria de instalação GRÁTIS por vídeo: a cada 5 jornadas jogadas surge uma
+  // nova disponibilidade (fica pendente até o jogador ver o vídeo). Não empilha.
+  if (managedRound > 0 && !state.career.freeUpgradePending) {
+    const rounds = (state.career.roundsSinceFreeUpgrade ?? 0) + 1;
+    if (rounds >= 5) {
+      state.career.freeUpgradePending = true;
+      state.career.roundsSinceFreeUpgrade = 0;
+    } else {
+      state.career.roundsSinceFreeUpgrade = rounds;
+    }
+  }
+
   const seasonEnded = nextRound(state, mLeagueId) === null;
-  return { round: managedRound, fixtures: managedFixtures, cupFixtures, seasonEnded, confidence, report };
+  const managedMatches: Fixture[] = [...euroFixtures]; // noite europeia primeiro
+  if (myFx) managedMatches.push(myFx); // depois o jogo da liga
+  return { round: displayRound, fixtures: managedFixtures, cupFixtures, seasonEnded, confidence, report, managedMatches };
 }
 
 /** Monta o relatório da jornada a partir do que foi recolhido durante a semana. */
@@ -588,6 +864,26 @@ export function rolloverSeason(state: GameState): SeasonSummary {
     if (playCupRound(state).length === 0 && state.cup.alive.length < 2) break;
   }
 
+  // Fecha a campanha EUROPEIA pendente (joga o que falta → campeões + prémios),
+  // captura a qualificação da PRÓXIMA época (standings/Taça ainda finais) e remove
+  // os clubes europeus temporários ANTES de envelhecer os jogadores.
+  let euroGuard = 0;
+  while (state.europe && europeInProgress(state.europe) && euroGuard++ < 90) advanceEuropeMatchday(state);
+  const finishedEurope = state.europe;
+  // Coeficiente-país tipo-UEFA: evolui com o desempenho europeu da época que acaba
+  // (1ª campanha = base) e passa a decidir as vagas da época seguinte.
+  const euroCoeffs = evolveCoefficients(finishedEurope?.coefficients, finishedEurope?.competitions);
+  const euroQualify = state.background ? qualifyNextSeason(state, coefficientRanking(euroCoeffs)) : null;
+
+  // MEMÓRIA DO MUNDO — tem de ser aqui, no único instante em que tudo ainda é
+  // verdade: tabelas finais, Taça e Europa decididas, clubes europeus ainda
+  // materializados, totalizadores dos jogadores por zerar e ninguém ainda subiu
+  // nem desceu de divisão (senão o escalão arquivado seria o da época seguinte).
+  archiveSeason(state, finishedEurope);
+  archivePlayerSeasons(state);
+
+  dematerializeEurope(state);
+
   const managedId = state.meta.managedClubId;
   const mLeagueId = managedLeagueId(state);
   const mLeague = state.leagues[mLeagueId]!;
@@ -623,8 +919,11 @@ export function rolloverSeason(state: GameState): SeasonSummary {
     state.career.trophies.push({ season: state.meta.season, key: 'trophy.league', params: { league: mLeague.name } });
   }
 
-  // --- 2. Avaliação da direção ---
+  // --- 2. Avaliação da direção + reputação do treinador ---
   const verdict = evaluateSeason(state.career, pos, leagueSize, relegated);
+  updateManagerReputation(state.career, {
+    champion, promoted, relegated, position: pos, met: verdict.metObjective, fired: verdict.fired,
+  });
   if (verdict.fired) {
     state.career.pendingOffers = generateJobOffers(state, managedId);
   }
@@ -635,20 +934,50 @@ export function rolloverSeason(state: GameState): SeasonSummary {
     const table = state.standings[league.id];
     if (!table) continue;
     const ranked = sortStandings(table, (id) => state.clubs[id]?.name ?? id);
+    const hasUpperTier = !!state.leagues[`liga_${league.tier - 1}`];
+    const hasLowerTier = !!state.leagues[`liga_${league.tier + 1}`];
     ranked.forEach((row, idx) => {
       const fin = state.finances[row.clubId];
       if (!fin) return;
       const prize = leaguePrize(league.tier, idx + 1, ranked.length);
-      fin.balance += prize;
+      moveMoney(fin, prize);
       if (row.clubId === managedId) {
         addNews(state, 'SEASON', 'news.prize.league',
           { pos: idx + 1, league: league.name, amount: prize.toLocaleString('pt-PT') });
       }
+      // Reputação segue o desempenho REAL da época — sem isto ficava estática e
+      // um clube campeão continuava com o mesmo objetivo/estrelas de sempre.
+      const club = state.clubs[row.clubId];
+      if (!club) return;
+      const isChampion = idx === 0;
+      const isPromoted = hasUpperTier && idx < PROMOTED_PER_TIER;
+      const isRelegated = hasLowerTier && idx >= ranked.length - RELEGATED_PER_TIER;
+      // Série de títulos: quem ganha anos a fio ganha reputação MAIS depressa
+      // (6 → 9 → 12 → 15). Falhar um título parte a série.
+      if (!state.career.titleStreaks) state.career.titleStreaks = {};
+      const streak = isChampion ? (state.career.titleStreaks[club.id] ?? 0) + 1 : 0;
+      if (streak > 0) state.career.titleStreaks[club.id] = streak;
+      else delete state.career.titleStreaks[club.id];
+      applySeasonReputation(
+        club,
+        seasonReputationDelta(idx + 1, ranked.length, isChampion, isPromoted, isRelegated, streak),
+      );
     });
   }
 
   // --- 3. Promoções/despromoções ---
   const moves = processPromotions(state);
+
+  // Realinha a reputação de quem mudou de divisão — sem isto, um clube que
+  // subiu de nível ficava com a reputação de baixo, abaixo de rivais que nunca
+  // saíram da divisão antiga (ver realignReputationOnMove).
+  for (const mv of moves) {
+    const club = state.clubs[mv.clubId];
+    const newLeague = state.leagues[mv.toLeagueId];
+    if (!club || !newLeague) continue;
+    const peers = newLeague.clubIds.map((id) => state.clubs[id]).filter((c): c is NonNullable<typeof c> => !!c);
+    realignReputationOnMove(club, peers);
+  }
 
   // Prémio de subida — o "salto" de orçamento.
   for (const mv of moves) {
@@ -657,7 +986,7 @@ export function rolloverSeason(state: GameState): SeasonSummary {
     const newTier = state.leagues[mv.toLeagueId]?.tier ?? 1;
     if (!fin) continue;
     const bonus = promotionPrize(newTier);
-    fin.balance += bonus;
+    moveMoney(fin, bonus);
     if (mv.clubId === managedId) {
       addNews(state, 'SEASON', 'news.prize.promotion', { amount: bonus.toLocaleString('pt-PT') });
     }
@@ -674,23 +1003,57 @@ export function rolloverSeason(state: GameState): SeasonSummary {
   state.meta.season += 1;
   for (const p of Object.values(state.players)) {
     p.age += 1;
+    // Teto por cumprir aproxima-se da realidade — a ficha deixa de prometer
+    // eternamente um potencial que o jogador já não vai atingir.
+    fadePotential(p);
     p.condition.fitness = 100;
     p.condition.form = p.condition.morale;
     p.condition.seasonGoals = 0; // totalizadores reiniciam a cada época
     p.condition.seasonAssists = 0;
+    p.condition.seasonRating = 0;
+    p.condition.seasonApps = 0;
+    p.condition.devSeason = 0;
   }
   const returnedLoans = returnExpiredLoans(state); // empréstimos vencidos regressam aos donos
   processContractExpiries(state);
   for (const name of bosmanLosses) {
     addNews(state, 'TRANSFER', 'news.bosman.left', { player: name });
   }
+  // PRÉ-CONTRATOS: exatamente aqui. Os contratos acabaram de expirar (é agora
+  // que o alvo fica livre) e a IA ainda não reconstruiu plantéis — se corresse
+  // depois, outro clube apanhava-o primeiro e o acordo caía sempre.
+  for (const outcome of resolvePreContracts(state)) {
+    addNews(
+      state,
+      'TRANSFER',
+      outcome.joined ? 'news.pre.joined' : 'news.pre.lost',
+      { player: outcome.playerName },
+    );
+  }
   const youthRng = new Rng(deriveSeed(state.meta.rngSeed, 'youth', state.meta.season));
   const youth = processYouthAndRetirements(state, youthRng);
+  // Reformas no clube gerido: avisa por notícia (senão o jogador "desaparece").
+  for (const name of youth.retiredManaged) {
+    addNews(state, 'CLUB', 'news.retired', { player: name });
+  }
   // Mínimo por posição: nenhum clube fica desfalcado (contratos/reformas/vendas).
   const fillRng = new Rng(deriveSeed(state.meta.rngSeed, 'fill', state.meta.season));
   for (const club of Object.values(state.clubs)) ensureMinimumSquad(state, club, fillRng);
+  // Mercado da IA: os clubes não geridos reforçam-se até ao nível do seu estatuto.
+  // Sem isto só perdiam qualidade (reformas/contratos) e a divisão decaía toda.
+  rebuildAiSquads(state);
   // Repõe um onze válido no clube gerido após todas as saídas/entradas.
   ensureValidLineup(managedId, state.clubs[managedId]?.squad ?? [], state.players, state.tactics);
+  // E refaz o onze da IA — `ensureValidLineup` só reage a titulares em falta, por
+  // isso sem isto os reforços e os jovens que evoluíram ficavam no banco para sempre.
+  refreshAiLineups(state);
+  // REAVALIAÇÃO GERAL: toda a gente fez anos, evoluiu ou perdeu um ano de
+  // contrato. Sem isto o preço no ecrã ficava congelado no dia em que o jogador
+  // nasceu — daí aparecerem craques de 88 avaliados em 800 mil.
+  refreshMarketValues(state);
+  // Só agora se pode cortar o mercado de livres: com os onzes já refeitos, quem
+  // saiu deixa de estar referenciado e pode mesmo desaparecer do save.
+  pruneFreeAgents(state);
   // Receitas recalculadas com a NOVA divisão (subir traz mais TV/patrocínios),
   // e a direção absorve o excesso de liquidez antes de refazer os orçamentos.
   for (const club of Object.values(state.clubs)) {
@@ -699,7 +1062,7 @@ export function rolloverSeason(state: GameState): SeasonSummary {
     const newTier = state.leagues[club.leagueId]?.tier ?? 1;
     recalcIncome(club, newTier, fin);
     recalcUpkeep(club, fin);
-    const absorbed = annualBudgetReset(fin);
+    const absorbed = annualBudgetReset(fin, newTier, countryEconFactor(club.country));
     if (club.id === managedId && absorbed > 0) {
       addNews(state, 'CLUB', 'news.absorbed', { amount: absorbed.toLocaleString('pt-PT') });
     }
@@ -712,10 +1075,31 @@ export function rolloverSeason(state: GameState): SeasonSummary {
     );
     state.standings[league.id] = emptyStandings(league.clubIds);
   }
+  if (state.background) resetBgSeason(state.background); // ligas de fundo: nova época
   state.cup = generateCup(state);
+
+  // Provas europeias da nova época (só em jogo com base fixa). A qualificação foi
+  // capturada acima (standings finais); a cadência espalha ~17 jornadas europeias
+  // pelo calendário doméstico. A Supertaça opõe os campeões CL/EL da época anterior.
+  if (euroQualify) {
+    const newMgLeague = managedLeagueId(state);
+    const totalRounds = state.schedules[newMgLeague]?.totalRounds ?? 26;
+    // Espalha as 17 jornadas europeias por TODO o calendário doméstico (deixando
+    // 1 jornada de folga no fim), em vez de as amontoar na primeira metade.
+    const cadence = Math.max(1, Math.floor((totalRounds - 1) / EURO_MATCHDAYS));
+    state.europe = buildEuropeCampaign(state, euroQualify, state.meta.season, cadence, euroCoeffs);
+    const sc = finishedEurope ? setupSuperCup(state, finishedEurope, state.meta.season) : null;
+    if (sc) state.europe.superCup = sc;
+  } else {
+    state.europe = undefined;
+  }
   if (!verdict.fired) {
     setManagedObjective(state);
     state.career.confidence = Math.max(35, state.career.confidence);
+    // Ofertas de clubes maiores por mérito (opcionais — a UI mostra no arranque).
+    state.career.meritOffers = generateMeritOffers(state);
+  } else {
+    state.career.meritOffers = [];
   }
 
   state.meta.currentDate = `${state.meta.season}-08-01`;
@@ -743,6 +1127,7 @@ export function acceptJobOffer(state: GameState, clubId: string): boolean {
   state.career.pendingOffers = [];
   state.career.confidence = 55;
   setManagedObjective(state);
+  retargetManagedEurope(state); // a prova europeia segue o novo clube
   return true;
 }
 
@@ -753,6 +1138,37 @@ function generateJobOffers(state: GameState, excludeClubId: string): string[] {
     .filter((c) => c.id !== excludeClubId && c.reputation <= myRep + 5)
     .sort((a, b) => b.reputation - a.reputation);
   return candidates.slice(0, 3).map((c) => c.id);
+}
+
+/**
+ * Ofertas de clubes MAIORES por MÉRITO — geradas no fim de época quando o
+ * treinador teve sucesso (confiança alta) e a sua reputação alcança um clube de
+ * maior estatuto que o atual. Opcionais: aceitar muda de clube, recusar mantém.
+ */
+export function generateMeritOffers(state: GameState): string[] {
+  const career = state.career;
+  if (career.confidence < 55) return [];
+  const rep = career.reputation ?? 45;
+  const myClub = state.clubs[state.meta.managedClubId];
+  if (!myClub) return [];
+  const myRep = myClub.reputation;
+  const candidates = Object.values(state.clubs)
+    .filter((c) => c.id !== myClub.id)
+    .filter((c) => c.reputation > myRep + 4)   // um degrau acima
+    .filter((c) => c.reputation <= rep + 8)    // ao alcance do prestígio do treinador
+    .sort((a, b) => b.reputation - a.reputation);
+  return candidates.slice(0, 2).map((c) => c.id);
+}
+
+/** Aceita uma oferta por mérito (muda de clube sem ter sido despedido). */
+export function acceptMeritOffer(state: GameState, clubId: string): boolean {
+  if (!state.career.meritOffers?.includes(clubId)) return false;
+  state.meta.managedClubId = clubId;
+  state.career.meritOffers = [];
+  state.career.confidence = 55;
+  setManagedObjective(state);
+  retargetManagedEurope(state); // a prova europeia segue o novo clube
+  return true;
 }
 
 /** Roda o foco de treino da IA por clube+semana, de forma determinística. */

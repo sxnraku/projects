@@ -11,6 +11,7 @@
  * Tudo escala com o nível da instalação `scouting` (1-5): nº de olheiros a
  * trabalhar em simultâneo, alcance (divisões), velocidade e precisão.
  */
+import { effectiveScoutingLevel } from '../staff';
 import { GameState, Player, naturalOverall } from '../models';
 import { ScoutMission, ScoutingState } from '../career';
 import { reachability } from './offers';
@@ -47,8 +48,15 @@ export function tierInRange(ownTier: number, tier: number, level: number): boole
 // Acesso ao estado
 // ----------------------------------------------------------------------------
 
+/**
+ * Nível EFETIVO da rede de observação: as instalações mais o olheiro-chefe.
+ * As duas coisas somam-se — uma rede cara com um chefe fraco rende menos do que
+ * uma rede modesta bem dirigida, e as duas juntas rendem mais do que qualquer
+ * uma sozinha.
+ */
 export function scoutingLevel(state: GameState): number {
-  return state.clubs[state.meta.managedClubId]?.facilities.scouting ?? 1;
+  const facility = state.clubs[state.meta.managedClubId]?.facilities.scouting ?? 1;
+  return effectiveScoutingLevel(state.career.staff ?? [], facility);
 }
 
 /** Devolve o estado de scouting, inicializando-o (e migrando saves antigos). */
@@ -119,7 +127,10 @@ export interface PotentialRange {
 /** Intervalo de potencial (0-100). Se conhecido, min===max. Senão, banda apertada. */
 export function potentialRange(state: GameState, player: Player): PotentialRange {
   if (isPotentialKnown(state, player)) {
-    const p = player.potential * 5;
+    // Arredondar é obrigatório: o potencial deixou de ser inteiro quando passou
+    // a esbater-se com a idade (`fadePotential`), e sem isto a ficha mostrava
+    // coisas como "pot 93.75".
+    const p = Math.round(player.potential * 5);
     return { min: p, max: p, exact: true };
   }
   const b = band100(player.id + 'pot', player.potential, potentialHalfWidth(scoutingLevel(state)));
@@ -156,6 +167,7 @@ export function canScoutLeague(state: GameState, leagueId: string): boolean {
 export function canScoutPlayer(state: GameState, playerId: string): boolean {
   const p = state.players[playerId];
   if (!p || !p.clubId || p.clubId === state.meta.managedClubId) return false;
+  if (p.condition.loanOwnerId) return false; // emprestado: o passe é do dono
   if (!isProspect(p) || isPotentialKnown(state, p)) return false; // só promessas por revelar
   if (freeSlots(state) <= 0) return false;
   const tier = state.leagues[state.clubs[p.clubId]?.leagueId ?? '']?.tier ?? 99;
@@ -169,7 +181,11 @@ export function scoutableProspects(state: GameState, limit = 25): Player[] {
   const ownTier = ownTierOf(state);
   const level = scoutingLevel(state);
   return Object.values(state.players)
-    .filter((p) => p.clubId && p.clubId !== managedId && isProspect(p) && !isPotentialKnown(state, p)
+    // Emprestados ficam de fora: o passe é do dono e, se o dono formos nós,
+    // aparecia um jogador NOSSO na lista de alvos a sondar/contratar.
+    .filter((p) => p.clubId && p.clubId !== managedId && !state.clubs[p.clubId]?.european
+      && !p.condition.loanOwnerId
+      && isProspect(p) && !isPotentialKnown(state, p)
       && tierInRange(ownTier, state.leagues[state.clubs[p.clubId]?.leagueId ?? '']?.tier ?? 99, level))
     .sort((a, b) => naturalOverall(b) - naturalOverall(a))
     .slice(0, limit);
@@ -210,7 +226,9 @@ export function findProspects(state: GameState, leagueId: string, count: number)
     if (!club) continue;
     for (const pid of club.squad) {
       const p = state.players[pid];
-      if (p && p.age <= 21) players.push(p);
+      // Emprestados não são promessas "daquele" clube — o passe é de outro
+      // (e podia ser o nosso), por isso não entram nos relatórios de olheiro.
+      if (p && p.age <= 21 && !p.condition.loanOwnerId) players.push(p);
     }
   }
   return players

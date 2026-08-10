@@ -14,6 +14,7 @@ import {
   effectiveOverall,
   effectiveOverallFine,
   Formation,
+  FORMATION_FAMILIES,
   isNaturalPosition,
   Mentality,
   Position,
@@ -21,15 +22,15 @@ import {
   Tactic,
   Tempo,
 } from '../../src/core/models';
-import { autoPickLineup, lineupOverall } from '../../src/core/game';
+import { lineupOverall, reselectLineup } from '../../src/core/game';
 import { physicalLoad } from '../../src/core/engine';
 import { attrColor, fitnessColor, theme } from '../../src/ui/theme';
 import { to100 } from '../../src/ui/format';
 import { useT } from '../../src/ui/i18n';
 import { Face } from '../../src/ui/Face';
+import { Toast } from '../../src/ui/Toast';
 import { Body, PosText, Screen, Section } from '../components';
 
-const FORMATIONS = Object.values(Formation);
 const MENTALITIES: Mentality[] = ['DEFENSIVE', 'BALANCED', 'ATTACKING'];
 const TEMPOS: Tempo[] = ['SLOW', 'NORMAL', 'FAST'];
 
@@ -67,11 +68,53 @@ const LAYOUTS: Record<Formation, { x: number; y: number }[]> = {
     { x: 0.3, y: 0.54 }, { x: 0.5, y: 0.56 }, { x: 0.7, y: 0.54 },
     { x: 0.38, y: 0.84 }, { x: 0.62, y: 0.84 },
   ],
-  '4-5-1': [
+  '4-4-2 losango': [
     { x: 0.5, y: 0.06 },
     { x: 0.15, y: 0.28 }, { x: 0.38, y: 0.26 }, { x: 0.62, y: 0.26 }, { x: 0.85, y: 0.28 },
-    { x: 0.12, y: 0.56 }, { x: 0.32, y: 0.54 }, { x: 0.5, y: 0.56 }, { x: 0.68, y: 0.54 }, { x: 0.88, y: 0.56 },
-    { x: 0.5, y: 0.84 },
+    { x: 0.5, y: 0.44 },
+    { x: 0.26, y: 0.58 }, { x: 0.74, y: 0.58 },
+    { x: 0.5, y: 0.70 },
+    { x: 0.38, y: 0.88 }, { x: 0.62, y: 0.88 },
+  ],
+  '4-4-1-1': [
+    { x: 0.5, y: 0.06 },
+    { x: 0.15, y: 0.28 }, { x: 0.38, y: 0.26 }, { x: 0.62, y: 0.26 }, { x: 0.85, y: 0.28 },
+    { x: 0.15, y: 0.54 }, { x: 0.38, y: 0.52 }, { x: 0.62, y: 0.52 }, { x: 0.85, y: 0.54 },
+    { x: 0.5, y: 0.72 },
+    { x: 0.5, y: 0.90 },
+  ],
+  '4-3-3 recuado': [
+    { x: 0.5, y: 0.06 },
+    { x: 0.15, y: 0.28 }, { x: 0.38, y: 0.26 }, { x: 0.62, y: 0.26 }, { x: 0.85, y: 0.28 },
+    { x: 0.5, y: 0.44 },
+    { x: 0.32, y: 0.60 }, { x: 0.68, y: 0.60 },
+    { x: 0.18, y: 0.84 }, { x: 0.5, y: 0.88 }, { x: 0.82, y: 0.84 },
+  ],
+  '4-3-1-2': [
+    { x: 0.5, y: 0.06 },
+    { x: 0.15, y: 0.28 }, { x: 0.38, y: 0.26 }, { x: 0.62, y: 0.26 }, { x: 0.85, y: 0.28 },
+    { x: 0.26, y: 0.52 }, { x: 0.5, y: 0.50 }, { x: 0.74, y: 0.52 },
+    { x: 0.5, y: 0.70 },
+    { x: 0.36, y: 0.88 }, { x: 0.64, y: 0.88 },
+  ],
+  '4-1-3-2': [
+    { x: 0.5, y: 0.06 },
+    { x: 0.15, y: 0.28 }, { x: 0.38, y: 0.26 }, { x: 0.62, y: 0.26 }, { x: 0.85, y: 0.28 },
+    { x: 0.5, y: 0.44 },
+    { x: 0.16, y: 0.62 }, { x: 0.5, y: 0.62 }, { x: 0.84, y: 0.62 },
+    { x: 0.36, y: 0.88 }, { x: 0.64, y: 0.88 },
+  ],
+  '3-4-3': [
+    { x: 0.5, y: 0.06 },
+    { x: 0.28, y: 0.26 }, { x: 0.5, y: 0.24 }, { x: 0.72, y: 0.26 },
+    { x: 0.12, y: 0.52 }, { x: 0.38, y: 0.54 }, { x: 0.62, y: 0.54 }, { x: 0.88, y: 0.52 },
+    { x: 0.20, y: 0.84 }, { x: 0.5, y: 0.88 }, { x: 0.80, y: 0.84 },
+  ],
+  '5-4-1': [
+    { x: 0.5, y: 0.06 },
+    { x: 0.1, y: 0.30 }, { x: 0.3, y: 0.26 }, { x: 0.5, y: 0.24 }, { x: 0.7, y: 0.26 }, { x: 0.9, y: 0.30 },
+    { x: 0.16, y: 0.58 }, { x: 0.4, y: 0.56 }, { x: 0.6, y: 0.56 }, { x: 0.84, y: 0.58 },
+    { x: 0.5, y: 0.86 },
   ],
 };
 
@@ -89,10 +132,13 @@ export default function Tactics() {
   const t = useT();
   const state = useGameStore((s) => s.state);
   const setTactic = useGameStore((s) => s.setTactic);
+  const rotate = useGameStore((s) => s.rotate);
   const managedId = state?.meta.managedClubId;
 
   const [pitchW, setPitchW] = useState(0);
   const [pickSlot, setPickSlot] = useState<number | null>(null); // slot a escolher
+  const [formOpen, setFormOpen] = useState(false); // gaveta das formações
+  const [feedback, setFeedback] = useState<{ kind: 'ok' | 'info'; text: string } | null>(null);
 
   if (!state || !managedId) return <Screen><Body>{t('common.loading')}</Body></Screen>;
 
@@ -102,10 +148,9 @@ export default function Tactics() {
   const pitchH = pitchW * 1.35;
 
   const changeFormation = (formation: Formation) => {
-    const next = autoPickLineup(managedId, club.squad, state.players, formation);
-    next.mentality = tactic.mentality;
-    next.tempo = tactic.tempo;
-    setTactic(next);
+    // `reselectLineup` parte da tática ATUAL, por isso pressão, linha defensiva,
+    // criatividade e o resto das instruções sobrevivem à troca de formação.
+    setTactic(reselectLineup(tactic, managedId, club.squad, state.players, formation));
   };
 
   /** Coloca um jogador no slot: se já está no onze, troca; senão substitui. */
@@ -144,8 +189,12 @@ export default function Tactics() {
         p,
         rating: effectiveOverall(p, slotPosition),
         natural: isNaturalPosition(p, slotPosition),
+        // Lesionado ou suspenso NÃO pode jogar — aparecia a meio da lista como
+        // se pudesse, e escolhê-lo deixava o lugar vazio no jogo.
+        out: p.condition.status === 'INJURED' || (p.condition.suspended ?? 0) > 0,
       }))
       .sort((a, b) => {
+        if (a.out !== b.out) return a.out ? 1 : -1; // indisponíveis no fim
         if (a.natural !== b.natural) return a.natural ? -1 : 1; // naturais à frente
         return b.rating - a.rating;
       });
@@ -153,13 +202,46 @@ export default function Tactics() {
 
   return (
     <Screen>
+      <Toast text={feedback?.text ?? null} kind={feedback?.kind ?? 'ok'} onHide={() => setFeedback(null)} />
       <ScrollView showsVerticalScrollIndicator={false}>
+        {/* Onze automático — melhor equipa possível a qualquer momento. */}
+        <Pressable style={styles.autoBtn} onPress={() => {
+          const r = rotate();
+          setFeedback(r.swapped > 0
+            ? { kind: 'ok', text: t('tac.autoDone', { n: r.swapped }) }
+            : { kind: 'info', text: t('tac.autoNoChange') });
+        }}>
+          <Text style={styles.autoBtnText}>⚡ {t('tac.autoXI')}</Text>
+        </Pressable>
+
+        {/* FORMAÇÕES EM GAVETA. São doze; em fila deixavam o ecrã ilegível.
+            Fechada mostra só a atual; aberta agrupa-as por linha defensiva. */}
         <Section title={t('tac.formation')} />
-        <View style={styles.chips}>
-          {FORMATIONS.map((f) => (
-            <Chip key={f} label={f} active={tactic.formation === f} onPress={() => changeFormation(f)} />
-          ))}
-        </View>
+        <Pressable style={styles.drawerHead} onPress={() => setFormOpen((v) => !v)}>
+          <Text style={styles.drawerCurrent}>{tactic.formation}</Text>
+          <Text style={styles.drawerHint}>
+            {formOpen ? t('tac.formation.close') : t('tac.formation.change')} {formOpen ? '▴' : '▾'}
+          </Text>
+        </Pressable>
+        {formOpen ? (
+          <View style={styles.drawerBody}>
+            {FORMATION_FAMILIES.map((family) => (
+              <View key={family.key}>
+                <Text style={styles.drawerGroup}>{t(`tac.family.${family.key}`)}</Text>
+                <View style={styles.chips}>
+                  {family.formations.map((f) => (
+                    <Chip
+                      key={f}
+                      label={f}
+                      active={tactic.formation === f}
+                      onPress={() => { changeFormation(f); setFormOpen(false); }}
+                    />
+                  ))}
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : null}
 
         {/* Dois números que consolidam as escolhas todas: qualidade e custo. */}
         <View style={styles.summary}>
@@ -255,12 +337,12 @@ export default function Tactics() {
           <Text style={[styles.loadTitle, { color: loadColor }]}>
             {t('load.title', {
               label: t(`loadlvl.${load.level}`),
-              delta: load.deltaPct !== 0
-                ? t('load.delta', { sign: load.deltaPct > 0 ? '+' : '', pct: load.deltaPct })
-                : '',
+              delta: t('load.delta', { fit: load.fatigue }),
             })}
           </Text>
-          <Text style={styles.loadHint}>{t(`load.${load.level}`)}</Text>
+          <Text style={styles.loadHint}>
+            {t('load.net', { rec: load.recovery, net: load.net })} {t(`load.${load.level}`)}
+          </Text>
         </View>
 
         <View style={{ height: theme.spacing(3) }} />
@@ -282,7 +364,8 @@ export default function Tactics() {
                 const current = pickSlot !== null && tactic.lineup[pickSlot]!.playerId === item.p.id;
                 return (
                   <Pressable
-                    style={({ pressed }) => [styles.pickRow, pressed && { backgroundColor: theme.colors.surfaceAlt }]}
+                    disabled={item.out}
+                    style={({ pressed }) => [styles.pickRow, pressed && { backgroundColor: theme.colors.surfaceAlt }, item.out && { opacity: 0.4 }]}
                     onPress={() => pickSlot !== null && assignPlayer(pickSlot, item.p.id)}
                   >
                     <Text style={[styles.pickOvr, { color: attrColor(item.rating) }]}>{to100(effectiveOverallFine(item.p, slotPosition ?? item.p.positions[0]!))}</Text>
@@ -298,6 +381,11 @@ export default function Tactics() {
                         <Text style={styles.pickSub}>{t('tac.years', { n: item.p.age })}</Text>
                         {!item.natural ? (
                           <Text style={styles.pickOutOfPos}>{t('tac.outOfPos')}</Text>
+                        ) : null}
+                        {item.out ? (
+                          <Text style={styles.pickOutOfPos}>
+                            {item.p.condition.status === 'INJURED' ? t('tac.injured') : t('tac.suspended')}
+                          </Text>
                         ) : null}
                       </View>
                     </View>
@@ -411,6 +499,19 @@ function FieldMarkings() {
 
 const styles = StyleSheet.create({
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing(0.75) },
+
+  drawerHead: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border,
+    borderRadius: theme.radius.sm, paddingHorizontal: theme.spacing(1.5), paddingVertical: theme.spacing(1.1),
+  },
+  drawerCurrent: { color: theme.colors.text, fontSize: theme.font.h3, fontWeight: '800' },
+  drawerHint: { color: theme.colors.blue, fontSize: theme.font.small, fontWeight: '700' },
+  drawerBody: { marginTop: theme.spacing(1), gap: theme.spacing(1) },
+  drawerGroup: {
+    color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '800',
+    letterSpacing: 0.8, marginBottom: theme.spacing(0.5),
+  },
   chip: {
     paddingHorizontal: theme.spacing(1.25), paddingVertical: theme.spacing(0.75),
     borderRadius: theme.radius.sm, borderWidth: 1, borderColor: theme.colors.border,
@@ -491,6 +592,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row', backgroundColor: theme.colors.surface, borderRadius: theme.radius.sm,
     borderWidth: 1, borderColor: theme.colors.border, padding: 3, gap: 3, marginTop: 4,
   },
+  autoBtn: {
+    backgroundColor: theme.colors.green, borderRadius: theme.radius.sm,
+    paddingVertical: theme.spacing(1.25), alignItems: 'center', marginTop: theme.spacing(1.25),
+    shadowColor: theme.colors.green, shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 3,
+  },
+  autoBtnText: { color: '#04170c', fontSize: theme.font.body, fontWeight: '900', letterSpacing: 0.3 },
   segItem: { flex: 1, paddingVertical: theme.spacing(1), alignItems: 'center', justifyContent: 'center', borderRadius: 4 },
   segItemOn: { backgroundColor: theme.colors.accent },
   segText: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700' },

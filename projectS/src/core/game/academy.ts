@@ -9,9 +9,9 @@
  * O nível da instalação `academy` melhora tudo: mais candidatos, melhor
  * qualidade e intervalos de potencial mais estreitos (informação mais fiável).
  */
-import { GameState, naturalOverall, Player, Position } from '../models';
+import { GameState, naturalOverall, Player, Position, SIGNING_QUIET_DAYS, silenceRequests } from '../models';
 import { deriveSeed, Rng } from '../engine/rng';
-import { computeMarketValue, recalcWages, suggestedWage } from '../economy';
+import { computeMarketValue, moveMoney, recalcWages, suggestedWage } from '../economy';
 import { AcademyState } from '../career';
 import { makePlayer } from './newGame';
 import { potentialBand, potentialHalfWidth } from './scouting';
@@ -118,8 +118,9 @@ export function recruitAcademyCandidate(state: GameState, candidateId: string): 
   if (fin.balance < fee) return { ok: false, errorKey: 'academy.noFunds' };
 
   // paga e integra no plantel
-  fin.balance -= fee;
+  moveMoney(fin, -fee);
   candidate.clubId = clubId;
+  silenceRequests(candidate.condition, state.meta.currentDate, SIGNING_QUIET_DAYS);
   state.players[candidate.id] = candidate;
   club.squad.push(candidate.id);
   recalcWages(club, fin, state.players);

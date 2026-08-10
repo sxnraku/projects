@@ -1,4 +1,6 @@
 import { Facilities, FACILITY_MAX_LEVEL, GameState } from '../models';
+import { divisionMultiplier } from './divisions';
+import { infrastructureFunds, moveMoney } from './finances';
 
 /**
  * Upgrades das instalações do clube. Cada nível tem efeito REAL:
@@ -26,19 +28,22 @@ export const FACILITY_EFFECTS: Record<FacilityType, string> = {
   scouting: 'Mais olheiros, alcance e relatórios precisos',
 };
 
-/** Custo do próximo nível (cresce de forma acentuada). */
-export function facilityUpgradeCost(type: FacilityType, currentLevel: number): number {
-  // Custos altos + curva acentuada (2.2^n): melhorar instalações é um
-  // investimento de várias épocas, como nos jogos de gestão a sério — não algo
-  // que se maximiza numa temporada.
+/**
+ * Custo do próximo nível, INDEXADO À DIVISÃO. Um clube da 3ª divisão (que recebe
+ * ~¼ de um da 1ª) paga ~¼ pelas instalações — senão nunca conseguia melhorar.
+ * Curva 1.9^n (menos brutal que 2.2) e bases mais baixas, para a melhoria ser
+ * alcançável ao longo de algumas épocas em qualquer escalão.
+ */
+export function facilityUpgradeCost(type: FacilityType, currentLevel: number, tier = 1): number {
   const base: Record<FacilityType, number> = {
-    stadium: 8_000_000,
-    training: 6_000_000,
-    academy: 5_000_000,
-    medical: 4_000_000,
-    scouting: 3_500_000,
+    stadium: 4_000_000,
+    training: 3_000_000,
+    academy: 2_500_000,
+    medical: 2_000_000,
+    scouting: 1_600_000,
   };
-  return Math.round(base[type] * Math.pow(2.2, currentLevel - 1));
+  const raw = base[type] * Math.pow(1.9, currentLevel - 1) * divisionMultiplier(tier);
+  return Math.round(raw / 10_000) * 10_000;
 }
 
 export interface UpgradeResult {
@@ -60,16 +65,38 @@ export function upgradeFacility(state: GameState, type: FacilityType): UpgradeRe
   const level = club.facilities[type];
   if (level >= FACILITY_MAX_LEVEL) return { ok: false, error: 'Nível máximo atingido.' };
 
-  const cost = facilityUpgradeCost(type, level);
-  if (fin.balance < cost) return { ok: false, error: 'Saldo insuficiente.' };
+  const tier = state.leagues[club.leagueId]?.tier ?? 1;
+  const cost = facilityUpgradeCost(type, level, tier);
+  // Obras saem da FATIA de infraestrutura do saldo, não do saldo inteiro: a
+  // reserva salarial e a verba de transferências ficam de fora.
+  if (infrastructureFunds(fin) < cost) return { ok: false, error: 'Verba de obras insuficiente.' };
 
-  fin.balance -= cost;
-  club.facilities[type] = level + 1;
+  moveMoney(fin, -cost);
+  applyFacilityLevel(state, type);
+  return { ok: true, newLevel: level + 1, cost };
+}
 
-  // Efeito imediato do estádio: capacidade sobe já.
+/**
+ * Melhoria GRÁTIS de uma instalação (recompensa por ver um vídeo). Disponível
+ * de 5 em 5 jornadas (`career.freeUpgradePending`); fica à espera até ser usada.
+ * Não paga do saldo. Consome a disponibilidade.
+ */
+export function claimFreeFacilityUpgrade(state: GameState, type: FacilityType): UpgradeResult {
+  if (!state.career.freeUpgradePending) return { ok: false, error: 'Sem melhoria grátis disponível.' };
+  const club = state.clubs[state.meta.managedClubId];
+  if (!club) return { ok: false, error: 'Clube inválido.' };
+  const level = club.facilities[type];
+  if (level >= FACILITY_MAX_LEVEL) return { ok: false, error: 'Nível máximo atingido.' };
+  applyFacilityLevel(state, type);
+  state.career.freeUpgradePending = false;
+  return { ok: true, newLevel: level + 1, cost: 0 };
+}
+
+/** Sobe 1 nível uma instalação do clube gerido e aplica o efeito imediato. */
+function applyFacilityLevel(state: GameState, type: FacilityType): void {
+  const club = state.clubs[state.meta.managedClubId]!;
+  club.facilities[type] = club.facilities[type] + 1;
   if (type === 'stadium') {
     club.stadiumCapacity = Math.round(club.stadiumCapacity * 1.18);
   }
-
-  return { ok: true, newLevel: level + 1, cost };
 }

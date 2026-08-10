@@ -9,6 +9,7 @@ import {
   emptyGameState,
   fullName,
   isNaturalPosition,
+  isRestorableState,
   naturalOverall,
   OUT_OF_POSITION_PENALTY,
   Player,
@@ -17,6 +18,7 @@ import {
   validatePlayer,
   weeklyNet,
 } from '../index';
+import { createNewGame } from '../../game/newGame';
 import type { Finance } from '../finance';
 
 let failures = 0;
@@ -112,6 +114,52 @@ const gs = emptyGameState({
 });
 assert(Object.keys(gs.players).length === 0, 'estado inicia sem jogadores');
 assert(gs.meta.rngSeed === 42, 'seed guardada no meta');
+
+// --- Validação de saves vindos de fora (nuvem/ficheiro) -------------------
+// Barreira que impede lixo de entrar na store e ser gravado por cima do save
+// local pelo auto-save. Ver validateRestoredState em ../validate.ts.
+console.log('\nValidação de save restaurado:');
+
+const goodSave = createNewGame({ managerName: 'Eu', seed: 7 });
+assert(isRestorableState(goodSave), 'save real de um jogo novo é aceite');
+
+const cases: [string, unknown][] = [
+  ['null', null],
+  ['string', 'nao sou um save'],
+  ['array', []],
+  ['objeto vazio', {}],
+  ['JSON de outra app', { hello: 'world', items: [1, 2, 3] }],
+];
+for (const [label, bad] of cases) {
+  assert(!isRestorableState(bad), `recusa: ${label}`);
+}
+
+// Corrupções realistas de um save que era bom.
+const noPlayers = { ...goodSave, players: {} };
+assert(!isRestorableState(noPlayers), 'recusa save sem jogadores');
+
+const orphanClub = { ...goodSave, meta: { ...goodSave.meta, managedClubId: 'nao_existe' } };
+assert(!isRestorableState(orphanClub), 'recusa clube gerido inexistente');
+
+const brokenSeason = { ...goodSave, meta: { ...goodSave.meta, season: NaN } };
+assert(!isRestorableState(brokenSeason), 'recusa época inválida');
+
+// Plantel a apontar para jogadores que já não existem (ficheiro truncado).
+const managedId = goodSave.meta.managedClubId;
+const trimmedPlayers = { ...goodSave.players };
+for (const id of goodSave.clubs[managedId].squad.slice(0, 3)) delete trimmedPlayers[id];
+assert(!isRestorableState({ ...goodSave, players: trimmedPlayers }), 'recusa plantel com jogadores em falta');
+
+// Conteúdo corrompido dentro de um jogador (atributo fora de escala).
+const firstId = goodSave.clubs[managedId].squad[0];
+const corruptPlayers = {
+  ...goodSave.players,
+  [firstId]: {
+    ...goodSave.players[firstId],
+    attributes: { ...goodSave.players[firstId].attributes, pace: 999 },
+  },
+};
+assert(!isRestorableState({ ...goodSave, players: corruptPlayers }), 'recusa atributo fora de escala');
 
 console.log(`\n${failures === 0 ? '✅ TODOS OS TESTES PASSARAM' : `❌ ${failures} FALHA(S)`}`);
 process.exit(failures === 0 ? 0 : 1);

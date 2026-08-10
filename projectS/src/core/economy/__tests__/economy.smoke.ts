@@ -162,9 +162,12 @@ const income = matchdayIncome(s4.clubs['A']!);
 assert(income > 0, `bilheteira positiva: ${income.toLocaleString('pt-PT')}`);
 const finA = s4.finances['A']!;
 const balBefore = finA.balance;
-const newBal = applyWeeklyFinances(finA, income);
-assert(newBal === balBefore + (finA.income.sponsorship + finA.income.tvRights + finA.income.merchandising + finA.income.tickets - finA.expenses.wages - finA.expenses.facilities - finA.expenses.staff) + income,
-  'saldo atualizado por fluxo semanal + bilheteira');
+// `applyWeeklyFinances` devolve agora o BURACO da semana (0 se fechou as contas)
+// — o saldo já não fica negativo. O saldo em si lê-se de `finA.balance`.
+const shortfall = applyWeeklyFinances(finA, income);
+const expected = balBefore + (finA.income.sponsorship + finA.income.tvRights + finA.income.merchandising + finA.income.tickets - finA.expenses.wages - finA.expenses.facilities - finA.expenses.staff) + income;
+assert(shortfall === 0, 'semana com bilheteira fecha as contas (sem buraco)');
+assert(finA.balance === expected, 'saldo atualizado por fluxo semanal + bilheteira');
 recalcBudgets(finA);
 assert(finA.transferBudget >= 0 && finA.wageBudget > 0, 'orçamentos recalculados');
 

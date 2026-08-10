@@ -2,39 +2,74 @@ import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { useGameStore } from '../../src/state/gameStore';
-import { bidForPlayer, isWonderkid, potentialRange } from '../../src/core/game';
-import { suggestedWage } from '../../src/core/economy';
-import { naturalOverall, naturalOverallFine } from '../../src/core/models';
+import { careerTotals } from '../../src/core/game';
+import { TrainingFocus } from '../../src/core/training';
+import {
+  bidForPlayer, canTalk, deservesCriticism, deservesPraise, isWonderkid,
+  potentialRange, seasonRating, trustOf,
+} from '../../src/core/game';
+import {
+  defaultReleaseClause, minReleaseClause, SELL_ON_STEPS, suggestedWage,
+} from '../../src/core/economy';
+import { ContractClauses, naturalOverall, naturalOverallFine, Position } from '../../src/core/models';
 import { money, to100, wage } from '../../src/ui/format';
-import { useT } from '../../src/ui/i18n';
+import { useT, useTMsg } from '../../src/ui/i18n';
 import { attrColor, fitnessColor, theme } from '../../src/ui/theme';
 import { Face } from '../../src/ui/Face';
 import { Toast } from '../../src/ui/Toast';
 import { Body, Button, PosText, RowKV, Screen, StatBar, Stepper } from '../components';
 
-type Tab = 'OVERVIEW' | 'STATS' | 'CONTRACT' | 'SELL';
+/** Posições oferecidas para reconversão (as do onze; o GR é um mundo à parte). */
+const RETRAIN_TARGETS: Position[] = ['RB', 'CB', 'LB', 'DM', 'CM', 'AM', 'RW', 'LW', 'ST'];
+
+type Tab = 'OVERVIEW' | 'STATS' | 'CAREER' | 'CONTRACT' | 'TALK' | 'SELL';
 const TABS: { key: Tab; labelKey: string }[] = [
   { key: 'OVERVIEW', labelKey: 'player.tab.overview' },
   { key: 'STATS', labelKey: 'player.tab.stats' },
+  { key: 'CAREER', labelKey: 'player.career' },
   { key: 'CONTRACT', labelKey: 'player.tab.contract' },
+  { key: 'TALK', labelKey: 'player.tab.talk' },
   { key: 'SELL', labelKey: 'player.tab.sell' },
 ];
+/** Opções do plano individual — `null` devolve o jogador ao plano da equipa. */
+const INDIVIDUAL_FOCUS: (TrainingFocus | null)[] = [null, 'PHYSICAL', 'TECHNICAL', 'TACTICAL', 'RECOVERY'];
+
+/** Separadores que só fazem sentido nos jogadores do nosso plantel. */
+const OURS_ONLY: Tab[] = ['TALK', 'SELL'];
 
 export default function PlayerDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const t = useT();
+  const tMsg = useTMsg();
   const state = useGameStore((s) => s.state);
   const renewPlayer = useGameStore((s) => s.renewPlayer);
   const setListed = useGameStore((s) => s.setListed);
   const doTerminateLoan = useGameStore((s) => s.doTerminateLoan);
   const acceptBid = useGameStore((s) => s.acceptBid);
+  const startRetrain = useGameStore((s) => s.startRetrain);
+  const cancelRetrain = useGameStore((s) => s.cancelRetrain);
+  const wageWithClauses = useGameStore((s) => s.wageWithClauses);
+  const talkToPlayer = useGameStore((s) => s.talkToPlayer);
+  const promisePlayer = useGameStore((s) => s.promisePlayer);
+  const setPlayerFocus = useGameStore((s) => s.setPlayerFocus);
+  const trainingSlots = useGameStore((s) => s.trainingSlots);
 
   const [tab, setTab] = useState<Tab>('OVERVIEW');
   const [years, setYears] = useState(3);
+  // Cláusulas em negociação (null = ainda não foram tocadas nesta visita).
+  const [clause, setClause] = useState<number | null>(null);
+  const [goalBonus, setGoalBonus] = useState(0);
+  const [appBonus, setAppBonus] = useState(0);
+  const [sellOn, setSellOn] = useState(0);
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'error' | 'info'; text: string } | null>(null);
 
   const player = state?.players[id ?? ''];
   if (!state || !player) return <Screen edges={['left', 'right', 'bottom']}><Body>{t('player.notFound')}</Body></Screen>;
+
+  // Carreira: linhas arquivadas + totais (inclui a época a decorrer).
+  const history = player.condition.history ?? [];
+  const totals = careerTotals(player);
+  const slots = trainingSlots();
 
   const ovr = naturalOverall(player);
   const potR = potentialRange(state, player); // intervalo (ou exato) do potencial
@@ -44,6 +79,21 @@ export default function PlayerDetail() {
   const askedWage = suggestedWage(player, state.meta.season);
   const isOurs = player.clubId === state.meta.managedClubId;
   const pendingBid = isOurs ? bidForPlayer(state, player.id) : null;
+
+  // Cláusulas: o mínimo legal, a sugestão e o que está a ser negociado agora.
+  const minClause = minReleaseClause(player, state.meta.season);
+  const suggestedClause = defaultReleaseClause(player, state.meta.season);
+  const proposedClause = clause ?? player.clauses?.releaseClause ?? suggestedClause;
+  const proposed: ContractClauses = {
+    releaseClause: proposedClause,
+    goalBonus: goalBonus || undefined,
+    appearanceBonus: appBonus || undefined,
+  };
+  // Preço do pacote: é isto que dá peso à decisão — cada cláusula move o número.
+  const negotiatedWage = wageWithClauses(player.id, proposed);
+  const clauseStep = Math.max(50_000, Math.round(suggestedClause / 10 / 50_000) * 50_000);
+  const trust = trustOf(player);
+  const promise = player.condition.relation?.promise ?? null;
 
   return (
     <Screen edges={['left', 'right', 'bottom']}>
@@ -73,7 +123,7 @@ export default function PlayerDetail() {
 
       {/* Separadores (o "Vender" só aparece para jogadores nossos) */}
       <View style={styles.tabs}>
-        {TABS.filter((tb) => tb.key !== 'SELL' || isOurs).map((tb) => (
+        {TABS.filter((tb) => isOurs || !OURS_ONLY.includes(tb.key)).map((tb) => (
           <Pressable key={tb.key} onPress={() => setTab(tb.key)}
             style={[styles.tab, tab === tb.key && styles.tabActive]}>
             <Text style={[styles.tabText, tab === tb.key && styles.tabTextActive]}>
@@ -121,6 +171,88 @@ export default function PlayerDetail() {
           </View>
         ) : null}
 
+
+        {tab === 'CAREER' ? (
+          <View>
+            {/* PLANO INDIVIDUAL — só nos nossos, e só se ele estiver cá dentro. */}
+            {isOurs ? (
+              <View style={styles.planBox}>
+                <View style={styles.planHead}>
+                  <Text style={styles.group}>{t('training.individual.title')}</Text>
+                  <Text style={styles.planSlots}>
+                    {tMsg({ key: 'training.individual.slots', params: { used: slots.used, total: slots.total } })}
+                  </Text>
+                </View>
+                <View style={styles.planRow}>
+                  {INDIVIDUAL_FOCUS.map((f) => {
+                    const active = (player.condition.trainingFocus ?? null) === f;
+                    return (
+                      <Pressable
+                        key={f ?? 'NONE'}
+                        onPress={() => {
+                          const res = setPlayerFocus(player.id, f);
+                          if (!res.ok) {
+                            setFeedback({ kind: 'error', text: tMsg({ key: res.errorKey ?? '', params: res.params }) });
+                          } else {
+                            setFeedback({
+                              kind: 'ok',
+                              text: f
+                                ? tMsg({ key: 'training.individual.set', params: { player: player.lastName, focus: t('focus.' + f) } })
+                                : tMsg({ key: 'training.individual.cleared', params: { player: player.lastName } }),
+                            });
+                          }
+                        }}
+                        style={[styles.planChip, active && styles.planChipOn]}>
+                        <Text style={[styles.planChipText, active && styles.planChipTextOn]}>
+                          {f ? t('focus.' + f) : t('training.individual.none')}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <Text style={styles.planHint}>{t('training.individual.hint')}</Text>
+              </View>
+            ) : null}
+
+            {/* CARREIRA — uma linha por época jogada. */}
+            <Text style={styles.group}>{t('player.career')}</Text>
+            {history.length === 0 ? (
+              <Text style={styles.planHint}>{t('player.career.empty')}</Text>
+            ) : (
+              <View>
+                <Text style={styles.careerTotals}>
+                  {tMsg({ key: 'player.career.totals', params: {
+                    seasons: totals.seasons, apps: totals.apps,
+                    goals: totals.goals, assists: totals.assists,
+                  } })}
+                </Text>
+                <View style={styles.careerHead}>
+                  <Text style={[styles.careerCell, styles.careerSeason, styles.careerHeadText]}>
+                    {t('player.career.season')}
+                  </Text>
+                  <Text style={[styles.careerCell, styles.careerClub, styles.careerHeadText]}>
+                    {t('club.title')}
+                  </Text>
+                  <Text style={[styles.careerCell, styles.careerNum, styles.careerHeadText]}>{t('player.career.apps')}</Text>
+                  <Text style={[styles.careerCell, styles.careerNum, styles.careerHeadText]}>{t('player.career.goals')}</Text>
+                  <Text style={[styles.careerCell, styles.careerNum, styles.careerHeadText]}>{t('player.career.assists')}</Text>
+                  <Text style={[styles.careerCell, styles.careerNum, styles.careerHeadText]}>OVR</Text>
+                </View>
+                {[...history].reverse().map((l) => (
+                  <View key={l.season} style={styles.careerRow}>
+                    <Text style={[styles.careerCell, styles.careerSeason]}>{l.season}</Text>
+                    <Text style={[styles.careerCell, styles.careerClub]} numberOfLines={1}>{l.clubName}</Text>
+                    <Text style={[styles.careerCell, styles.careerNum]}>{l.apps}</Text>
+                    <Text style={[styles.careerCell, styles.careerNum, styles.careerGoals]}>{l.goals}</Text>
+                    <Text style={[styles.careerCell, styles.careerNum]}>{l.assists}</Text>
+                    <Text style={[styles.careerCell, styles.careerNum]}>{l.overall}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+        ) : null}
+
         {tab === 'CONTRACT' ? (
           <View>
             <RowKV k={t('player.wageCurrent')} v={wage(player.wage)} />
@@ -131,21 +263,183 @@ export default function PlayerDetail() {
             />
             <RowKV k={t('player.askedWageRenew')} v={wage(askedWage)} vColor={theme.colors.yellow} />
 
-            {isOurs ? (
+            {/* CLÁUSULAS EM VIGOR — o que já está assinado. */}
+            {player.clauses?.releaseClause ? (
+              <RowKV k={t('clause.release')} v={money(player.clauses.releaseClause)}
+                vColor={player.clauses.releaseClause < player.marketValue * 1.5 ? theme.colors.red : theme.colors.text} />
+            ) : null}
+            {player.clauses?.sellOn ? (
+              <RowKV k={t('clause.sellOn')}
+                v={t('clause.sellOnValue', {
+                  pct: Math.round(player.clauses.sellOn * 100),
+                  club: state.clubs[player.clauses.sellOnClubId ?? '']?.shortName ?? '—',
+                })} />
+            ) : null}
+            {player.clauses?.goalBonus ? (
+              <RowKV k={t('clause.goalBonus')} v={money(player.clauses.goalBonus)} />
+            ) : null}
+            {player.clauses?.appearanceBonus ? (
+              <RowKV k={t('clause.appBonus')} v={money(player.clauses.appearanceBonus)} />
+            ) : null}
+            {player.condition.loanBuyOption ? (
+              <RowKV k={t('clause.buyOption')} v={money(player.condition.loanBuyOption)} vColor={theme.colors.green} />
+            ) : null}
+
+            {isOurs && !player.condition.loanOwnerId ? (
               <View style={styles.renewBox}>
                 <View style={styles.renewRow}>
                   <Text style={styles.sub}>{t('mkt.duration')}</Text>
                   <Stepper value={years} onChange={setYears} step={1} min={1} max={5}
                     format={(v) => t('tac.years', { n: v })} />
                 </View>
+
+                {/* NEGOCIAÇÃO DE CLÁUSULAS. Cada linha mexe no ordenado exigido,
+                    mostrado ao vivo em baixo — é aí que a escolha ganha peso. */}
+                <Text style={styles.clauseTitle}>{t('clause.section')}</Text>
+                <View style={styles.renewRow}>
+                  <Text style={styles.sub}>{t('clause.release')}</Text>
+                  <Stepper value={proposedClause} onChange={setClause} step={clauseStep}
+                    min={minClause} max={suggestedClause * 5} format={money} />
+                </View>
+                <Text style={styles.clauseHint}>{t('clause.releaseHint')}</Text>
+
+                <View style={styles.renewRow}>
+                  <Text style={styles.sub}>{t('clause.goalBonus')}</Text>
+                  <Stepper value={goalBonus} onChange={setGoalBonus} step={5_000}
+                    min={0} max={200_000} format={money} />
+                </View>
+                <View style={styles.renewRow}>
+                  <Text style={styles.sub}>{t('clause.appBonus')}</Text>
+                  <Stepper value={appBonus} onChange={setAppBonus} step={1_000}
+                    min={0} max={50_000} format={money} />
+                </View>
+
+                <RowKV k={t('clause.asksNow')} v={wage(negotiatedWage)}
+                  vColor={negotiatedWage <= askedWage ? theme.colors.green : theme.colors.yellow} />
+
                 <Button label={t('player.renew')} onPress={() => {
-                  const r = renewPlayer(player.id, years, askedWage);
+                  const r = renewPlayer(player.id, years, negotiatedWage, proposed);
                   setFeedback(r.ok
-                    ? { kind: 'ok', text: t('player.renewToast', { until: state.meta.season + years, wage: wage(askedWage) }) }
+                    ? { kind: 'ok', text: t('player.renewToast', { until: state.meta.season + years, wage: wage(negotiatedWage) }) }
                     : { kind: 'error', text: r.error ?? t('player.renewFailed') });
                 }} />
               </View>
             ) : null}
+
+            {/* RECONVERSÃO DE POSIÇÃO — pedido do playtest ("tipo modo carreira
+                do FIFA"): em vez de comer a penalização de jogar fora de posição
+                para sempre, investem-se semanas de treino e o jogador fica mesmo
+                natural na posição nova. */}
+            {isOurs && !player.condition.loanOwnerId ? (
+              <View style={styles.renewBox}>
+                <Text style={styles.retrainTitle}>{t('retrain.title')}</Text>
+                {player.condition.retraining ? (
+                  <>
+                    <Text style={styles.sub}>
+                      {t('retrain.busy', {
+                        pos: player.condition.retraining.position,
+                        weeks: player.condition.retraining.weeksLeft,
+                      })}
+                    </Text>
+                    <View style={{ marginTop: theme.spacing(1) }}>
+                      <Button
+                        label={t('retrain.cancel')}
+                        variant="ghost"
+                        onPress={() => {
+                          cancelRetrain(player.id);
+                          setFeedback({ kind: 'info', text: t('retrain.cancel') });
+                        }}
+                      />
+                    </View>
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.sub}>{t('retrain.hint')}</Text>
+                    <View style={styles.retrainRow}>
+                      {RETRAIN_TARGETS.filter((pos) => !player.positions.includes(pos)).map((pos) => (
+                        <Pressable
+                          key={pos}
+                          style={styles.retrainChip}
+                          onPress={() => {
+                            const r = startRetrain(player.id, pos);
+                            setFeedback(r.ok
+                              ? { kind: 'ok', text: t('retrain.start', { pos, weeks: r.weeks ?? 0 }) }
+                              : { kind: 'error', text: r.errorKey ? t(r.errorKey) : '' });
+                          }}
+                        >
+                          <Text style={styles.retrainChipText}>{pos}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </>
+                )}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
+        {/* CONVERSA — a parte humana da gestão. Elogiar quem está bem e criticar
+            quem está mal funciona; ao contrário sai caro. As promessas dão moral
+            já e cobram-na no prazo (ver core/game/relations.ts). */}
+        {tab === 'TALK' && isOurs ? (
+          <View>
+            <RowKV k={t('talk.trust')} v={String(trust)}
+              vColor={trust >= 30 ? theme.colors.green : trust <= -30 ? theme.colors.red : theme.colors.text} />
+            <RowKV k={t('player.morale')} v={String(player.condition.morale)} />
+            <RowKV k={t('talk.form')} v={String(player.condition.form)} />
+            <RowKV k={t('talk.avgRating')}
+              v={seasonRating(player) > 0 ? seasonRating(player).toFixed(1) : '—'} />
+
+            {promise ? (
+              <View style={styles.talkBox}>
+                <Text style={styles.clauseTitle}>{t('talk.promise.open')}</Text>
+                <Text style={styles.sub}>
+                  {t(promise.kind === 'PLAYING_TIME' ? 'talk.promise.minutesOpen' : 'talk.promise.signingOpen',
+                    { date: promise.deadline })}
+                </Text>
+              </View>
+            ) : null}
+
+            {!canTalk(state, player) ? (
+              <Text style={[styles.sub, { marginTop: theme.spacing(2) }]}>{t('talk.cooldown')}</Text>
+            ) : (
+              <View style={styles.talkBox}>
+                <Text style={styles.clauseHint}>
+                  {deservesPraise(player) ? t('talk.hint.good')
+                    : deservesCriticism(player) ? t('talk.hint.bad')
+                    : t('talk.hint.neutral')}
+                </Text>
+                <Button label={t('talk.praise')} onPress={() => {
+                  const r = talkToPlayer(player.id, 'PRAISE');
+                  setFeedback(r.message
+                    ? { kind: r.wellReceived ? 'ok' : 'error', text: tMsg(r.message) }
+                    : { kind: 'error', text: r.errorKey ? t(r.errorKey) : '' });
+                }} />
+                <Button label={t('talk.criticise')} variant="ghost" onPress={() => {
+                  const r = talkToPlayer(player.id, 'CRITICISE');
+                  setFeedback(r.message
+                    ? { kind: r.wellReceived ? 'ok' : 'error', text: tMsg(r.message) }
+                    : { kind: 'error', text: r.errorKey ? t(r.errorKey) : '' });
+                }} />
+                {!promise ? (
+                  <>
+                    <Text style={styles.clauseHint}>{t('talk.promiseHint')}</Text>
+                    <Button label={t('talk.promiseMinutes')} variant="ghost" onPress={() => {
+                      const r = promisePlayer(player.id, 'PLAYING_TIME');
+                      setFeedback(r.message
+                        ? { kind: 'ok', text: tMsg(r.message) }
+                        : { kind: 'error', text: r.errorKey ? t(r.errorKey) : '' });
+                    }} />
+                    <Button label={t('talk.promiseSigning')} variant="ghost" onPress={() => {
+                      const r = promisePlayer(player.id, 'SIGNING');
+                      setFeedback(r.message
+                        ? { kind: 'ok', text: tMsg(r.message) }
+                        : { kind: 'error', text: r.errorKey ? t(r.errorKey) : '' });
+                    }} />
+                  </>
+                ) : null}
+              </View>
+            )}
           </View>
         ) : null}
 
@@ -177,9 +471,25 @@ export default function PlayerDetail() {
             {pendingBid ? (
               <View style={styles.bidBox}>
                 <Text style={styles.bidTitle}>{t('player.bidFrom', { club: state.clubs[pendingBid.fromClubId]?.name ?? '' })}</Text>
-                <Text style={styles.bidFee}>{money(pendingBid.fee)}</Text>
+                <Text style={styles.bidFee}>{money(Math.round(pendingBid.fee * (1 - sellOn * 0.5)))}</Text>
+
+                {/* % DE FUTURA VENDA: abdica-se de parte do passe hoje para
+                    apanhar uma fatia da próxima venda. A aposta certa num jovem
+                    que vai crescer; dinheiro deitado fora num que não cresce. */}
+                <Text style={styles.clauseHint}>{t('clause.sellOnHint')}</Text>
+                <View style={styles.sellOnRow}>
+                  {SELL_ON_STEPS.map((pct) => (
+                    <Pressable key={pct} onPress={() => setSellOn(pct)}
+                      style={[styles.sellOnChip, sellOn === pct && styles.sellOnChipOn]}>
+                      <Text style={[styles.sellOnText, sellOn === pct && styles.sellOnTextOn]}>
+                        {pct === 0 ? t('clause.sellOnNone') : `${Math.round(pct * 100)}%`}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+
                 <Button label={t('player.acceptSell')} onPress={() => {
-                  const r = acceptBid(pendingBid.id);
+                  const r = acceptBid(pendingBid.id, sellOn);
                   setFeedback(r.ok
                     ? { kind: 'ok', text: t('player.sellToast', { fee: money(r.fee ?? pendingBid.fee) }) }
                     : { kind: 'error', text: r.error ?? t('player.sellFailed') });
@@ -194,8 +504,12 @@ export default function PlayerDetail() {
                 label={player.transferListed ? t('player.listToggleOn') : t('player.listToggleOff')}
                 variant={player.transferListed ? 'ghost' : 'primary'}
                 onPress={() => {
-                  setListed(player.id, !player.transferListed);
-                  setFeedback({ kind: 'info', text: player.transferListed ? t('player.removedFromList') : t('player.addedToList') });
+                  // Captura a intenção ANTES de chamar: o core muta o jogador no
+                  // sítio, e ler `player.transferListed` a seguir dava a mensagem
+                  // ao contrário ("Retirado da lista" ao PÔR na lista).
+                  const willList = !player.transferListed;
+                  setListed(player.id, willList);
+                  setFeedback({ kind: 'info', text: willList ? t('player.addedToList') : t('player.removedFromList') });
                 }}
               />
             </View>
@@ -208,6 +522,34 @@ export default function PlayerDetail() {
 }
 
 const styles = StyleSheet.create({
+  planBox: { marginBottom: 18 },
+  planHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  planSlots: { color: theme.colors.textDim, fontSize: 12 },
+  planRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 },
+  planChip: {
+    paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8,
+    borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface,
+  },
+  planChipOn: { borderColor: theme.colors.accent, backgroundColor: theme.colors.accent + '22' },
+  planChipText: { color: theme.colors.textDim, fontSize: 12, fontWeight: '600' },
+  planChipTextOn: { color: theme.colors.accent },
+  planHint: { color: theme.colors.textDim, fontSize: 11, marginTop: 6, lineHeight: 15 },
+  careerTotals: { color: theme.colors.text, fontSize: 12, marginBottom: 8 },
+  careerHead: {
+    flexDirection: 'row', paddingBottom: 4,
+    borderBottomWidth: 1, borderBottomColor: theme.colors.border,
+  },
+  careerHeadText: { color: theme.colors.textDim, fontSize: 10, fontWeight: '700' },
+  careerRow: {
+    flexDirection: 'row', paddingVertical: 7,
+    borderBottomWidth: 1, borderBottomColor: theme.colors.border + '55',
+  },
+  careerCell: { color: theme.colors.text, fontSize: 12 },
+  careerSeason: { width: 44 },
+  careerClub: { flex: 1, paddingRight: 6 },
+  careerNum: { width: 30, textAlign: 'right' },
+  careerGoals: { fontWeight: '700' },
+
   header: {
     flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1.5),
     paddingVertical: theme.spacing(1.5),
@@ -232,6 +574,25 @@ const styles = StyleSheet.create({
     letterSpacing: 1.2, marginTop: theme.spacing(2), marginBottom: theme.spacing(0.5),
   },
 
+  clauseTitle: {
+    color: theme.colors.text, fontSize: theme.font.body, fontWeight: '800',
+    marginTop: theme.spacing(1), marginBottom: 2,
+  },
+  clauseHint: { color: theme.colors.textDim, fontSize: theme.font.small, marginBottom: theme.spacing(0.5) },
+  talkBox: { marginTop: theme.spacing(2), gap: theme.spacing(1.25) },
+  sellOnRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
+  sellOnChip: {
+    borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.sm,
+    paddingHorizontal: 12, paddingVertical: 6,
+  },
+  sellOnChipOn: { borderColor: theme.colors.blue, backgroundColor: theme.colors.surfaceAlt },
+  sellOnText: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '800' },
+  sellOnTextOn: { color: theme.colors.blue },
+
+  retrainTitle: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '800', marginBottom: 4 },
+  retrainRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: theme.spacing(1) },
+  retrainChip: { backgroundColor: theme.colors.surfaceAlt, borderRadius: theme.radius.sm, paddingHorizontal: 10, paddingVertical: 6 },
+  retrainChipText: { color: theme.colors.text, fontSize: theme.font.small, fontWeight: '800' },
   renewBox: { marginTop: theme.spacing(2), gap: theme.spacing(1.5) },
   renewRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   bidBox: {

@@ -14,14 +14,33 @@
  * Esta porta substitui-a sem qualquer módulo nativo.
  *
  * CHECKLIST DE RELEASE:
- *   1. Bumpa APP_VERSION_CODE aqui + versionCode em android/app/build.gradle (iguais).
+ *   1. Bumpa o versionCode em app.json + android/app/build.gradle + FALLBACK_VERSION_CODE
+ *      aqui (os três iguais). `npm run check:version` falha se divergirem e corre
+ *      dentro do `smoke:all`.
  *   2. Para FORÇAR: publica o novo .aab e põe "minVersionCode" no ficheiro remoto
  *      igual ao código novo — quem estiver abaixo fica bloqueado até atualizar.
  */
+import Constants from 'expo-constants';
 import { Linking, Platform } from 'react-native';
 
-/** Código da versão DESTE build. Manter igual ao versionCode do build.gradle. */
-export const APP_VERSION_CODE = 20;
+/**
+ * Rede de segurança: usado só se o manifest embutido não trouxer o versionCode.
+ * Tem de ser igual ao versionCode de app.json/build.gradle (garantido por
+ * `npm run check:version`).
+ */
+const FALLBACK_VERSION_CODE = 38;
+
+/**
+ * Código da versão DESTE build, lido do manifest embutido (app.json) para não
+ * depender de dois números escritos à mão.
+ *
+ * ⚠️ PORQUÊ: em tempos isto era um literal e ficou em 20 enquanto o build saía
+ * com 22. Como a porta compara ESTE número com o `minVersionCode` remoto, uma
+ * app já atualizada seria bloqueada para sempre — o botão manda-a à Play Store,
+ * que só oferece "Abrir". Nunca voltar a um literal solto.
+ */
+export const APP_VERSION_CODE =
+  Number(Constants.expoConfig?.android?.versionCode) || FALLBACK_VERSION_CODE;
 
 const ANDROID_PACKAGE = 'com.rakulabs.footballlegacy';
 

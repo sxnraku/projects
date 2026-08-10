@@ -1,5 +1,8 @@
 import { Tactic, Tempo } from '../models';
 
+/** FIT recuperado por semana de treino normal (espelha `FITNESS_RECOVERY.NORMAL`). */
+export const WEEKLY_RECOVERY = 12;
+
 /**
  * Custo físico de uma tática.
  *
@@ -38,6 +41,16 @@ export interface LoadReport {
   fatigue: number;
   /** Variação face à tática neutra, em % (ex.: +25). */
   deltaPct: number;
+  /** FIT recuperado numa semana de treino normal (o outro lado da conta). */
+  recovery: number;
+  /**
+   * Saldo REAL por jornada: desgaste do jogo menos a recuperação da semana.
+   *
+   * A UI mostrava "+33% por jogo" num sítio e "−24 FIT" noutro, e o jogador via
+   * o plantel perder ~10% — três números diferentes para a mesma coisa. Este é
+   * o único que o utilizador sente.
+   */
+  net: number;
   label: string;
 }
 
@@ -59,5 +72,6 @@ export function physicalLoad(tactic: LoadInput): LoadReport {
     VERY_HIGH: 'Muito alto',
   }[level];
 
-  return { level, fatigue, deltaPct, label };
+  const recovery = WEEKLY_RECOVERY;
+  return { level, fatigue, deltaPct, recovery, net: fatigue - recovery, label };
 }

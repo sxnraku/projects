@@ -13,11 +13,13 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Club, POSITION_GROUP, Position } from '../src/core/models';
+import { Club, Finance, POSITION_GROUP, Position } from '../src/core/models';
 import { managedLeagueId, nextRound } from '../src/core/game';
+import { infrastructureFunds, wageReserve } from '../src/core/economy';
 import { useGameStore } from '../src/state/gameStore';
 import { money } from '../src/ui/format';
 import { useT } from '../src/ui/i18n';
+import { haptic, playSound } from '../src/ui/sound';
 import { fitnessColor, POS_COLORS, reputationStars, theme } from '../src/ui/theme';
 
 /** Preto ou branco conforme a cor de fundo, para o texto ficar legível. */
@@ -140,13 +142,64 @@ function ResPill({ icon, text, color }: { icon: string; text: string; color: str
   );
 }
 
-/** Estrelas de reputação (0..5, meias incluídas). */
-export function Stars({ value }: { value: number }) {
-  const full = Math.floor(value);
-  const half = value - full >= 0.5;
-  let s = '★'.repeat(full) + (half ? '½' : '');
-  s = s + '☆'.repeat(Math.max(0, 5 - full - (half ? 1 : 0)));
-  return <Text style={styles.stars}>{s}</Text>;
+/**
+ * Estrelas de reputação (0..5, meias incluídas).
+ *
+ * A meia estrela é MESMO meia estrela: uma ★ cheia recortada a 50% por cima da
+ * ★ apagada. Antes escrevia-se o caractere "½" a seguir às estrelas cheias
+ * ("★½☆☆☆"), que a esse tamanho se lia como uma fração solta e dava a
+ * impressão de o emblema estar avariado.
+ */
+export function Stars({ value, size = 11 }: { value: number; size?: number }) {
+  const slots = [0, 1, 2, 3, 4].map((i) => Math.min(1, Math.max(0, value - i)));
+  return (
+    <View style={styles.starRow}>
+      {slots.map((fill, i) => (
+        <View key={i} style={{ width: size, height: size * 1.25 }}>
+          <Text style={[styles.starGlyph, { fontSize: size, color: theme.colors.starOff }]}>★</Text>
+          {fill > 0 ? (
+            <View style={[styles.starClip, { width: `${Math.min(1, fill) * 100}%` }]}>
+              <Text style={[styles.starGlyph, { fontSize: size, color: theme.colors.yellow }]}>★</Text>
+            </View>
+          ) : null}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/**
+ * Repartição do SALDO ÚNICO em reserva salarial · transferências · obras.
+ *
+ * O jogo tinha dois montes de dinheiro independentes ("saldo" e "orçamento de
+ * transferências") e ninguém percebia a relação entre eles — ao ponto de
+ * divergirem e o jogo recusar uma venda por "orçamento insuficiente". Agora há
+ * um saldo só e esta barra mostra para onde ele está apontado.
+ */
+export function BalanceSplit({ fin }: { fin: Finance }) {
+  const t = useT();
+  const parts = [
+    { key: 'fin.split.reserve', v: Math.max(0, wageReserve(fin)), c: theme.colors.textDim },
+    { key: 'fin.split.transfers', v: Math.max(0, fin.transferBudget), c: theme.colors.blue },
+    { key: 'fin.split.works', v: Math.max(0, infrastructureFunds(fin)), c: theme.colors.green },
+  ];
+  const total = parts.reduce((s, p) => s + p.v, 0);
+  return (
+    <View style={styles.splitWrap}>
+      <View style={styles.splitBar}>
+        {total > 0
+          ? parts.map((p) => <View key={p.key} style={{ flex: p.v, backgroundColor: p.c }} />)
+          : <View style={{ flex: 1, backgroundColor: theme.colors.border }} />}
+      </View>
+      {parts.map((p) => (
+        <View key={p.key} style={styles.splitRow}>
+          <View style={[styles.splitDot, { backgroundColor: p.c }]} />
+          <Text style={styles.splitKey} numberOfLines={1}>{t(p.key)}</Text>
+          <Text style={styles.splitVal}>{money(p.v)}</Text>
+        </View>
+      ))}
+    </View>
+  );
 }
 
 /** Título de secção compacto em maiúsculas — organiza listas sem cartões. */
@@ -263,7 +316,9 @@ export function Button({
 }) {
   return (
     <Pressable
-      onPress={onPress}
+      // Feedback tátil/sonoro num só sítio: todos os botões do jogo passam por
+      // aqui, por isso não é preciso repetir isto ecrã a ecrã.
+      onPress={() => { playSound('click'); haptic('tap'); onPress(); }}
       disabled={disabled || loading}
       style={({ pressed }) => [
         styles.btn,
@@ -411,6 +466,19 @@ const styles = StyleSheet.create({
   crestCircleText: { fontWeight: '900', letterSpacing: 0.5 },
 
   stars: { color: theme.colors.yellow, fontSize: 10, letterSpacing: 1 },
+  starRow: { flexDirection: 'row', alignItems: 'center' },
+  starGlyph: { lineHeight: undefined, includeFontPadding: false },
+  starClip: { position: 'absolute', left: 0, top: 0, bottom: 0, overflow: 'hidden' },
+
+  splitWrap: { marginTop: 6, marginBottom: 2 },
+  splitBar: {
+    flexDirection: 'row', height: 6, borderRadius: 3, overflow: 'hidden',
+    backgroundColor: theme.colors.border, marginBottom: 6,
+  },
+  splitRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 1.5 },
+  splitDot: { width: 7, height: 7, borderRadius: 3.5, marginRight: 6 },
+  splitKey: { flex: 1, color: theme.colors.textDim, fontSize: theme.font.small },
+  splitVal: { color: theme.colors.text, fontSize: theme.font.small, fontWeight: '700' },
 
   dashCard: {
     backgroundColor: theme.colors.surface, borderRadius: theme.radius.md,

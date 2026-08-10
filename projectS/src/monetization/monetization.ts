@@ -1,11 +1,13 @@
 import { GameState } from '../core/models';
 import { Msg } from '../core/i18n';
+import { moveMoney } from '../core/economy';
 
 /**
  * Lógica de monetização — pura e testável, sem SDKs.
  *
  * Regras de negócio:
- *  - Interstitial: no máximo 1 a cada INTERSTITIAL_EVERY avanços de semana,
+ *  - Interstitial: no máximo 1 a cada INTERSTITIAL_EVERY avanços de semana
+ *    (contagem contínua, não reinicia por época),
  *    nunca nos primeiros GRACE_ADVANCES avanços (não bombardear novos jogadores),
  *    e nunca para utilizadores premium.
  *  - Rewarded (voluntário): o jogador troca um anúncio por um bónus no jogo,
@@ -15,8 +17,12 @@ import { Msg } from '../core/i18n';
  * O SDK (AdMob) vive em app/ads.ts; aqui só decidimos QUANDO e O QUÊ.
  */
 
-export const INTERSTITIAL_EVERY = 3; // 1 anúncio a cada 3 jornadas avançadas
-export const GRACE_ADVANCES = 5; // primeiras 5 jornadas sem anúncios
+// Frequência baixada 8→15 e graça 10→15 (feedback: os interstitials "do nada"
+// entre "Jogar" e a partida atrapalham e rendem pouco). 1 em cada 15 jornadas dá
+// ~1-2 por época (antes ~4), sem perder o inventário todo. O rewarded (opt-in,
+// que rende mais por impressão) fica como a via principal de receita.
+export const INTERSTITIAL_EVERY = 15; // 1 anúncio a cada 15 jornadas avançadas
+export const GRACE_ADVANCES = 15; // primeiras 15 jornadas sem anúncios
 export const REWARDED_DAILY_CAP = 3; // máx. de bónus por dia de jogo
 
 export interface MonetizationState {
@@ -90,10 +96,7 @@ export function applyReward(state: GameState, reward: AdReward): Msg {
     // Escala pelo escalão (como o bónus diário): um valor fixo achatava as divisões.
     const tier = state.leagues[state.clubs[clubId]?.leagueId ?? '']?.tier ?? 1;
     const amount = Math.round(SPONSOR_BONUS_AMOUNT * Math.pow(0.5, tier - 1) / 10_000) * 10_000;
-    if (fin) {
-      fin.balance += amount;
-      fin.transferBudget += Math.round(amount * 0.5);
-    }
+    if (fin) moveMoney(fin, amount);
     return { key: 'reward.sponsor', params: { amount: amount.toLocaleString('pt-PT') } };
   }
 

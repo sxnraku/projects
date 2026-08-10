@@ -1,12 +1,18 @@
 import React, { useMemo, useState } from 'react';
 import { FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
+import { useRouter } from 'expo-router';
 import { useGameStore } from '../../src/state/gameStore';
-import { suggestedWage } from '../../src/core/economy';
-import { activeOffers, marketShortlist, Reachability } from '../../src/core/game';
+import {
+  checkInterest, defaultReleaseClause, minReleaseClause, requiredWageWith, suggestedWage,
+} from '../../src/core/economy';
+import {
+  activeOffers, BOSMAN_WINDOW_ROUNDS, loanOptionFee, loanOptionPrice, marketShortlist,
+  MAX_LOANS_IN, MAX_PRE_CONTRACTS, Reachability,
+} from '../../src/core/game';
 import { naturalOverall, naturalOverallFine, Player, POSITION_GROUP, PositionGroup, shortName } from '../../src/core/models';
 import { money, to100, wage } from '../../src/ui/format';
-import { useT } from '../../src/ui/i18n';
+import { useT, useTMsg } from '../../src/ui/i18n';
 import { attrColor, theme } from '../../src/ui/theme';
 import { Face } from '../../src/ui/Face';
 import { Toast } from '../../src/ui/Toast';
@@ -22,6 +28,7 @@ function potText(min: number, max: number, exact: boolean): string {
 
 export default function Market() {
   const t = useT();
+  const router = useRouter();
   const state = useGameStore((s) => s.state);
   const submitOffer = useGameStore((s) => s.submitOffer);
   const withdraw = useGameStore((s) => s.withdrawOffer);
@@ -29,19 +36,21 @@ export default function Market() {
   const freeBudget = useGameStore((s) => s.freeBudget);
   const committed = useGameStore((s) => s.committedBudget);
   const reachOf = useGameStore((s) => s.reachOf);
+  const potentialRangeOf = useGameStore((s) => s.potentialRangeOf);
   const win = marketWindow();
 
   const managedId = state?.meta.managedClubId;
   const budget = freeBudget();
   const reserved = committed();
 
-  const [view, setView] = useState<'market' | 'scouts' | 'loans'>('market');
+  const [view, setView] = useState<'market' | 'free' | 'scouts' | 'loans'>('market');
   // Negociação em modal — pode abrir do Mercado OU dos Olheiros.
   const [nego, setNego] = useState<{ player: Player; reach: Reachability } | null>(null);
   const [fee, setFee] = useState(0);
   const [wageOffer, setWageOffer] = useState(0);
   const [years, setYears] = useState(3);
   const [bonus, setBonus] = useState(0);
+  const [clause, setClause] = useState(0); // cláusula de rescisão do contrato proposto
   const [feedback, setFeedback] = useState<Feedback>(null);
 
   // Ordenação por coluna (toque no cabeçalho). 'default' = a curadoria do core.
@@ -99,8 +108,12 @@ export default function Market() {
       return;
     }
     setNego({ player: p, reach });
+    // Cláusula de rescisão: arranca na sugestão (2× o valor), que é também o
+    // que o jogador espera. Baixá-la desconta no ordenado e expõe-nos a perdê-lo.
+    const suggested = defaultReleaseClause(p, state.meta.season);
+    setClause(suggested);
     setFee(Math.round(p.marketValue / 1000) * 1000);
-    setWageOffer(suggestedWage(p, state.meta.season));
+    setWageOffer(requiredWageWith(p, state.meta.season, { releaseClause: suggested }));
     setYears(3);
     setBonus(reach.status === 'BONUS' ? reach.requiredSigningBonus : 0);
     setFeedback(null);
@@ -110,6 +123,7 @@ export default function Market() {
     const res = submitOffer({
       playerId: p.id, fromClubId: managedId, fee, wageOffer, contractYears: years,
       signingBonus: bonus,
+      clauses: { releaseClause: clause },
     });
     if (res.ok) {
       setFeedback({ kind: 'ok', text: t('mkt.sentToast', { name: p.lastName }) });
@@ -136,6 +150,9 @@ export default function Market() {
         <Pressable style={[styles.segBtn, view === 'market' && styles.segOn]} onPress={() => setView('market')}>
           <Text style={[styles.segText, view === 'market' && styles.segTextOn]}>{t('mkt.tab.market')}</Text>
         </Pressable>
+        <Pressable style={[styles.segBtn, view === 'free' && styles.segOn]} onPress={() => setView('free')}>
+          <Text style={[styles.segText, view === 'free' && styles.segTextOn]}>{t('free.title')}</Text>
+        </Pressable>
         <Pressable style={[styles.segBtn, view === 'scouts' && styles.segOn]} onPress={() => setView('scouts')}>
           <Text style={[styles.segText, view === 'scouts' && styles.segTextOn]}>{t('mkt.tab.scouts')}</Text>
         </Pressable>
@@ -144,7 +161,7 @@ export default function Market() {
         </Pressable>
       </View>
 
-      {view === 'loans' ? <LoansPanel /> : view === 'scouts' ? <ScoutsPanel onSign={signFromScouts} /> : (
+      {view === 'loans' ? <LoansPanel /> : view === 'free' ? <FreeAgentsPanel /> : view === 'scouts' ? <ScoutsPanel onSign={signFromScouts} /> : (
       <>
       {!win.open ? (
         <View style={styles.windowClosed}>
@@ -244,9 +261,11 @@ export default function Market() {
           const reach = item.reach;
           const locked = reach.status === 'LOCKED';
           const hasOffer = pending.some((o) => o.playerId === player.id);
+          const pot = potentialRangeOf(player.id);
           return (
             <TargetRow
               player={player}
+              pot={pot ? potText(pot.min, pot.max, pot.exact) : '?'}
               clubName={state.clubs[player.clubId!]?.name ?? ''}
               divLabel={state.leagues[state.clubs[player.clubId!]?.leagueId ?? '']?.name ?? ''}
               clubColor={state.clubs[player.clubId!]?.primaryColor}
@@ -278,6 +297,13 @@ export default function Market() {
                   <Pressable onPress={() => setNego(null)} hitSlop={10}><Text style={styles.withdraw}>✕</Text></Pressable>
                 </View>
                 <RowKV k={t('mkt.marketValue')} v={money(nego.player.marketValue)} />
+                <RowKV k={t('mkt.potential')} v={(() => {
+                  const r = potentialRangeOf(nego.player.id);
+                  return r ? potText(r.min, r.max, r.exact) : '?';
+                })()} />
+                <Pressable onPress={() => { const id = nego.player.id; setNego(null); router.push(`/player/${id}`); }}>
+                  <Text style={styles.negLink}>{t('mkt.openSheet')}</Text>
+                </Pressable>
                 {nego.reach.status === 'BONUS' ? (
                   <Text style={styles.bonusNote}>{t(nego.reach.reasonKey, nego.reach.reasonParams)}</Text>
                 ) : null}
@@ -302,6 +328,18 @@ export default function Market() {
                   <Text style={styles.negLabel}>{t('mkt.duration')}</Text>
                   <Stepper value={years} onChange={setYears} step={1} min={1} max={5} format={(v) => t('tac.years', { n: v })} />
                 </View>
+                {/* CLÁUSULA DE RESCISÃO — baixa = ordenado mais barato agora e
+                    risco de o perderem por uma pechincha; alta = folha pesada. */}
+                <View style={styles.negRow}>
+                  <Text style={styles.negLabel}>{t('clause.release')}</Text>
+                  <Stepper value={clause} onChange={setClause}
+                    step={Math.max(50_000, Math.round(nego.player.marketValue * 0.2 / 50_000) * 50_000)}
+                    min={minReleaseClause(nego.player, state.meta.season)}
+                    format={money} />
+                </View>
+                <Text style={styles.delayNote}>
+                  {t('clause.asksNow')}: {wage(requiredWageWith(nego.player, state.meta.season, { releaseClause: clause }))}
+                </Text>
                 {feedback ? (
                   <Text style={[styles.feedback, { color: feedback.kind === 'ok' ? theme.colors.green : feedback.kind === 'counter' ? theme.colors.yellow : theme.colors.red }]}>
                     {feedback.text}
@@ -325,9 +363,9 @@ export default function Market() {
 }
 
 function TargetRow({
-  player, clubName, divLabel, clubColor, open, locked, needsBonus, pending, onPress,
+  player, pot, clubName, divLabel, clubColor, open, locked, needsBonus, pending, onPress,
 }: {
-  player: Player; clubName: string; divLabel: string; clubColor?: string;
+  player: Player; pot: string; clubName: string; divLabel: string; clubColor?: string;
   open: boolean; locked: boolean; needsBonus: boolean; pending: boolean;
   onPress: () => void;
 }) {
@@ -347,6 +385,7 @@ function TargetRow({
         <Text style={[styles.cell, locked && styles.dim]} numberOfLines={1}>{shortName(player)}</Text>
         <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
           <PosText position={player.positions[0]!} style={{ fontSize: 9 }} />
+          <Text style={styles.potTag}>{t('mkt.potShort', { pot })}</Text>
           <Text style={styles.sub} numberOfLines={1}>{clubName}</Text>
           {needsBonus ? <Text style={styles.bonusTag}>{t('mkt.bonusTag')}</Text> : null}
         </View>
@@ -493,6 +532,8 @@ function LoansPanel() {
   const isFocused = useIsFocused();
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [adBusy, setAdBusy] = useState(false);
+  // Negociar opção de compra em TODOS os empréstimos que se receberem a seguir.
+  const [withOption, setWithOption] = useState(false);
   if (!state) return null;
   const managedId = state.meta.managedClubId;
   // PERF: as listas percorrem ~800 jogadores — só com a aba focada.
@@ -510,9 +551,14 @@ function LoansPanel() {
     const watched = await showRewarded();
     setAdBusy(false);
     if (!watched) { setFeedback({ kind: 'error', text: t('loan.in.adFailed') }); return; }
-    const r = doLoanIn(p.id);
+    const r = doLoanIn(p.id, withOption);
     setFeedback(r.ok
-      ? { kind: 'ok', text: t('loan.in.toast', { name: p.lastName }) }
+      ? {
+        kind: 'ok',
+        text: withOption
+          ? t('loan.in.toastOption', { name: p.lastName, price: money(loanOptionPrice(p)) })
+          : t('loan.in.toast', { name: p.lastName }),
+      }
       : { kind: 'error', text: r.errorKey ? t(r.errorKey) : t('loan.err.invalid') });
   };
 
@@ -553,11 +599,27 @@ function LoansPanel() {
         ) : null}
 
         <Section title={t('loan.in.title')} />
-        <Text style={styles.emptyNote}>{t('loan.in.adHint')}</Text>
+        <Text style={styles.emptyNote}>
+          {t('loan.in.count', { n: active.length, max: MAX_LOANS_IN })} {t('loan.in.adHint')}
+        </Text>
+
+        {/* OPÇÃO DE COMPRA — paga-se já uma taxa e o preço fica travado no valor
+            de hoje. Se o miúdo crescer durante o empréstimo, fica-se com ele
+            barato; se não crescer, perdeu-se a taxa. */}
+        <Pressable style={[styles.optionToggle, withOption && styles.optionToggleOn]}
+          onPress={() => setWithOption((v) => !v)}>
+          <Text style={[styles.optionToggleText, withOption && styles.optionToggleTextOn]}>
+            {withOption ? '☑' : '☐'} {t('loan.option.toggle')}
+          </Text>
+        </Pressable>
+        <Text style={styles.emptyNote}>{t('loan.option.hint')}</Text>
+
         {inList.length === 0 ? <Text style={styles.emptyNote}>{t('loan.in.empty')}</Text> : inList.map((p) =>
           row(
             p,
-            `${p.positions[0]} · ${p.age} · OVR ${to100(naturalOverallFine(p))} · ${t('loan.wageLabel', { v: wage(p.wage) })}`,
+            withOption
+              ? `${p.positions[0]} · ${p.age} · OVR ${to100(naturalOverallFine(p))} · ${t('loan.option.price', { fee: money(loanOptionFee(p)), price: money(loanOptionPrice(p)) })}`
+              : `${p.positions[0]} · ${p.age} · OVR ${to100(naturalOverallFine(p))} · ${t('loan.wageLabel', { v: wage(p.wage) })}`,
             (
               <Pressable style={[styles.leagueBtn, adBusy && { opacity: 0.4 }]} disabled={adBusy}
                 onPress={() => loanInWithAd(p)}>
@@ -590,6 +652,45 @@ function LoansPanel() {
 }
 
 const styles = StyleSheet.create({
+  freeName: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600' },
+  freeSub: { color: theme.colors.textDim, fontSize: 11, marginBottom: 8, lineHeight: 15 },
+  freeEmpty: { color: theme.colors.textDim, fontSize: 12, fontStyle: 'italic', marginVertical: 8 },
+  freeRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: theme.colors.border + '55',
+  },
+  freeWho: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
+  freeBtn: {
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8,
+    backgroundColor: theme.colors.green,
+  },
+  freeBtnOff: { backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border },
+  freeBtnText: { color: '#04240f', fontSize: 12, fontWeight: '800' },
+  freeYears: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginBottom: 8, paddingVertical: 6,
+  },
+  freeYearsLabel: { color: theme.colors.text, fontSize: 12, fontWeight: '700' },
+  freeYearsBtns: { flexDirection: 'row', gap: 5 },
+  freeYearBtn: {
+    width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border,
+  },
+  freeYearOn: { borderColor: theme.colors.accent, backgroundColor: theme.colors.accent + '22' },
+  freeYearText: { color: theme.colors.textDim, fontSize: 12, fontWeight: '700' },
+  freeYearTextOn: { color: theme.colors.accent },
+  dealBox: {
+    backgroundColor: theme.colors.surface, borderRadius: 12, padding: 10, marginBottom: 10,
+    borderWidth: 1, borderColor: theme.colors.accent + '55',
+  },
+  dealTitle: { color: theme.colors.accent, fontSize: 11, fontWeight: '800', marginBottom: 6 },
+  dealRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 5 },
+  dealCancel: {
+    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8,
+    borderWidth: 1, borderColor: theme.colors.border,
+  },
+  dealCancelText: { color: theme.colors.textDim, fontSize: 11, fontWeight: '700' },
+
   segRow: { flexDirection: 'row', gap: theme.spacing(0.75), marginTop: theme.spacing(1) },
   segBtn: { flex: 1, paddingVertical: theme.spacing(1), borderRadius: theme.radius.sm, borderWidth: 1, borderColor: theme.colors.border, alignItems: 'center', backgroundColor: theme.colors.surface },
   segOn: { borderColor: theme.colors.blue, backgroundColor: theme.colors.surfaceAlt },
@@ -610,6 +711,14 @@ const styles = StyleSheet.create({
   scoutTitle: { color: theme.colors.text, fontSize: theme.font.h3, fontWeight: '800' },
   scoutHint: { color: theme.colors.textDim, fontSize: theme.font.small, maxWidth: 130, textAlign: 'right' },
   emptyNote: { color: theme.colors.textDim, fontSize: theme.font.small, paddingVertical: theme.spacing(1) },
+  optionToggle: {
+    alignSelf: 'flex-start', borderWidth: 1, borderColor: theme.colors.border,
+    borderRadius: theme.radius.sm, paddingHorizontal: theme.spacing(1.5),
+    paddingVertical: theme.spacing(0.85), marginTop: theme.spacing(0.5),
+  },
+  optionToggleOn: { borderColor: theme.colors.green, backgroundColor: theme.colors.surfaceAlt },
+  optionToggleText: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '800' },
+  optionToggleTextOn: { color: theme.colors.green },
   missionRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1), paddingVertical: theme.spacing(1) },
   missionName: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '700' },
   progTrack: { height: 4, borderRadius: 2, backgroundColor: theme.colors.border, marginTop: 4, overflow: 'hidden' },
@@ -669,6 +778,8 @@ const styles = StyleSheet.create({
   lockedTag: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700' },
   pendingTag: { color: theme.colors.yellow, fontSize: theme.font.small, fontWeight: '700' },
   bonusTag: { color: theme.colors.yellow, fontSize: 9, fontWeight: '700' },
+  potTag: { color: theme.colors.blue, fontSize: 9, fontWeight: '700' },
+  negLink: { color: theme.colors.blue, fontSize: theme.font.small, fontWeight: '700', marginTop: theme.spacing(0.5) },
 
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: theme.spacing(2) },
   negBox: {
@@ -686,3 +797,166 @@ const styles = StyleSheet.create({
   bonusNote: { color: theme.colors.yellow, fontSize: theme.font.small, paddingVertical: theme.spacing(0.75) },
   delayNote: { color: theme.colors.textDim, fontSize: theme.font.small, textAlign: 'center', marginTop: 6 },
 });
+
+
+/**
+ * LIVRES E PRÉ-CONTRATOS.
+ *
+ * Duas listas no mesmo sítio porque são a mesma decisão vista de dois lados:
+ * quem já está sem clube (assina hoje, sem passe) e quem vai ficar sem clube no
+ * verão (prende-se agora, chega depois). A janela de transferências não trava
+ * nem uma nem outra — é assim no futebol a sério.
+ */
+function FreeAgentsPanel() {
+  const t = useT();
+  const tMsg = useTMsg();
+  const router = useRouter();
+  const state = useGameStore((s) => s.state);
+  const freeAgents = useGameStore((s) => s.freeAgents);
+  const askingWage = useGameStore((s) => s.askingWage);
+  const signFree = useGameStore((s) => s.signFree);
+  const preWindowOpen = useGameStore((s) => s.preWindowOpen);
+  const preTargets = useGameStore((s) => s.preTargets);
+  const preDeals = useGameStore((s) => s.preDeals);
+  const agreePre = useGameStore((s) => s.agreePre);
+  const cancelPre = useGameStore((s) => s.cancelPre);
+
+  const [note, setNote] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const [years, setYears] = useState(2);
+
+  const club = state ? state.clubs[state.meta.managedClubId] : null;
+  const tier = state && club ? state.leagues[club.leagueId]?.tier ?? 1 : 1;
+
+  // Só mostramos quem o clube consegue mesmo convencer: uma lista cheia de
+  // nomes que recusam todos é ruído, não é mercado.
+  const reachable = useMemo(() => {
+    if (!state || !club) return [];
+    return freeAgents().filter((p) => checkInterest(p, club, tier).interested).slice(0, 40);
+  }, [state, club, tier, freeAgents]);
+
+  const targets = useMemo(() => {
+    if (!state || !club) return [];
+    return preTargets().filter((p) => checkInterest(p, club, tier).interested).slice(0, 25);
+  }, [state, club, tier, preTargets]);
+
+  if (!state || !club) return <Body>{t('common.loading')}</Body>;
+
+  const deals = preDeals();
+  const windowOpen = preWindowOpen();
+
+  return (
+    <>
+      <Toast text={note?.text ?? null} kind={note?.kind ?? 'ok'} onHide={() => setNote(null)} />
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
+        {/* Duração do contrato — vale para as duas listas. */}
+        <View style={styles.freeYears}>
+          <Text style={styles.freeYearsLabel}>{t('free.years', { n: years })}</Text>
+          <View style={styles.freeYearsBtns}>
+            {[1, 2, 3, 4, 5].map((y) => (
+              <Pressable key={y} onPress={() => setYears(y)} style={[styles.freeYearBtn, years === y && styles.freeYearOn]}>
+                <Text style={[styles.freeYearText, years === y && styles.freeYearTextOn]}>{y}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+
+        {/* ---------------- LIVRES ---------------- */}
+        <Section title={t('free.title')} />
+        <Text style={styles.freeSub}>{t('free.subtitle')}</Text>
+        {reachable.length === 0 ? (
+          <Text style={styles.freeEmpty}>{t('free.none')}</Text>
+        ) : reachable.map((p) => {
+          const wage = askingWage(p.id);
+          return (
+            <View key={p.id} style={styles.freeRow}>
+              <Pressable style={styles.freeWho} onPress={() => router.push(`/player/${p.id}` as never)}>
+                <Face seed={p.id} size={30} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.freeName} numberOfLines={1}>{p.firstName} {p.lastName}</Text>
+                  <Text style={styles.sub} numberOfLines={1}>
+                    {p.positions[0]} · {p.age} · OVR {to100(naturalOverallFine(p))} · {t('free.asks', { wage: money(wage) })}
+                  </Text>
+                </View>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  const r = signFree(p.id, wage, years);
+                  setNote(r.ok
+                    ? { kind: 'ok', text: t('free.signed', { player: p.lastName }) }
+                    : { kind: 'error', text: tMsg({ key: r.errorKey ?? '', params: r.params }) });
+                }}
+                style={styles.freeBtn}>
+                <Text style={styles.freeBtnText}>{t('free.sign')}</Text>
+              </Pressable>
+            </View>
+          );
+        })}
+
+        {/* ---------------- PRÉ-CONTRATOS ---------------- */}
+        <Section title={t('pre.title')} />
+        <Text style={styles.freeSub}>{t('pre.subtitle')}</Text>
+
+        {deals.length > 0 ? (
+          <View style={styles.dealBox}>
+            <Text style={styles.dealTitle}>{t('pre.list', { n: deals.length, max: MAX_PRE_CONTRACTS })}</Text>
+            {deals.map((d) => (
+              <View key={d.playerId} style={styles.dealRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.freeName} numberOfLines={1}>{d.playerName}</Text>
+                  <Text style={styles.sub} numberOfLines={1}>
+                    {t('pre.from', { club: d.fromClubName })} · {money(d.wage)}/sem · {t('free.years', { n: d.years })}
+                  </Text>
+                </View>
+                <Pressable
+                  onPress={() => {
+                    cancelPre(d.playerId);
+                    setNote({ kind: 'ok', text: t('pre.cancelled', { player: d.playerName }) });
+                  }}
+                  style={styles.dealCancel}>
+                  <Text style={styles.dealCancelText}>{t('pre.cancel')}</Text>
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {!windowOpen ? (
+          <Text style={styles.freeEmpty}>{t('pre.closed', { rounds: BOSMAN_WINDOW_ROUNDS })}</Text>
+        ) : targets.length === 0 ? (
+          <Text style={styles.freeEmpty}>{t('pre.none', { n: 0 })}</Text>
+        ) : targets.map((p) => {
+          // Um pré-contrato custa mais em ordenado: ele sabe que não há passe.
+          const wage = Math.round(askingWage(p.id) * 1.15);
+          const already = deals.some((d) => d.playerId === p.id);
+          return (
+            <View key={p.id} style={styles.freeRow}>
+              <Pressable style={styles.freeWho} onPress={() => router.push(`/player/${p.id}` as never)}>
+                <Face seed={p.id} size={30} shirt={state.clubs[p.clubId ?? '']?.primaryColor} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.freeName} numberOfLines={1}>{p.firstName} {p.lastName}</Text>
+                  <Text style={styles.sub} numberOfLines={1}>
+                    {p.positions[0]} · {p.age} · OVR {to100(naturalOverallFine(p))} · {state.clubs[p.clubId ?? '']?.name ?? ''}
+                  </Text>
+                  <Text style={styles.sub}>{t('free.asks', { wage: money(wage) })}</Text>
+                </View>
+              </Pressable>
+              <Pressable
+                disabled={already}
+                onPress={() => {
+                  const r = agreePre(p.id, wage, years);
+                  setNote(r.ok
+                    ? { kind: 'ok', text: t('pre.agreed', { player: p.lastName }) }
+                    : { kind: 'error', text: tMsg({ key: r.errorKey ?? '', params: r.params }) });
+                }}
+                style={[styles.freeBtn, already && styles.freeBtnOff]}>
+                <Text style={[styles.freeBtnText, already && { color: theme.colors.textDim }]}>
+                  {already ? '✓' : t('free.sign')}
+                </Text>
+              </Pressable>
+            </View>
+          );
+        })}
+      </ScrollView>
+    </>
+  );
+}

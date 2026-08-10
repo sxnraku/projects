@@ -78,7 +78,8 @@ const clubId = state.meta.managedClubId;
 const fin = state.finances[clubId]!;
 fin.balance = 50_000_000; // garante fundos para o teste
 const capBefore = state.clubs[clubId]!.stadiumCapacity;
-const cost = facilityUpgradeCost('stadium', 1);
+const clubTier = state.leagues[state.clubs[clubId]!.leagueId]?.tier ?? 1;
+const cost = facilityUpgradeCost('stadium', 1, clubTier);
 const up = upgradeFacility(state, 'stadium');
 assert(up.ok && up.newLevel === 2, `upgrade do estádio para nível 2 (custo ${cost.toLocaleString('pt-PT')})`);
 assert(state.clubs[clubId]!.stadiumCapacity > capBefore, 'capacidade do estádio aumentou');

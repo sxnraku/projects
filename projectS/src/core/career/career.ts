@@ -4,6 +4,7 @@
  */
 import { Lang } from '../i18n';
 import type { Finance } from '../models';
+import { moveMoney } from '../economy';
 
 /** Objetivo definido pela direção no início da época. */
 export const Objective = {
@@ -19,6 +20,49 @@ export const OBJECTIVE_KEYS: Record<Objective, string> = {
   TOP_HALF: 'objective.TOP_HALF',
   AVOID_RELEGATION: 'objective.AVOID_RELEGATION',
 };
+
+/**
+ * Preferências de som e vibração. Vivem no save (como o idioma) para o
+ * utilizador não ter de as repor de cada vez que abre o jogo.
+ */
+export interface AudioSettings {
+  /** Efeitos sonoros ligados. */
+  sound: boolean;
+  /** Volume 0..1 (o passo da UI é 0.25). */
+  volume: number;
+  /** Vibração/háptica ligada. */
+  haptics: boolean;
+}
+
+/**
+ * Por omissão o som vem a MEIO volume: é para dar vida ao jogo, não para
+ * dominar. Quem quiser mais sobe nas definições; quem odiar desliga.
+ */
+export const DEFAULT_AUDIO: AudioSettings = { sound: true, volume: 0.5, haptics: true };
+
+/** Sanitiza definições vindas de um save antigo ou corrompido. */
+export function normalizeAudio(a: Partial<AudioSettings> | undefined): AudioSettings {
+  if (!a) return { ...DEFAULT_AUDIO };
+  const volume = typeof a.volume === 'number' && Number.isFinite(a.volume)
+    ? Math.max(0, Math.min(1, a.volume))
+    : DEFAULT_AUDIO.volume;
+  return {
+    sound: a.sound !== false,
+    volume,
+    haptics: a.haptics !== false,
+  };
+}
+
+/** Quantos reforços recentes ficam guardados no save. */
+export const SIGNINGS_KEPT = 30;
+
+/** Um reforço contratado pelo clube gerido (para avaliar promessas). */
+export interface SigningRecord {
+  /** Nº de ordem monotónico na carreira. */
+  n: number;
+  date: string;
+  overall: number;
+}
 
 /** Registo de uma época concluída (linha do historial). */
 export interface SeasonRecord {
@@ -84,12 +128,38 @@ export interface CareerState {
   /** Ofertas de emprego pendentes (clubIds) após despedimento. Vazio = empregado. */
   pendingOffers: string[];
 
+  /** Reputação/prestígio do treinador (0..100) — cresce com o sucesso. */
+  reputation?: number;
+  /** Ofertas de clubes MAIORES por mérito (opcionais — aceitar muda de clube). */
+  meritOffers?: string[];
+  /** Países estrangeiros já explorados por olheiro → mercado internacional aberto. */
+  scoutedCountries?: string[];
+  /** Alvos internacionais já contratados (`slug:idx`) — para não voltarem à lista. */
+  signedWorld?: string[];
+
   // Bónus diário (datas do MUNDO REAL, não do jogo)
   lastLoginDate: string; // "YYYY-MM-DD"
   loginStreak: number;
 
   /** Idioma escolhido pelo utilizador (persiste no save). */
   lang?: Lang;
+
+  /** Som e vibração escolhidos pelo utilizador (persiste no save). */
+  audio?: AudioSettings;
+
+  /**
+   * EQUIPA TÉCNICA do clube que geres. Vive na carreira (e não no clube) porque
+   * é o TEU backroom: muda contigo quando mudas de clube. Ausente nos saves
+   * anteriores — `ensureStaff` gera a inicial na primeira semana.
+   */
+  staff?: import('../staff/staff').StaffMember[];
+
+  /**
+   * PRÉ-CONTRATOS fechados nas últimas jornadas com jogadores de outros clubes
+   * em fim de contrato (lei Bosman). Executam-se no rollover. Ausente nos saves
+   * anteriores — ver `core/game/freeAgents.ts`.
+   */
+  preContracts?: import('../game/freeAgents').PreContract[];
 
   /** O tutorial de abas já foi visto nesta carreira? (mostra 1x por carreira). */
   tutorialSeen?: boolean;
@@ -102,6 +172,28 @@ export interface CareerState {
 
   /** Última época em que se pediu orçamento à direção (limita a 1×/época). */
   lastBudgetRequestSeason?: number;
+
+  /**
+   * Títulos SEGUIDOS por clube (`clubId` → nº de campeonatos consecutivos).
+   *
+   * Vive aqui, e não no `Club`, porque a tabela `clubs` do SQLite não tem
+   * mecanismo de migração: acrescentar-lhe uma coluna partia os saves antigos.
+   * O blob da carreira é gravado inteiro, por isso aceita campos novos de graça.
+   */
+  titleStreaks?: Record<string, number>;
+
+  /**
+   * Reforços feitos pelo clube gerido — serve para saber se uma promessa de
+   * contratação foi cumprida (`core/game/relations.ts`). `signingsMade` é um
+   * contador monotónico; a lista é truncada, o contador não.
+   */
+  signingsMade?: number;
+  signings?: SigningRecord[];
+
+  /** Melhoria de instalação GRÁTIS por vídeo disponível (fica até ser usada). */
+  freeUpgradePending?: boolean;
+  /** Jornadas jogadas desde a última melhoria grátis (nova a cada 5). */
+  roundsSinceFreeUpgrade?: number;
 }
 
 export function initialCareer(): CareerState {
@@ -115,6 +207,8 @@ export function initialCareer(): CareerState {
     totalLosses: 0,
     timesFired: 0,
     pendingOffers: [],
+    reputation: 45,
+    meritOffers: [],
     lastLoginDate: '',
     loginStreak: 0,
   };
@@ -189,6 +283,25 @@ export function evaluateSeason(
   return { metObjective: false, fired: false, messageKey: 'board.lastChance' };
 }
 
+/**
+ * Atualiza a reputação/prestígio do treinador no fim da época. Sobe com títulos,
+ * subidas e boas classificações; desce com despromoções. Erosão natural leve
+ * para que só o sucesso continuado leve um treinador ao topo.
+ */
+export function updateManagerReputation(
+  career: CareerState,
+  opts: { champion: boolean; promoted: boolean; relegated: boolean; position: number; met: boolean; fired: boolean },
+): void {
+  let d = -1;
+  if (opts.champion) d += 13;
+  else if (opts.promoted) d += 8;
+  else if (opts.position <= 3) d += 4;
+  else if (opts.met) d += 2;
+  if (opts.relegated) d -= 12;
+  if (opts.fired) d -= 8;
+  career.reputation = Math.max(0, Math.min(100, (career.reputation ?? 45) + d));
+}
+
 // ---------- Interação com a direção: pedir orçamento ----------
 
 export interface BudgetRequestResult {
@@ -197,12 +310,21 @@ export interface BudgetRequestResult {
   messageParams?: import('../i18n').MsgParams;
 }
 
+/** Semanas de receita que a direção liberta, entre a confiança mínima e a máxima. */
+export const BUDGET_WEEKS_MIN = 8;
+export const BUDGET_WEEKS_MAX = 22;
+
 /**
  * Pede um reforço de orçamento de transferências à direção.
  *
  * Regras: uma vez por época. A direção só cede se a confiança for razoável
- * (>= 40); o valor cresce com a confiança e com o escalão (1ª divisão = mais).
- * Pedir custa um pouco de confiança (a direção não gosta de choradeira).
+ * (>= 40) e o valor cresce com a confiança.
+ *
+ * O montante é uma fatia da RECEITA DO PRÓPRIO CLUBE (8 a 22 semanas), não um
+ * número fixo. Antes eram sempre ~5M para toda a gente: uma fortuna para um
+ * clube da 3ª divisão e uma esmola para um grande — "não faz muito sentido",
+ * como se apanhou no playtest. Ancorar na receita faz o reforço escalar sozinho
+ * com o escalão, o país, a dimensão do clube e a época, sem mais parâmetros.
  */
 export function requestTransferBudget(
   career: CareerState,
@@ -219,10 +341,12 @@ export function requestTransferBudget(
     return { granted: 0, messageKey: 'board.budget.refused' };
   }
 
-  const divFactor = Math.pow(0.5, Math.max(0, tier - 1)); // 1ª=1, 2ª=0.5, 3ª=0.25…
+  const weeklyIncome = finance.income.sponsorship + finance.income.tvRights
+    + finance.income.merchandising + finance.income.tickets;
   const confFactor = (career.confidence - 40) / 60; // 0..1
-  const granted = Math.round(4_000_000 * divFactor * (0.3 + confFactor) / 100_000) * 100_000;
-  finance.transferBudget += granted;
+  const weeks = BUDGET_WEEKS_MIN + confFactor * (BUDGET_WEEKS_MAX - BUDGET_WEEKS_MIN);
+  const granted = Math.max(100_000, Math.round(weeklyIncome * weeks / 100_000) * 100_000);
+  moveMoney(finance, granted);
   career.confidence = Math.max(0, career.confidence - 3);
 
   return {

@@ -5,7 +5,22 @@
  */
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useGameStore } from '../src/state/gameStore';
+import { translate } from '../src/ui/i18n';
 import { theme } from '../src/ui/theme';
+
+/**
+ * Traduz sem hooks (isto é um componente de classe) e sem rebentar: se a store
+ * ainda não existir, cai no idioma do dicionário base. Um erro AQUI deixaria o
+ * jogador com ecrã branco, que é exatamente o que este ecrã evita.
+ */
+function t(key: string): string {
+  try {
+    return translate(useGameStore.getState().lang, key);
+  } catch {
+    return translate('pt-PT', key);
+  }
+}
 
 interface Props { children: React.ReactNode }
 interface State { hasError: boolean }
@@ -26,12 +41,10 @@ export default class ErrorBoundary extends React.Component<Props, State> {
     if (!this.state.hasError) return this.props.children;
     return (
       <View style={styles.wrap}>
-        <Text style={styles.title}>Algo correu mal</Text>
-        <Text style={styles.body}>
-          Ocorreu um erro inesperado. O teu progresso está guardado.
-        </Text>
+        <Text style={styles.title}>{t('error.title')}</Text>
+        <Text style={styles.body}>{t('error.body')}</Text>
         <Pressable style={styles.btn} onPress={() => this.setState({ hasError: false })}>
-          <Text style={styles.btnText}>Tentar de novo</Text>
+          <Text style={styles.btnText}>{t('error.retry')}</Text>
         </Pressable>
       </View>
     );

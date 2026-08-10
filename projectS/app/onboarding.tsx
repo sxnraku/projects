@@ -25,25 +25,35 @@ export default function Onboarding() {
   const [name, setName] = useState('');
   const [clubId, setClubId] = useState<string | null>(null);
 
-  // Clubes da ÚLTIMA divisão — a carreira começa em baixo.
+  // Divisão em que a carreira começa (a mais baixa do país) + nº de divisões.
+  const startLeague = useMemo(() => {
+    if (!state) return null;
+    const tiers = Object.values(state.leagues).map((l) => l.tier);
+    const bottomTier = Math.max(...tiers);
+    const league = Object.values(state.leagues).find((l) => l.tier === bottomTier) ?? null;
+    return { league, divisions: new Set(tiers).size };
+  }, [state]);
+
+  // Clubes da divisão de arranque, do mais forte para o mais fraco.
   const clubs = useMemo(() => {
-    if (!state) return [];
-    const bottomTier = Math.max(...Object.values(state.leagues).map((l) => l.tier));
-    const league = Object.values(state.leagues).find((l) => l.tier === bottomTier);
-    if (!league) return [];
+    const league = startLeague?.league;
+    if (!state || !league) return [];
     return league.clubIds
       .map((id) => state.clubs[id]!)
       .filter(Boolean)
       .sort((a, b) => b.reputation - a.reputation);
-  }, [state]);
+  }, [state, startLeague]);
 
   if (!state) return null;
+
+  const leagueName = startLeague?.league?.name ?? '';
+  const introKey = (startLeague?.divisions ?? 1) > 1 ? 'onb.intro' : 'onb.introTop';
 
   return (
     <Screen edges={['left', 'right', 'bottom']}>
       <View style={styles.header}>
         <Text style={styles.title}>{t('onb.welcome')}</Text>
-        <Text style={styles.subtitle}>{t('onb.intro')}</Text>
+        <Text style={styles.subtitle}>{t(introKey, { league: leagueName })}</Text>
       </View>
 
       {/* Idioma — escolha logo no arranque */}

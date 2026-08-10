@@ -40,12 +40,144 @@ export interface PlayerCondition {
   // Totalizadores da ÉPOCA (reiniciam no rollover). Opcionais: saves antigos = 0.
   seasonGoals?: number;
   seasonAssists?: number;
+  seasonRating?: number; // soma das notas dos jogos (para média)
+  seasonApps?: number;   // nº de jogos com nota (para média e onze da época)
+  /** Subidas de atributo GANHAS no treino esta época (para o ecrã de Treino). */
+  devSeason?: number;
   // Empréstimo: se definido, o jogador está emprestado. `clubId` é o clube onde
   // joga; `loanOwnerId` é o dono a quem regressa em `loanUntil` (época).
   loanOwnerId?: string;
   loanUntil?: number;
+  /**
+   * OPÇÃO DE COMPRA acordada no início do empréstimo: preço FIXO a que o clube
+   * de acolhimento pode ficar com o jogador quando o empréstimo termina.
+   * Como fica travado no dia do acordo, um jovem que exploda sai a preço de
+   * saldo — é isso que faz valer a pena pedi-la (e custa mais no ordenado).
+   */
+  loanBuyOption?: number;
   // Suspensão: nº de jogos que ainda tem de falhar (vermelho → 1). 0/undefined = apto.
   suspended?: number;
+  /**
+   * Data (ISO) até à qual o jogador NÃO faz pedidos ao treinador (aumento/saída).
+   * Arranca ao assinar e depois de cada pedido resolvido — sem isto o mesmo
+   * jogador insatisfeito pedia de duas em duas semanas, e um reforço que
+   * acabara de assinar contrato exigia aumento no dia seguinte.
+   */
+  requestCooldownUntil?: string;
+  /** Reconversão de posição em curso (ver `core/training/retrain.ts`). */
+  retraining?: { position: Position; weeksLeft: number };
+  /** Relação com o treinador: confiança, conversas e promessas em aberto. */
+  relation?: PlayerRelation;
+  /**
+   * Foco de treino INDIVIDUAL. Sobrepõe-se ao foco da equipa só para este
+   * jogador — é como se trabalha um miúdo de 17 anos sem mudar o plano de toda
+   * a gente. Ausente = segue a equipa.
+   */
+  trainingFocus?: string;
+  /**
+   * CARREIRA — uma linha por época jogada, arquivada no rollover antes de os
+   * totalizadores serem limpos. Vive aqui (e não numa tabela nova) porque
+   * `condition` já é um blob JSON: saves antigos carregam sem migração e a
+   * história viaja com o jogador quando ele muda de clube.
+   */
+  history?: PlayerSeasonLine[];
+}
+
+/**
+ * Uma época na carreira de um jogador. Campos curtos porque isto é gravado
+ * para os ~1200 jogadores do mundo — ver `MAX_HISTORY_SEASONS`.
+ */
+export interface PlayerSeasonLine {
+  season: number;
+  /** Clube onde jogou a época (id). O nome guarda-se à parte, ver `clubName`. */
+  clubId: string;
+  /** Nome do clube NA ALTURA — o clube pode desaparecer ou mudar de nome. */
+  clubName: string;
+  /** Escalão em que jogou, para a ficha mostrar "1ª Divisão". */
+  tier: number;
+  apps: number;
+  goals: number;
+  assists: number;
+  /** Média de nota ×10 (inteiro, para o JSON ser curto). 0 = sem notas. */
+  rating10: number;
+  /** Overall (0-100) no fim da época — desenha a curva de carreira. */
+  overall: number;
+}
+
+/** Quantas épocas de carreira se guardam por jogador (as mais recentes). */
+export const MAX_HISTORY_SEASONS = 20;
+
+/** O que se pode prometer a um jogador (ver `core/game/relations.ts`). */
+export const PromiseKind = {
+  /** Mais minutos: espera jogar nas próximas jornadas. */
+  PLAYING_TIME: 'PLAYING_TIME',
+  /** Um reforço à altura dele antes do prazo. */
+  SIGNING: 'SIGNING',
+} as const;
+export type PromiseKind = (typeof PromiseKind)[keyof typeof PromiseKind];
+
+/** Promessa feita a um jogador, com prazo e a fotografia do que era na altura. */
+export interface PlayerPromise {
+  kind: PromiseKind;
+  /** Data (ISO) até à qual tem de estar cumprida. */
+  deadline: string;
+  /** Jogos da época que ele já tinha quando a promessa foi feita. */
+  baselineApps?: number;
+  /** Nº de reforços já feitos na carreira à data da promessa (contador monotónico). */
+  baselineSignings?: number;
+  /** Overall mínimo que o reforço prometido tem de ter. */
+  requiredOverall?: number;
+}
+
+/**
+ * Como o jogador vê o treinador. `trust` vai de -100 a 100 e é a memória das
+ * conversas: alimenta os pedidos de aumento e o salário que ele exige.
+ */
+export interface PlayerRelation {
+  trust: number;
+  /** Data (ISO) até à qual não vale a pena voltar a falar. */
+  talkCooldownUntil?: string;
+  promise?: PlayerPromise;
+}
+
+/** Dias de silêncio depois de assinar por um clube (aumento/saída). */
+export const SIGNING_QUIET_DAYS = 120;
+
+/**
+ * Cala os pedidos deste jogador durante `days` dias a partir de `fromISO`.
+ * Só ESTENDE o silêncio — nunca o encurta.
+ */
+export function silenceRequests(condition: PlayerCondition, fromISO: string, days: number): void {
+  const d = new Date(fromISO + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  const until = d.toISOString().slice(0, 10);
+  if (!condition.requestCooldownUntil || condition.requestCooldownUntil < until) {
+    condition.requestCooldownUntil = until;
+  }
+}
+
+/**
+ * CLÁUSULAS DO CONTRATO — a camada que transforma o mercado de "propor valor e
+ * esperar sim/não" numa negociação com decisões.
+ *
+ * Regras em `core/economy/clauses.ts`; aqui fica só a forma dos dados. Tudo é
+ * opcional para os saves antigos continuarem a carregar sem migração.
+ */
+export interface ContractClauses {
+  /**
+   * Cláusula de rescisão: quem pagar isto leva o jogador SEM negociar com o
+   * clube. Pô-la baixa faz o jogador aceitar menos ordenado — e expõe-te a
+   * perdê-lo por uma pechincha.
+   */
+  releaseClause?: number;
+  /** Percentagem (0..0.3) de uma FUTURA venda que fica para o clube vendedor. */
+  sellOn?: number;
+  /** Clube com direito à percentagem acima (normalmente quem o vendeu). */
+  sellOnClubId?: string;
+  /** Prémio por golo marcado (€, pago pelo clube do jogador). */
+  goalBonus?: number;
+  /** Prémio por jogo disputado (€). */
+  appearanceBonus?: number;
 }
 
 /** Jogador completo — entidade central do modelo de dados. */
@@ -78,6 +210,9 @@ export interface Player {
   // Mercado: se true, o jogador está na lista de transferências — a IA faz
   // ofertas mais depressa e a um preço mais próximo do valor de mercado.
   transferListed: boolean;
+
+  /** Cláusulas negociadas (rescisão, % de futura venda, prémios). */
+  clauses?: ContractClauses;
 }
 
 /**
@@ -128,6 +263,15 @@ function positionGroupOf(pos: Position) {
 }
 
 /**
+ * Pesos de cada atributo no overall DESTA posição (só os que contam; os restantes
+ * têm peso 0). Usado pelo treino para fazer crescer os atributos que REALMENTE
+ * sobem o overall do jogador na sua posição.
+ */
+export function positionAttrWeights(position: Position): Partial<Record<keyof PlayerAttributes, number>> {
+  return OVERALL_WEIGHTS[positionGroupOf(position)];
+}
+
+/**
  * Overall derivado — nunca guardado bruto, sempre calculado a partir dos atributos
  * e da posição avaliada. Retorna valor 1..20 arredondado.
  */
@@ -171,8 +315,25 @@ export function naturalOverallFine(player: Player): number {
   return computeOverallFine(player.attributes, player.positions[0]);
 }
 
-/** Penalização por jogar fora da posição natural (em pontos de overall). */
-export const OUT_OF_POSITION_PENALTY = { sameGroup: 2, otherGroup: 5 } as const;
+/**
+ * Overall na ESCALA DO ECRÃ (0-100) — exatamente o número que a ficha do
+ * jogador mostra. O core usa-o nas notícias e notas para nunca anunciar um
+ * valor diferente do que o utilizador vai ver (arredondar o inteiro interno e
+ * só depois multiplicar por 5 chegava a anunciar 100 num jogador de 98).
+ */
+export function displayOverall(player: Player): number {
+  return Math.round(Math.max(0, Math.min(20, naturalOverallFine(player))) * 5);
+}
+
+/**
+ * Penalização por jogar fora da posição natural (escala interna 0-20).
+ *
+ * Subiu de 0.4/1.4 para 0.8/2.4 — ou seja, de 2/7 pontos para 4/12 na escala do
+ * ecrã. Com a penalização antiga escalar um extremo a lateral quase não custava
+ * e o onze "certo" deixava de importar. Quem quiser mudar mesmo de posição tem
+ * agora a reconversão por treino (`core/training/retrain.ts`).
+ */
+export const OUT_OF_POSITION_PENALTY = { sameGroup: 0.8, otherGroup: 2.4 } as const;
 
 /** True se o jogador atua naturalmente nesta posição. */
 export function isNaturalPosition(player: Player, position: Position): boolean {

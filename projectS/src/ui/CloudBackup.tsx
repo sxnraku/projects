@@ -3,8 +3,11 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
 import { useGameStore } from '../state/gameStore';
+import { validateRestoredState } from '../core/models';
+import { APP_VERSION_CODE } from '../native/appUpdate';
 import { ANDROID_CLIENT_ID, WEB_CLIENT_ID, DRIVE_SCOPE, cloudConfigured } from '../native/cloudConfig';
 import { downloadSave, uploadSave } from '../native/cloudSave';
+import { unwrapSave, wrapSave } from '../persistence/cloudEnvelope';
 import { useT } from './i18n';
 import { theme } from './theme';
 import { Toast } from './Toast';
@@ -56,7 +59,7 @@ export function CloudBackup() {
     if (!token || !state) return;
     setBusy(true);
     try {
-      await uploadSave(token, JSON.stringify(state));
+      await uploadSave(token, wrapSave(state, APP_VERSION_CODE));
       setFeedback({ kind: 'ok', text: t('cloud.saved') });
     } catch (e) {
       setFeedback({ kind: 'error', text: t('cloud.error') + ' (' + ((e as Error).message ?? '') + ')' });
@@ -71,7 +74,27 @@ export function CloudBackup() {
     try {
       const json = await downloadSave(token);
       if (!json) { setFeedback({ kind: 'info', text: t('cloud.noSave') }); setBusy(false); return; }
-      loadState(JSON.parse(json)); // substitui o jogo atual; o auto-save persiste-o localmente
+
+      const { state: restored, appVersionCode } = unwrapSave(json);
+
+      // Cópia escrita por uma app mais recente: pode ter campos que esta versão
+      // não sabe ler. Recusar é melhor do que carregar meio a meio.
+      if (appVersionCode != null && appVersionCode > APP_VERSION_CODE) {
+        setFeedback({ kind: 'error', text: t('cloud.newer') });
+        setBusy(false);
+        return;
+      }
+
+      // ⚠️ NUNCA chamar loadState sem isto: o auto-save grava o estado no SQLite
+      // 2s depois, por cima do save local bom. Lixo aqui = jogo que não arranca.
+      const errors = validateRestoredState(restored);
+      if (errors.length > 0) {
+        setFeedback({ kind: 'error', text: t('cloud.invalid') + ' (' + errors[0] + ')' });
+        setBusy(false);
+        return;
+      }
+
+      loadState(restored as Parameters<typeof loadState>[0]); // substitui o jogo atual; o auto-save persiste-o localmente
       setFeedback({ kind: 'ok', text: t('cloud.restored') });
     } catch (e) {
       setFeedback({ kind: 'error', text: t('cloud.error') + ' (' + ((e as Error).message ?? '') + ')' });

@@ -55,41 +55,43 @@ export async function initAds(): Promise<void> {
   }
 }
 
-/** Promessa que resolve com `fallback` se `p` demorar mais de `ms`. */
-function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
-  return new Promise((resolve) => {
-    let done = false;
-    const t = setTimeout(() => { if (!done) { done = true; resolve(fallback); } }, ms);
-    p.then((v) => { if (!done) { done = true; clearTimeout(t); resolve(v); } })
-      .catch(() => { if (!done) { done = true; clearTimeout(t); resolve(fallback); } });
-  });
-}
+/** Cap de segurança para um anúncio ABERTO cujo evento CLOSED nunca dispara. */
+const AD_WATCH_CAP_MS = 180_000;
 
 /**
  * Mostra um interstitial. Resolve quando fecha (ou no timeout). Nunca rejeita.
+ * Se o anúncio não ABRIR dentro do timeout de carregamento, desiste depressa —
+ * nunca deixa o jogo congelado à espera de um anúncio que não veio.
  */
 export async function showInterstitial(): Promise<void> {
   const sdk = await loadSdk();
   if (!sdk) return;
-  const show = new Promise<void>((resolve) => {
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    let opened = false;
+    let cleanup = () => {};
+    const done = () => { if (!settled) { settled = true; cleanup(); resolve(); } };
     try {
       const { InterstitialAd, AdEventType } = sdk;
       const ad = InterstitialAd.createForAdRequest(AD_UNITS.interstitial);
-      const done = () => { unsubL(); unsubC(); unsubE(); resolve(); };
-      const unsubL = ad.addAdEventListener(AdEventType.LOADED, () => ad.show());
-      const unsubC = ad.addAdEventListener(AdEventType.CLOSED, done);
-      const unsubE = ad.addAdEventListener(AdEventType.ERROR, done);
+      const subs = [
+        ad.addAdEventListener(AdEventType.LOADED, () => ad.show()),
+        ad.addAdEventListener(AdEventType.OPENED, () => { opened = true; }),
+        ad.addAdEventListener(AdEventType.CLOSED, done),
+        ad.addAdEventListener(AdEventType.ERROR, done),
+      ];
+      cleanup = () => subs.forEach((u) => u());
       ad.load();
-    } catch {
-      resolve();
-    }
+      setTimeout(() => { if (!opened) done(); }, AD_LOAD_TIMEOUT_MS + 3000);
+      setTimeout(done, AD_WATCH_CAP_MS);
+    } catch { done(); }
   });
-  await withTimeout(show, AD_LOAD_TIMEOUT_MS + 4000, undefined);
 }
 
 /**
  * Mostra um rewarded. Resolve true se o utilizador ganhou a recompensa.
- * Timeout no CARREGAMENTO devolve false (não dá o bónus sem ver o anúncio).
+ * Se não CARREGAR/ABRIR a tempo, devolve false depressa (sem congelar); depois de
+ * aberto, aguarda o fecho com um cap de segurança.
  */
 export async function showRewarded(): Promise<boolean> {
   const sdk = await loadSdk();
@@ -98,20 +100,28 @@ export async function showRewarded(): Promise<boolean> {
     await new Promise((r) => setTimeout(r, 500));
     return true;
   }
-  const show = new Promise<boolean>((resolve) => {
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    let opened = false;
+    let earned = false;
+    let cleanup = () => {};
+    const done = (v: boolean) => { if (!settled) { settled = true; cleanup(); resolve(v); } };
     try {
       const { RewardedAd, AdEventType, RewardedAdEventType } = sdk;
       const ad = RewardedAd.createForAdRequest(AD_UNITS.rewarded);
-      let earned = false;
-      const done = () => { unsubL(); unsubR(); unsubC(); unsubE(); resolve(earned); };
-      const unsubL = ad.addAdEventListener(RewardedAdEventType.LOADED, () => ad.show());
-      const unsubR = ad.addAdEventListener(RewardedAdEventType.EARNED_REWARD, () => { earned = true; });
-      const unsubC = ad.addAdEventListener(AdEventType.CLOSED, done);
-      const unsubE = ad.addAdEventListener(AdEventType.ERROR, done);
+      const subs = [
+        ad.addAdEventListener(RewardedAdEventType.LOADED, () => ad.show()),
+        ad.addAdEventListener(AdEventType.OPENED, () => { opened = true; }),
+        ad.addAdEventListener(RewardedAdEventType.EARNED_REWARD, () => { earned = true; }),
+        ad.addAdEventListener(AdEventType.CLOSED, () => done(earned)),
+        ad.addAdEventListener(AdEventType.ERROR, () => done(false)),
+      ];
+      cleanup = () => subs.forEach((u) => u());
       ad.load();
-    } catch {
-      resolve(false);
-    }
+      // Não abriu a tempo → desiste (não dá o bónus, mas não congela).
+      setTimeout(() => { if (!opened) done(false); }, AD_LOAD_TIMEOUT_MS + 3000);
+      // Rede de segurança se CLOSED nunca disparar depois de aberto.
+      setTimeout(() => done(earned), AD_WATCH_CAP_MS);
+    } catch { done(false); }
   });
-  return withTimeout(show, AD_LOAD_TIMEOUT_MS + 60000, false);
 }

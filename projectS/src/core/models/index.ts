@@ -10,6 +10,7 @@ export * from './league';
 export * from './match';
 export * from './fixture';
 export * from './cupTypes';
+export * from './history';
 export * from './inbox';
 export * from './gameState';
 export * from './validate';

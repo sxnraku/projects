@@ -9,6 +9,7 @@ export const InboxKind = {
   RENEWAL: 'RENEWAL', // contrato do jogador expira no fim desta época
   REQUEST: 'REQUEST', // o jogador pede algo (aumento / quer sair)
   OFFER: 'OFFER', // proposta NOSSA por um jogador de outro clube
+  CRISIS: 'CRISIS', // dívida grave: é preciso vender alguém (decisão do treinador)
 } as const;
 export type InboxKind = (typeof InboxKind)[keyof typeof InboxKind];
 
@@ -83,7 +84,39 @@ export interface OfferItem {
   requiredWage?: number; // contra-proposta: salário exigido
 }
 
-export type InboxItem = BidItem | RenewalItem | RequestItem | OfferItem;
+/**
+ * CRISE FINANCEIRA — a dívida chegou ao ponto em que é preciso vender.
+ *
+ * A direção já não decide sozinha: apresenta uma lista curta de candidatos e o
+ * treinador escolhe de quem se livra. Antes, a venda acontecia em silêncio e
+ * levava o melhor jogador do plantel — o utilizador só dava pela falta dele
+ * dias depois ("roubaram-me mais um jogador").
+ *
+ * BLOQUEIA o avanço da jornada: é uma decisão que não se adia.
+ */
+export interface CrisisItem {
+  kind: 'CRISIS';
+  id: string;
+  /** Candidatos à venda, do menos ao mais doloroso (nunca titulares primeiro). */
+  candidates: string[];
+  /** Quanto falta para tapar o buraco (para a UI explicar a dimensão). */
+  debt: number;
+  createdDate: string;
+}
+
+export type InboxItem = BidItem | RenewalItem | RequestItem | OfferItem | CrisisItem;
+
+/**
+ * Este item do inbox diz respeito a este jogador?
+ *
+ * A crise financeira é o único item que fala de VÁRIOS jogadores (os candidatos
+ * à venda) em vez de um só, por isso não tem `playerId`. Quem varre o inbox à
+ * procura de referências a um jogador deve usar isto e não `it.playerId`.
+ */
+export function inboxRefersTo(item: InboxItem, playerId: string): boolean {
+  if (item.kind === 'CRISIS') return item.candidates.includes(playerId);
+  return item.playerId === playerId;
+}
 
 export const MAX_ACTIVE_BIDS = 5;
 export const MAX_ACTIVE_RENEWALS = 4;

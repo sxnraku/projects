@@ -1,16 +1,22 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useGameStore } from '../src/state/gameStore';
-import { GameState, Mentality, MatchEvent, MatchResult, POSITION_GROUP, shortName, Tempo } from '../src/core/models';
+import { GameState, Mentality, MatchEvent, MatchResult, shortName, Tactic, Tempo } from '../src/core/models';
 import { theme } from '../src/ui/theme';
 import { useT } from '../src/ui/i18n';
 import { Body, Button, Card, Crest, H1, Screen } from './components';
+import { GoalClip } from '../src/ui/goalClip/GoalClip';
+import { haptic, playSound, startAmbience, stopAmbience } from '../src/ui/sound';
 import { showRewarded } from '../src/native/ads';
 
 const MENTALITIES: Mentality[] = ['DEFENSIVE', 'BALANCED', 'ATTACKING'];
 const TEMPOS: Tempo[] = ['SLOW', 'NORMAL', 'FAST'];
 const MAX_SUBS = 3;
+const CLIP_W = Math.min(340, Dimensions.get('window').width - 24);
+
+/** Um golo à espera de ser reproduzido em lance animado. */
+interface ClipGoal { scorer: string; minute: number; side: 'HOME' | 'AWAY'; seed: number }
 
 const EVENT_ICON: Record<string, string> = {
   GOAL: '⚽', ASSIST: '🅰', SAVE: '🧤', CHANCE: '💨', YELLOW_CARD: '🟨', RED_CARD: '🟥',
@@ -30,16 +36,34 @@ export default function Match() {
 
   const replayLastMatch = useGameStore((s) => s.replayLastMatch);
   const replayedFixtures = useGameStore((s) => s.replayedFixtures);
-  const applyHalftime = useGameStore((s) => s.applyHalftime);
+  const applyMatchChange = useGameStore((s) => s.applyMatchChange);
+  const applyEuroMatchChange = useGameStore((s) => s.applyEuroMatchChange);
+  const clearMatchAdjustments = useGameStore((s) => s.clearMatchAdjustments);
   const [busyAd, setBusyAd] = useState(false);
-  const [halftimeDone, setHalftimeDone] = useState(false);
-  const [showHT, setShowHT] = useState(false);
+  // Fila de jogos jogáveis da semana (noite europeia primeiro, depois a liga).
+  const [queueIdx, setQueueIdx] = useState(0);
+  const [halftimeDone, setHalftimeDone] = useState(false); // o prompt de intervalo já apareceu?
+  const [showSub, setShowSub] = useState(false);
+  // Onze ao vivo (persiste entre janelas de substituição) + nº de subs já feitas.
+  const [liveTactic, setLiveTactic] = useState<Pick<Tactic, 'lineup' | 'mentality' | 'tempo'> | null>(null);
+  const [subsUsed, setSubsUsed] = useState(0);
 
-  const fixture = useMemo(() => {
-    if (!lastWeek || !managedId) return null;
-    return lastWeek.fixtures.find((f) => f.homeClubId === managedId || f.awayClubId === managedId) ?? null;
+  const queue = useMemo(() => {
+    const mm = lastWeek?.managedMatches ?? [];
+    if (mm.length > 0) return mm;
+    // Fallback (saves antigos): só o jogo da liga do clube gerido.
+    if (!lastWeek || !managedId) return [];
+    const lg = lastWeek.fixtures.find((f) => f.homeClubId === managedId || f.awayClubId === managedId);
+    return lg ? [lg] : [];
   }, [lastWeek, managedId]);
+  const fixture = queue[Math.min(queueIdx, Math.max(0, queue.length - 1))] ?? null;
   const result: MatchResult | null = fixture?.result ?? null;
+
+  // Tipo do jogo atual: europeu? e, se sim, é fase de liga (permite substituições)?
+  const isEuroMatch = !!fixture && fixture.leagueId.startsWith('euro_');
+  const euroComp = isEuroMatch ? fixture!.leagueId.replace('euro_', '') : null;
+  const isEuroLeaguePhase = isEuroMatch && fixture!.round >= 1; // KO/Supertaça (round 0) = watch-only
+  const hasNext = queueIdx < queue.length - 1;
 
   // ---- Relógio da reprodução ao vivo ----
   const [minute, setMinute] = useState(0);
@@ -47,35 +71,140 @@ export default function Match() {
   const [paused, setPaused] = useState(false);
   const finished = minute >= FULL_TIME_MIN;
 
-  // Novo jogo → relógio volta ao 0' e reinicia o estado do intervalo.
+  // ---- Lance de golo animado (dispara quando o relógio chega ao minuto do golo) ----
+  const [clipGoal, setClipGoal] = useState<ClipGoal | null>(null);
+  const playedGoals = useRef<Set<number>>(new Set()); // índices de golos já reproduzidos
+  const playedSfx = useRef<Set<number>>(new Set()); // índices de eventos já sonorizados
+  const prevMinute = useRef(0);
+
+  // Lado do clube gerido neste jogo — decide se um golo é festa ou desgosto.
+  const ourSide: 'HOME' | 'AWAY' | null = !result || !managedId
+    ? null
+    : result.homeClubId === managedId ? 'HOME' : result.awayClubId === managedId ? 'AWAY' : null;
+
+  /** Reação da bancada a um golo, do lado certo. */
+  const roar = useCallback((side: 'HOME' | 'AWAY' | null) => {
+    if (side && ourSide && side === ourSide) { playSound('goal'); haptic('success'); }
+    else { playSound('goalAgainst'); haptic('warning'); }
+  }, [ourSide]);
+
+  // Sair do ecrã (voltar atrás, tocar num separador) fecha tudo o que estava
+  // por cima: o lance de golo e o painel de substituições. Sem isto ficavam a
+  // correr por baixo e reapareciam ao voltar — ou, com <Modal>, por cima de
+  // outro separador.
+  useFocusEffect(useCallback(() => () => {
+    setClipGoal(null);
+    setShowSub(false);
+    setPaused(true);
+  }, []));
+
+  // AMBIENTE DE ESTÁDIO enquanto se vê o jogo. Sem esta cama sonora os efeitos
+  // soltos ficavam pendurados no silêncio e o jogo soava mais vazio do que
+  // antes de ter som ("não há mais som no resto do jogo, fica meio estranho").
+  useEffect(() => {
+    startAmbience();
+    return () => stopAmbience();
+  }, []);
+
+  // Novo jogo (seed diferente) → relógio ao 0' e reinicia o estado das substituições/lances.
   useEffect(() => {
     setMinute(0);
     setPaused(false);
     setHalftimeDone(false);
-    setShowHT(false);
-  }, [result?.seed]);
+    setShowSub(false);
+    setSubsUsed(0);
+    setClipGoal(null);
+    playedGoals.current = new Set();
+    playedSfx.current = new Set();
+    prevMinute.current = 0;
+    const tac = managedId ? state?.tactics[managedId] : null;
+    setLiveTactic(tac ? { lineup: tac.lineup.map((s) => ({ ...s })), mentality: tac.mentality, tempo: tac.tempo } : null);
+    // Apito inicial + bancada: o jogo começa a soar a jogo.
+    if (result) { playSound('whistle'); haptic('light'); }
+  }, [result?.seed]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Só há ajuste de intervalo em jogos de LIGA do clube gerido (Taça usa outra seed).
+  // Ao passar pelo minuto de um golo, dispara o lance animado (só no avanço natural;
+  // num salto grande — botão "Fim" — marca-os como vistos sem interromper).
+  useEffect(() => {
+    if (!result) return;
+    const jumped = minute - prevMinute.current > 1;
+    prevMinute.current = minute;
+
+    // SOM DOS LANCES. Num salto ("Fim") os eventos passam todos de uma vez —
+    // aí marcam-se como ouvidos sem tocar, senão saía uma salva de apitos.
+    result.events.forEach((e, ei) => {
+      if (e.minute > minute || playedSfx.current.has(ei)) return;
+      playedSfx.current.add(ei);
+      if (jumped) return;
+      if (e.type === 'GOAL') {
+        // Se vai haver lance animado, o rugido espera pelo momento em que a
+        // bola entra mesmo na rede (o clip avisa por `onNet`). Tocar já era
+        // festejar o golo antes de o remate sequer acontecer.
+        if (!clipGoal && e.side) return;
+        roar(e.side);
+      } else if (e.type === 'RED_CARD') {
+        playSound('foul'); haptic('error');
+      } else if (e.type === 'YELLOW_CARD') {
+        // Amarelos são muitos por jogo — só vibração, sem apito. Com som
+        // tornavam-se ruído de fundo e estragavam o efeito do vermelho.
+        haptic('light');
+      }
+    });
+
+    const goals = result.events.filter((e) => e.type === 'GOAL');
+    for (let gi = 0; gi < goals.length; gi++) {
+      const g = goals[gi]!;
+      if (g.minute > minute || playedGoals.current.has(gi)) continue;
+      playedGoals.current.add(gi);
+      if (!jumped && !clipGoal && g.side) {
+        const pid = g.playerId;
+        const p = pid && state ? state.players[pid] : null;
+        setClipGoal({
+          scorer: p ? shortName(p) : t('clip.goal'),
+          minute: g.minute,
+          side: g.side,
+          seed: result.seed ^ (g.minute * 2654435761),
+        });
+        break; // um lance de cada vez
+      }
+    }
+  }, [minute, result]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Substituições: jogos de LIGA do clube gerido (doméstica) OU fase de liga europeia.
+  // Taça e eliminatórias/Supertaça europeias são watch-only (o vencedor já resolveu).
   const isLeagueMatch = !!fixture && !!state && !!managedId
     && fixture.leagueId === state.clubs[managedId]?.leagueId;
+  const canAdjust = isLeagueMatch || isEuroLeaguePhase;
+  const canSub = canAdjust && !finished && subsUsed < MAX_SUBS;
 
-  // Ao chegar ao intervalo (45'), pausa e abre o painel de ajustes — uma vez.
+  // Ao chegar ao intervalo (45'), pausa e abre o painel — uma vez.
   useEffect(() => {
-    if (isLeagueMatch && !halftimeDone && !finished && minute >= 45) {
+    if (canAdjust && !halftimeDone && !finished && minute >= 45) {
       setPaused(true);
-      setShowHT(true);
+      setShowSub(true);
     }
-  }, [minute, halftimeDone, finished, isLeagueMatch]);
+  }, [minute, halftimeDone, finished, canAdjust]);
 
   // Tick do relógio (limpa e recria quando a velocidade/pausa muda).
+  // Pausa também durante o lance de golo (clipGoal).
   useEffect(() => {
-    if (!result || paused || finished) return;
+    if (!result || paused || finished || clipGoal) return;
     const t = setInterval(
       () => setMinute((m) => Math.min(FULL_TIME_MIN, m + 1)),
       SPEED_MS[speed] ?? 500,
     );
     return () => clearInterval(t);
-  }, [result, paused, finished, speed]);
+  }, [result, paused, finished, speed, clipGoal]);
+
+  // Apito final — uma vez por jogo, mesmo quando se salta para o fim.
+  const endWhistled = useRef<number | null>(null);
+  useEffect(() => {
+    if (!result || !finished) return;
+    if (endWhistled.current === result.seed) return;
+    endWhistled.current = result.seed;
+    playSound('whistleEnd');
+    haptic('medium');
+  }, [finished, result?.seed]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Estado do jogo até ao minuto atual ----
   const live = useMemo(() => {
@@ -99,13 +228,25 @@ export default function Match() {
     };
   }, [result, minute]);
 
+  // ESTADO VAZIO — chega-se aqui abrindo "Jornada" sem ter avançado a semana.
+  // Antes era um título encostado ao canto superior esquerdo com uma linha
+  // cinzenta por baixo, num ecrã inteiro preto: parecia um erro, não um estado.
   if (!state || !result || !live) {
     return (
       <Screen edges={['left', 'right', 'bottom']}>
-        <H1>{t('match.noRecent')}</H1>
-        <Body dim>{t('match.advanceHint')}</Body>
-        <View style={{ height: 16 }} />
-        <Button label={t('common.back')} variant="ghost" onPress={() => router.back()} />
+        <View style={styles.emptyWrap}>
+          <View style={styles.emptyBadge}>
+            <Text style={styles.emptyIcon}>⚽</Text>
+          </View>
+          <Text style={styles.emptyTitle}>{t('match.noRecent')}</Text>
+          <Text style={styles.emptyHint}>{t('match.advanceHint')}</Text>
+          <View style={styles.emptyBtnWrap}>
+            <Button label={t('match.goHome')} onPress={() => router.replace('/')} />
+          </View>
+          <Pressable onPress={() => router.back()} hitSlop={8}>
+            <Text style={styles.emptyBack}>{t('common.back')}</Text>
+          </Pressable>
+        </View>
       </Screen>
     );
   }
@@ -136,6 +277,11 @@ export default function Match() {
   return (
     <Screen edges={['left', 'right', 'bottom']}>
       <ScrollView showsVerticalScrollIndicator={false}>
+        {isEuroMatch && euroComp ? (
+          <View style={styles.euroBadge}>
+            <Text style={styles.euroBadgeText}>🏆 {t('euro.night')} · {t(`euro.name.${euroComp}`)}</Text>
+          </View>
+        ) : null}
         {/* SCOREBOARD AO VIVO */}
         <View style={styles.board}>
           <View style={styles.boardStripes}>
@@ -158,7 +304,13 @@ export default function Match() {
           <View style={styles.scoreRow}>
             <View style={styles.teamCol}>
               <Crest club={home} size={54} />
-              <Text style={styles.teamName} numberOfLines={1}>{home.shortName}</Text>
+              <View style={styles.teamNameRow}>
+                {home.id === managedId ? <Text style={styles.ourStar}>★</Text> : null}
+                <Text
+                  style={[styles.teamName, home.id === managedId && styles.ourTeamName]}
+                  numberOfLines={1}
+                >{home.shortName}</Text>
+              </View>
             </View>
             <View style={styles.scoreBox}>
               <Text style={styles.score}>{live.goalsHome}</Text>
@@ -167,7 +319,13 @@ export default function Match() {
             </View>
             <View style={styles.teamCol}>
               <Crest club={away} size={54} />
-              <Text style={styles.teamName} numberOfLines={1}>{away.shortName}</Text>
+              <View style={styles.teamNameRow}>
+                {away.id === managedId ? <Text style={styles.ourStar}>★</Text> : null}
+                <Text
+                  style={[styles.teamName, away.id === managedId && styles.ourTeamName]}
+                  numberOfLines={1}
+                >{away.shortName}</Text>
+              </View>
             </View>
           </View>
 
@@ -182,7 +340,7 @@ export default function Match() {
           ) : null}
         </View>
 
-        {/* CONTROLOS DE VELOCIDADE */}
+        {/* CONTROLOS DE VELOCIDADE + SUBSTITUIÇÃO AO VIVO */}
         {!finished ? (
           <View style={styles.controls}>
             <ControlBtn label={paused ? '▶' : '⏸'} active={paused} onPress={() => setPaused((p) => !p)} />
@@ -192,6 +350,11 @@ export default function Match() {
             ))}
             <ControlBtn label={t('match.speed.end')} onPress={() => setMinute(FULL_TIME_MIN)} />
           </View>
+        ) : null}
+        {canSub && minute >= 1 ? (
+          <Pressable style={styles.subBtn} onPress={() => { setPaused(true); setShowSub(true); }}>
+            <Text style={styles.subBtnText}>⇄ {t('match.sub.open', { n: MAX_SUBS - subsUsed })}</Text>
+          </Pressable>
         ) : null}
 
         {/* ESTATÍSTICAS AO VIVO */}
@@ -244,9 +407,13 @@ export default function Match() {
         {live.timeline.length > 0 ? (
           <Card>
             <View style={styles.tlHeader}>
-              <Text style={styles.tlTeam}>{home.shortName}</Text>
+              <Text style={[styles.tlTeam, home.id === managedId && styles.ourTeamName]}>
+                {home.id === managedId ? '★ ' : ''}{home.shortName}
+              </Text>
               <Text style={styles.tlMinuteHead}>MIN</Text>
-              <Text style={styles.tlTeam}>{away.shortName}</Text>
+              <Text style={[styles.tlTeam, away.id === managedId && styles.ourTeamName]}>
+                {away.id === managedId ? '★ ' : ''}{away.shortName}
+              </Text>
             </View>
             {live.timeline.map((e, i) => (
               <TimelineRow key={`${e.minute}-${e.type}-${i}`} event={e} player={playerName(e.playerId)} highlight={i === 0 && !finished} />
@@ -254,8 +421,8 @@ export default function Match() {
           </Card>
         ) : null}
 
-        {/* SEGUNDA HIPÓTESE — só após derrota, 1× por jogo, em troca de anúncio */}
-        {finished && !won && !drew && fixture && !replayedFixtures.includes(fixture.id) ? (
+        {/* SEGUNDA HIPÓTESE — só na LIGA doméstica, após derrota, 1× por jogo, por anúncio */}
+        {finished && isLeagueMatch && !won && !drew && fixture && !replayedFixtures.includes(fixture.id) ? (
           <Pressable
             disabled={busyAd}
             onPress={async () => {
@@ -277,44 +444,91 @@ export default function Match() {
           </Pressable>
         ) : null}
 
-        {finished ? <Button label={t('match.continue')} onPress={() => router.replace('/')} /> : null}
+        {finished ? (
+          <Button
+            label={hasNext ? t('match.next') : t('match.continue')}
+            onPress={() => {
+              if (hasNext) { clearMatchAdjustments(); setQueueIdx((i) => i + 1); }
+              else router.replace('/');
+            }}
+          />
+        ) : null}
         <View style={{ height: 24 }} />
       </ScrollView>
 
-      {/* PAINEL DE INTERVALO — substituições + mentalidade/ritmo (re-simula a 2ª parte) */}
-      {showHT && state && managedId ? (
-        <HalftimeSheet
+      {/* PAINEL DE SUBSTITUIÇÕES — intervalo ou ao vivo (re-simula a partir do minuto) */}
+      {showSub && state && managedId && liveTactic ? (
+        <SubSheet
           state={state}
           managedId={managedId}
+          tactic={liveTactic}
+          subsAlready={subsUsed}
+          minute={minute}
           onApply={(lineup, mentality, tempo) => {
-            applyHalftime(lineup, mentality, tempo);
+            const at = Math.max(1, minute); // muda a partir deste minuto
+            const prev = liveTactic.lineup;
+            const changed = lineup.filter((s, i) => s.playerId !== prev[i]?.playerId).length;
+            if (isEuroLeaguePhase && fixture) applyEuroMatchChange(fixture.id, at, lineup, mentality, tempo);
+            else applyMatchChange(at, lineup, mentality, tempo);
+            setLiveTactic({ lineup, mentality, tempo });
+            setSubsUsed((n) => n + changed);
             setHalftimeDone(true);
-            setShowHT(false);
+            setShowSub(false);
             setPaused(false);
           }}
-          onSkip={() => { setHalftimeDone(true); setShowHT(false); setPaused(false); }}
+          onSkip={() => { setHalftimeDone(true); setShowSub(false); setPaused(false); }}
         />
+      ) : null}
+
+      {/* LANCE DE GOLO — clip animado curto (velocidade fixa, toque para saltar) */}
+      {clipGoal ? (
+        <View style={styles.overlayFill}>
+          <View style={styles.clipBackdrop}>
+            <GoalClip
+              scorer={clipGoal.scorer}
+              minute={clipGoal.minute}
+              attackColor={(clipGoal.side === 'HOME' ? home.primaryColor : away.primaryColor)}
+              defenceColor={(clipGoal.side === 'HOME' ? away.primaryColor : home.primaryColor)}
+              seed={clipGoal.seed}
+              width={CLIP_W}
+              onDone={() => setClipGoal(null)}
+              onNet={() => roar(clipGoal.side)}
+              // De quem é o golo. O ecrã sempre soube; o clip é que não — e com
+              // dois clubes de cores parecidas não havia como perceber.
+              ours={(clipGoal.side === 'HOME' ? home.id : away.id) === managedId}
+              clubName={clipGoal.side === 'HOME' ? home.shortName : away.shortName}
+            />
+          </View>
+        </View>
       ) : null}
     </Screen>
   );
 }
 
-/** Painel de INTERVALO: muda mentalidade/ritmo e faz até 3 substituições. */
-function HalftimeSheet({
-  state, managedId, onApply, onSkip,
+/**
+ * Painel de SUBSTITUIÇÕES: muda mentalidade/ritmo e faz até MAX_SUBS trocas no total
+ * do jogo. Usado ao intervalo (45') e ao vivo (botão "Substituir"). Arranca do onze
+ * atual (`tactic`) e respeita as substituições já feitas (`subsAlready`).
+ */
+function SubSheet({
+  state, managedId, tactic, subsAlready, minute, onApply, onSkip,
 }: {
   state: GameState;
   managedId: string;
+  tactic: Pick<Tactic, 'lineup' | 'mentality' | 'tempo'>;
+  subsAlready: number;
+  minute: number;
   onApply: (lineup: { position: any; playerId: string }[], mentality: Mentality, tempo: Tempo) => void;
   onSkip: () => void;
 }) {
   const t = useT();
-  const tac = state.tactics[managedId]!;
-  const [lineup, setLineup] = useState(tac.lineup.map((s) => ({ ...s })));
-  const [mentality, setMentality] = useState<Mentality>(tac.mentality);
-  const [tempo, setTempo] = useState<Tempo>(tac.tempo);
+  const [lineup, setLineup] = useState(tactic.lineup.map((s) => ({ ...s })));
+  const [mentality, setMentality] = useState<Mentality>(tactic.mentality);
+  const [tempo, setTempo] = useState<Tempo>(tactic.tempo);
   const [subbing, setSubbing] = useState<number | null>(null);
-  const [subs, setSubs] = useState(0);
+  const [localSubs, setLocalSubs] = useState(0);
+  const totalSubs = subsAlready + localSubs;
+  const atHalftime = minute >= 45 && minute < 46;
 
   const inLineup = new Set(lineup.map((s) => s.playerId));
   const bench = (state.clubs[managedId]?.squad ?? [])
@@ -324,22 +538,27 @@ function HalftimeSheet({
   const doSub = (benchId: string) => {
     if (subbing === null) return;
     setLineup((l) => l.map((s, i) => (i === subbing ? { ...s, playerId: benchId } : s)));
-    setSubs((n) => n + 1);
+    setLocalSubs((n) => n + 1);
     setSubbing(null);
   };
 
   return (
-    <Modal visible transparent animationType="slide" onRequestClose={onSkip}>
+    // OVERLAY em vez de <Modal>: um Modal nativo é uma janela do sistema e
+    // sobrevive ao ecrã que o criou. Ao sair do jogo a meio (voltar atrás,
+    // tocar num separador), o painel de substituições e o lance de golo
+    // ficavam pendurados POR CIMA do Mercado — parecia que o jogo continuava a
+    // acontecer fora do jogo. Dentro da árvore do ecrã, desaparecem com ele.
+    <View style={styles.overlayFill} pointerEvents="box-none">
       <View style={styles.htBackdrop}>
         <View style={styles.htSheet}>
-          <Text style={styles.htTitle}>{t('match.halftime')}</Text>
+          <Text style={styles.htTitle}>{atHalftime ? t('match.halftime') : t('match.sub.title', { min: minute })}</Text>
 
           <Text style={styles.htLabel}>{t('tac.mentality')}</Text>
           <Segment options={MENTALITIES.map((m) => ({ key: m, label: t(`mentality.${m}`), active: mentality === m, onPress: () => setMentality(m) }))} />
           <Text style={styles.htLabel}>{t('tac.tempo')}</Text>
           <Segment options={TEMPOS.map((tp) => ({ key: tp, label: t(`tempo.${tp}`), active: tempo === tp, onPress: () => setTempo(tp) }))} />
 
-          <Text style={styles.htLabel}>{t('match.ht.subs', { n: subs })}</Text>
+          <Text style={styles.htLabel}>{t('match.ht.subs', { n: totalSubs })}</Text>
           {subbing === null ? (
             <ScrollView style={{ maxHeight: 190 }} showsVerticalScrollIndicator={false}>
               {lineup.map((s, i) => {
@@ -352,9 +571,9 @@ function HalftimeSheet({
                       {p ? `${p.condition.fitness}%` : ''}
                     </Text>
                     <Pressable
-                      disabled={subs >= MAX_SUBS}
+                      disabled={totalSubs >= MAX_SUBS}
                       onPress={() => setSubbing(i)}
-                      style={[styles.htSwap, subs >= MAX_SUBS && { opacity: 0.35 }]}
+                      style={[styles.htSwap, totalSubs >= MAX_SUBS && { opacity: 0.35 }]}
                     >
                       <Text style={styles.htSwapText}>⇄</Text>
                     </Pressable>
@@ -390,7 +609,7 @@ function HalftimeSheet({
           </Pressable>
         </View>
       </View>
-    </Modal>
+    </View>
   );
 }
 
@@ -481,6 +700,12 @@ function TimelineRow({ event, player, highlight }: { event: MatchEvent; player: 
 }
 
 const styles = StyleSheet.create({
+  /* A NOSSA equipa marcada com estrela. Sem isto, num jogo fora contra um clube
+     de cores parecidas, o utilizador olhava para o resultado e não sabia qual
+     dos números era o dele. */
+  teamNameRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  ourStar: { color: theme.colors.accent, fontSize: 11, marginTop: 1 },
+  ourTeamName: { color: theme.colors.accent, fontWeight: '800' },
   board: {
     backgroundColor: theme.colors.surface, borderRadius: theme.radius.lg, borderWidth: 1,
     borderColor: theme.colors.border, overflow: 'hidden', alignItems: 'center',
@@ -488,6 +713,14 @@ const styles = StyleSheet.create({
   },
   boardStripes: { flexDirection: 'row', alignSelf: 'stretch', height: 6 },
   boardStripe: { flex: 1 },
+
+  euroBadge: {
+    alignSelf: 'center', marginTop: theme.spacing(1.5), marginBottom: -theme.spacing(0.5),
+    paddingHorizontal: theme.spacing(1.5), paddingVertical: theme.spacing(0.6),
+    borderRadius: theme.radius.pill, backgroundColor: theme.colors.surfaceAlt,
+    borderWidth: 1, borderColor: theme.colors.accent,
+  },
+  euroBadgeText: { color: theme.colors.accent, fontSize: theme.font.small, fontWeight: '800', letterSpacing: 0.5 },
 
   clockRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1), marginTop: theme.spacing(1.5) },
   clock: { color: theme.colors.text, fontSize: 24, fontWeight: '900', letterSpacing: 1 },
@@ -517,6 +750,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row', gap: theme.spacing(1), justifyContent: 'center',
     marginVertical: theme.spacing(0.5),
   },
+  subBtn: {
+    alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: theme.spacing(2), paddingVertical: theme.spacing(0.85), borderRadius: theme.radius.pill,
+    borderWidth: 1, borderColor: theme.colors.blue, backgroundColor: theme.colors.surfaceAlt,
+    marginBottom: theme.spacing(1),
+  },
+  subBtnText: { color: theme.colors.blue, fontSize: theme.font.small, fontWeight: '800' },
   ctrl: {
     minWidth: 52, paddingHorizontal: theme.spacing(1.5), paddingVertical: theme.spacing(1),
     borderRadius: theme.radius.pill, borderWidth: 1, borderColor: theme.colors.border,
@@ -580,6 +820,24 @@ const styles = StyleSheet.create({
   replaySub: { color: theme.colors.textDim, fontSize: 10, marginTop: 2 },
 
   // Painel de intervalo
+  // Cobre o ecrã do jogo por dentro da árvore — ver o comentário no SubSheet.
+  overlayFill: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 10, elevation: 10 },
+
+  emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: theme.spacing(3) },
+  emptyBadge: {
+    width: 84, height: 84, borderRadius: 42, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border,
+    marginBottom: theme.spacing(2),
+  },
+  emptyIcon: { fontSize: 38 },
+  emptyTitle: { color: theme.colors.text, fontSize: theme.font.h2, fontWeight: '800', textAlign: 'center' },
+  emptyHint: {
+    color: theme.colors.textDim, fontSize: theme.font.body, textAlign: 'center',
+    marginTop: theme.spacing(0.75), lineHeight: 20,
+  },
+  emptyBtnWrap: { alignSelf: 'stretch', marginTop: theme.spacing(2.5), marginBottom: theme.spacing(1) },
+  emptyBack: { color: theme.colors.textDim, fontSize: theme.font.small, padding: theme.spacing(1) },
+  clipBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.86)', alignItems: 'center', justifyContent: 'center' },
   htBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'flex-end' },
   htSheet: {
     backgroundColor: theme.colors.surface, borderTopLeftRadius: 16, borderTopRightRadius: 16,

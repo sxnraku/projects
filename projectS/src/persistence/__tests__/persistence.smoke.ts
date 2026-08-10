@@ -3,6 +3,8 @@
  * Corre com: npm run smoke:persist
  */
 import { createNewGame } from '../../core/game';
+import { isRestorableState } from '../../core/models';
+import { unwrapSave, wrapSave } from '../cloudEnvelope';
 import { deserialize, serialize } from '../serialize';
 import { useGameStore } from '../../state/gameStore';
 import { TrainingFocus } from '../../core/training';
@@ -65,6 +67,20 @@ const s1 = useGameStore.getState().state;
 useGameStore.getState().advance();
 const s2 = useGameStore.getState().state;
 assert(s1 !== s2, 'referência de topo muda a cada advance (dispara re-render)');
+
+// --- Envelope do save na nuvem -------------------------------------------
+console.log('\nEnvelope da cópia na nuvem:');
+const envelope = wrapSave(original, 23);
+const unwrapped = unwrapSave(envelope);
+assert(unwrapped.appVersionCode === 23, 'envelope preserva o versionCode que escreveu');
+assert(isRestorableState(unwrapped.state), 'o estado sobrevive ao envelope e continua válido');
+
+const legacy = unwrapSave(JSON.stringify(original)); // cópia gravada antes do envelope existir
+assert(legacy.appVersionCode === null, 'cópia antiga não traz versionCode');
+assert(isRestorableState(legacy.state), 'cópia antiga (sem envelope) continua a ser aceite');
+
+// Um save de uma versão futura é reconhecido como tal (a UI recusa-o).
+assert(unwrapSave(wrapSave(original, 999)).appVersionCode === 999, 'versão futura é detetável');
 
 console.log(`\n${failures === 0 ? '✅ TODOS OS TESTES PASSARAM' : `❌ ${failures} FALHA(S)`}`);
 process.exit(failures === 0 ? 0 : 1);

@@ -9,7 +9,11 @@ import {
   Tactic,
 } from '../core/models';
 import { CareerState, initialCareer } from '../core/career';
-import { defaultFacilities, emptyCup } from '../core/models';
+import { defaultFacilities, emptyCup, emptyHistory } from '../core/models';
+import { buildBackgroundWorld, BgLeague } from '../core/game/background';
+import { normalizeCountrySlug } from '../core/game/activeCountry';
+import { rematerializeEurope } from '../core/europe';
+import { WORLD_TEAMS } from '../core/data/world/worldTeams';
 
 /**
  * Serialização GameState ↔ linhas planas (SQLite).
@@ -32,6 +36,9 @@ export interface SaveRows {
   news: BlobRow;
   cup: BlobRow;
   inbox: BlobRow;
+  background: BlobRow;
+  europe: BlobRow;
+  history: BlobRow;
 }
 
 /** Linha única com blob JSON (news, cup). */
@@ -85,10 +92,14 @@ export function serialize(state: GameState): SaveRows {
       created_at: m.createdAt, updated_at: m.updatedAt, schema_version: m.schemaVersion,
     },
     leagues: Object.values(state.leagues).map(serializeLeague),
-    clubs: Object.values(state.clubs).map(serializeClub),
-    players: Object.values(state.players).map(serializePlayer),
+    // Clubes/jogadores/táticas EUROPEUS temporários NÃO são gravados — são
+    // deriváveis (re-materializados na leitura a partir do blob `europe`).
+    clubs: Object.values(state.clubs).filter((c) => !c.european).map(serializeClub),
+    players: Object.values(state.players)
+      .filter((p) => !(p.clubId && state.clubs[p.clubId]?.european)).map(serializePlayer),
+    tactics: Object.values(state.tactics)
+      .filter((t) => !state.clubs[t.clubId]?.european).map(serializeTactic),
     finances: Object.values(state.finances).map(serializeFinance),
-    tactics: Object.values(state.tactics).map(serializeTactic),
     standings: Object.entries(state.standings).flatMap(([leagueId, table]) =>
       Object.values(table).map((r) => serializeStanding(leagueId, r)),
     ),
@@ -99,6 +110,17 @@ export function serialize(state: GameState): SaveRows {
     news: { id: 1, data: JSON.stringify(state.news) },
     cup: { id: 1, data: JSON.stringify(state.cup) },
     inbox: { id: 1, data: JSON.stringify(state.inbox) },
+    // Só ronda + tabela por liga (os calendários são regenerados na leitura).
+    background: {
+      id: 1,
+      data: JSON.stringify(state.background
+        ? { leagues: state.background.leagues.map((l) => ({ key: l.key, round: l.round, table: l.table })) }
+        : null),
+    },
+    // Provas europeias: blob completo (fixtures/resultados/tabelas/eliminatórias).
+    europe: { id: 1, data: JSON.stringify(state.europe ?? null) },
+    // Memória do mundo: campeões/marcadores/provas de todas as épocas.
+    history: { id: 1, data: JSON.stringify(state.history ?? emptyHistory()) },
   };
 }
 
@@ -197,6 +219,36 @@ export function deserialize(rows: SaveRows): GameState {
   for (const r of rows.schedules) {
     state.schedules[r.league_id] = JSON.parse(r.data) as Schedule;
   }
+
+  // Mundo de fundo: regenera os calendários (deterministas) e restaura tabelas+ronda.
+  // `normalizeCountrySlug` trata dos saves antigos (mundo gerado, country 'PRT'):
+  // sem isto ficavam para sempre sem mundo de fundo — e, por arrasto, sem Europa.
+  const managedCountry = normalizeCountrySlug(state.clubs[meta.managedClubId]?.country);
+  {
+    const bg = buildBackgroundWorld(managedCountry, meta.rngSeed);
+    const saved = rows.background?.data ? JSON.parse(rows.background.data) : null;
+    if (saved?.leagues) {
+      const byKey = new Map<string, { round: number; table: BgLeague['table'] }>(
+        saved.leagues.map((l: { key: string; round: number; table: BgLeague['table'] }) => [l.key, l]),
+      );
+      for (const lg of bg.leagues) {
+        const s = byKey.get(lg.key);
+        if (s) { lg.round = s.round; lg.table = s.table; }
+      }
+    }
+    state.background = bg;
+  }
+
+  // Provas europeias: restaura o blob e re-materializa os adversários do gerido
+  // (clubes/jogadores europeus não são gravados — são deterministas).
+  const euData = rows.europe?.data ? JSON.parse(rows.europe.data) : null;
+  state.europe = euData ?? undefined;
+  if (state.europe) rematerializeEurope(state);
+
+  // Memória do mundo. Saves anteriores à tabela `history` não têm linha: começam
+  // com o arquivo vazio e passam a acumular a partir da época atual.
+  const hist = rows.history?.data ? JSON.parse(rows.history.data) : null;
+  state.history = hist ?? emptyHistory();
 
   return state;
 }

@@ -1,6 +1,6 @@
 import { GameState, MatchResult, Side, Tactic } from '../models';
 import { deriveSeed } from '../engine/rng';
-import { simulateMatch } from '../engine';
+import { simulateMatch, TacticChange } from '../engine';
 import { revertResult, applyResult } from '../season';
 import { managedLeagueId } from './advance';
 
@@ -45,21 +45,30 @@ export function replayFixture(state: GameState, fixtureId: string): MatchResult 
   return newResult;
 }
 
+/** Um ajuste em jogo: onze/mentalidade/ritmo a entrar em vigor a partir de `minute`. */
+export interface MatchAdjustment {
+  minute: number; // 45 = intervalo; qualquer minuto durante a reprodução
+  lineup: Tactic['lineup'];
+  mentality: Tactic['mentality'];
+  tempo: Tactic['tempo'];
+}
+
 /**
- * Ajuste ao INTERVALO: re-simula a 2ª parte do jogo do clube gerido com uma nova
- * tática (substituições + mentalidade/ritmo). A 1ª parte fica idêntica à que o
- * jogador viu (mesma seed da jornada), reverte-se o resultado antigo da tabela e
- * aplica-se o novo. Só jogos de LIGA (os de Taça usam outra seed — devolve null,
- * a UI segue sem alteração).
+ * Ajustes EM JOGO (intervalo e substituições ao vivo): re-simula o jogo do clube
+ * gerido aplicando, por ordem, cada mudança de tática no seu minuto. Os minutos já
+ * vistos ficam idênticos (mesma seed da jornada); só o que vem depois de cada
+ * mudança diverge. Reverte-se o resultado antigo da tabela e aplica-se o novo. Só
+ * jogos de LIGA (os de Taça usam outra seed — devolve null, a UI segue sem mexer).
+ *
+ * As mudanças são CUMULATIVAS: cada `lineup` é o onze completo naquele momento, por
+ * iso substituir ao 45' e depois ao 60' mantém as trocas anteriores.
  *
  * @returns o novo resultado, ou null se não aplicável.
  */
-export function applyHalftime(
+export function applyMatchChanges(
   state: GameState,
   fixtureId: string,
-  lineup: Tactic['lineup'],
-  mentality: Tactic['mentality'],
-  tempo: Tactic['tempo'],
+  adjustments: MatchAdjustment[],
 ): MatchResult | null {
   const leagueId = managedLeagueId(state);
   const schedule = state.schedules[leagueId];
@@ -78,17 +87,21 @@ export function applyHalftime(
   const awayTactic = state.tactics[fixture.awayClubId];
   if (!homeTactic || !awayTactic) return null;
 
-  // Tática da 2ª parte para o lado gerido (o outro lado mantém-se).
+  // Cada ajuste vira uma mudança de tática do lado gerido (o outro lado mantém-se).
   const base = managedSide === 'HOME' ? homeTactic : awayTactic;
-  const h2: Tactic = { ...base, lineup, mentality, tempo };
+  const changes: TacticChange[] = adjustments.map((a) => ({
+    side: managedSide,
+    tactic: { ...base, lineup: a.lineup, mentality: a.mentality, tempo: a.tempo },
+    minute: a.minute,
+  }));
 
   revertResult(table, fixture.result);
   // MESMA seed da jornada (ver season.ts playRound: baseSeed ^ round*1000003) →
-  // a 1ª parte reproduz-se igual; a 2ª diverge com a nova tática.
+  // os minutos antes de cada corte reproduzem-se iguais; o resto diverge.
   const baseSeed = state.meta.rngSeed ^ (fixture.round * 1000003);
   const newResult = simulateMatch(
     fixture.homeClubId, fixture.awayClubId, homeTactic, awayTactic, state.players, baseSeed,
-    { side: managedSide, tactic: h2 },
+    changes,
   );
   fixture.result = newResult;
   applyResult(table, newResult);

@@ -144,6 +144,26 @@ CREATE TABLE IF NOT EXISTS inbox (
   id   INTEGER PRIMARY KEY CHECK (id = 1),
   data TEXT NOT NULL
 );
+
+-- Mundo de fundo (ligas dos outros países): só tabelas+ronda; fixtures regeneradas.
+CREATE TABLE IF NOT EXISTS background (
+  id   INTEGER PRIMARY KEY CHECK (id = 1),
+  data TEXT NOT NULL
+);
+
+-- Provas europeias da época (blob): fixtures/resultados/tabelas/eliminatórias.
+CREATE TABLE IF NOT EXISTS europe (
+  id   INTEGER PRIMARY KEY CHECK (id = 1),
+  data TEXT NOT NULL
+);
+
+-- Memória do mundo (blob): campeões, melhores marcadores e provas ganhas, por
+-- época. Cresce ~1 KB por época. A carreira de cada JOGADOR não vive aqui —
+-- viaja dentro da coluna condition de players, que já é JSON.
+CREATE TABLE IF NOT EXISTS history (
+  id   INTEGER PRIMARY KEY CHECK (id = 1),
+  data TEXT NOT NULL
+);
 `;
 
 /** Versão do esquema — sincronizada com SCHEMA_VERSION do modelo. Migrações futuras aqui. */

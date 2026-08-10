@@ -21,6 +21,7 @@ export const theme = {
     green: '#3FB950', // positivo: confirmar, lucro, vitória
     red: '#F85149', // negativo: perda, lesão, derrota, alerta
     yellow: '#E3B341', // aviso: cartões, atenção
+    starOff: '#4A5058', // estrela por preencher (fundo das meias estrelas)
     blue: '#4A9EFF', // seleção e navegação
 
     // Aliases usados pelo código existente
@@ -79,7 +80,18 @@ export function fitnessColor(v: number): string {
   return theme.colors.red;
 }
 
-/** Reputação (0..100) → 0..5 estrelas (meias estrelas arredondadas). */
+/**
+ * Reputação → 0.5..5 estrelas (meias incluídas).
+ *
+ * A escala NÃO é `rep/100*5`: nenhum clube do mundo chega perto de 100 de
+ * reputação (o topo mundial anda nos 82), por isso as 5 estrelas eram
+ * inalcançáveis e um campeão nacional ficava-se pelas 4. A banda real do jogo
+ * vai de ~25 (fundo da 3ª divisão) a ~82 (elite europeia) e é essa que se
+ * estica para 1..5 estrelas.
+ */
+export const REP_STARS_FLOOR = 25;
+export const REP_STARS_CEIL = 82;
 export function reputationStars(rep: number): number {
-  return Math.round((rep / 100) * 10) / 2;
+  const raw = 1 + ((rep - REP_STARS_FLOOR) * 4) / (REP_STARS_CEIL - REP_STARS_FLOOR);
+  return Math.min(5, Math.max(0.5, Math.round(raw * 2) / 2));
 }

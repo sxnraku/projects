@@ -2,7 +2,7 @@
   "expo": {
     "name": "Football Legacy",
     "slug": "football-legacy",
-    "version": "1.0.16",
+    "version": "1.0.32",
     "orientation": "portrait",
     "scheme": "footballlegacy",
     "userInterfaceStyle": "dark",
@@ -22,7 +22,7 @@
     },
     "android": {
       "package": "com.rakulabs.footballlegacy",
-      "versionCode": 22,
+      "versionCode": 38,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#20242A"
@@ -50,7 +50,8 @@
         }
       ],
       "expo-web-browser",
-      "./plugins/withGoogleAuthScheme"
+      "./plugins/withGoogleAuthScheme",
+      "expo-audio"
     ],
     "experiments": {
       "typedRoutes": true

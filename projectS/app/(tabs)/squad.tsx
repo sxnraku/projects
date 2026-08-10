@@ -1,10 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Dimensions, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useGameStore } from '../../src/state/gameStore';
 import { isWonderkid, lineupWarnings, ROTATION_ALERT_FITNESS } from '../../src/core/game';
-import { naturalOverall, naturalOverallFine, Player, POSITION_GROUP, PositionGroup, shortName } from '../../src/core/models';
-import { money, to100 } from '../../src/ui/format';
+import { fullName, naturalOverall, naturalOverallFine, Player, POSITION_GROUP, PositionGroup } from '../../src/core/models';
+import { money, to100, wage } from '../../src/ui/format';
 import { useT } from '../../src/ui/i18n';
 import { attrColor, fitnessColor, theme } from '../../src/ui/theme';
 import { Face } from '../../src/ui/Face';
@@ -12,8 +12,13 @@ import { Toast } from '../../src/ui/Toast';
 import { PosText, Screen } from '../components';
 
 type Filter = 'ALL' | PositionGroup | 'YOUTH';
-type SortKey = 'pos' | 'name' | 'age' | 'ovr' | 'morale' | 'fitness' | 'value';
+type SortKey = 'pos' | 'name' | 'age' | 'ovr' | 'morale' | 'fitness' | 'value' | 'wage';
 const FILTER_KEYS: Filter[] = ['ALL', 'GOALKEEPER', 'DEFENCE', 'MIDFIELD', 'ATTACK', 'YOUTH'];
+
+// Largura visível de uma linha (ecrã menos o padding do Screen) e do painel de
+// salário que se revela ao arrastar a linha para a esquerda.
+const ROW_W = Dimensions.get('window').width - 2 * 12;
+const WAGE_PANEL_W = 128;
 
 export default function Squad() {
   const router = useRouter();
@@ -36,6 +41,16 @@ export default function Squad() {
     else { setSortKey(k); setSortDir(k === 'name' || k === 'pos' ? 'asc' : 'desc'); }
   };
   const arrow = (k: SortKey) => (sortKey === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
+  const SORTS: { k: SortKey; label: string }[] = [
+    { k: 'pos', label: t('squad.col.pos') },
+    { k: 'ovr', label: 'OVR' },
+    { k: 'age', label: t('squad.col.id') },
+    { k: 'fitness', label: t('squad.sort.fit') },
+    { k: 'morale', label: t('squad.sort.mor') },
+    { k: 'value', label: t('squad.col.value') },
+    { k: 'wage', label: t('squad.col.wage') },
+    { k: 'name', label: t('squad.col.name') },
+  ];
 
   const clubColor = state ? state.clubs[state.meta.managedClubId]?.primaryColor : undefined;
 
@@ -70,6 +85,7 @@ export default function Squad() {
         case 'morale': return p.condition.morale;
         case 'fitness': return p.condition.fitness;
         case 'value': return p.marketValue;
+        case 'wage': return p.wage;
         case 'age': return p.age;
         default: return posMetric(p);
       }
@@ -122,31 +138,18 @@ export default function Squad() {
         </View>
       ) : null}
 
-      {/* Cabeçalho FIXO e ordenável (toca numa coluna para ordenar). */}
-      <View style={styles.headRow}>
-        <Pressable style={styles.cPos} onPress={() => toggleSort('pos')}>
-          <Text style={[styles.h, sortKey === 'pos' && styles.hOn]}>{t('squad.col.pos')}{arrow('pos')}</Text>
-        </Pressable>
-        <View style={{ width: 34 }} />
-        <Pressable style={styles.cName} onPress={() => toggleSort('name')}>
-          <Text style={[styles.h, sortKey === 'name' && styles.hOn]}>{t('squad.col.name')}{arrow('name')}</Text>
-        </Pressable>
-        <Pressable style={styles.cNum} onPress={() => toggleSort('age')}>
-          <Text style={[styles.h, styles.hCenter, sortKey === 'age' && styles.hOn]}>{t('squad.col.id')}{arrow('age')}</Text>
-        </Pressable>
-        <Pressable style={styles.cNum} onPress={() => toggleSort('ovr')}>
-          <Text style={[styles.h, styles.hCenter, sortKey === 'ovr' && styles.hOn]}>OVR{arrow('ovr')}</Text>
-        </Pressable>
-        <Pressable style={styles.cNum} onPress={() => toggleSort('morale')}>
-          <Text style={[styles.h, styles.hCenter, sortKey === 'morale' && styles.hOn]}>MOR{arrow('morale')}</Text>
-        </Pressable>
-        <Pressable style={styles.cNum} onPress={() => toggleSort('fitness')}>
-          <Text style={[styles.h, styles.hCenter, sortKey === 'fitness' && styles.hOn]}>FIT{arrow('fitness')}</Text>
-        </Pressable>
-        <Pressable style={styles.cVal} onPress={() => toggleSort('value')}>
-          <Text style={[styles.h, styles.hRight, sortKey === 'value' && styles.hOn]}>{t('squad.col.value')}{arrow('value')}</Text>
-        </Pressable>
-      </View>
+      {/* Barra de ordenação (chips). Toca para ordenar; toca de novo p/ inverter. */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false}
+        style={styles.sortScroll} contentContainerStyle={styles.sortBar}>
+        {SORTS.map(({ k, label }) => (
+          <Pressable key={k} onPress={() => toggleSort(k)}
+            style={[styles.sortChip, sortKey === k && styles.sortChipOn]}>
+            <Text style={[styles.sortChipText, sortKey === k && styles.sortChipTextOn]}>
+              {label}{arrow(k)}
+            </Text>
+          </Pressable>
+        ))}
+      </ScrollView>
 
       <FlatList
         data={rows}
@@ -181,36 +184,63 @@ function PlayerRow({
   // Quem não pode jogar não deve exigir leitura: a linha inteira apaga-se.
   const unavailable = injured || player.condition.fitness < 45;
 
+  const starterRing = injured ? theme.colors.red : starter ? theme.colors.blue : undefined;
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [
-      styles.row,
-      pressed && styles.rowPressed,
-      unavailable && styles.rowUnavailable,
-    ]}>
-      <View style={styles.cPos}><PosText position={player.positions[0]!} /></View>
-      <Face
-        seed={player.id}
-        size={34}
-        shirt={clubColor}
-        ring={injured ? theme.colors.red : starter ? theme.colors.blue : undefined}
-      />
-      <Text style={[styles.name, styles.cName]} numberOfLines={1}>
-        {shortName(player)}
-        {isWonderkid(player) ? <Text style={{ color: theme.colors.yellow }}> ★</Text> : null}
-        {player.transferListed ? <Text style={{ color: theme.colors.blue }}> €</Text> : null}
-        {expiring ? <Text style={{ color: theme.colors.yellow }}> ⌛</Text> : null}
-        {injured ? <Text style={{ color: theme.colors.red }}> 🚑</Text> : null}
-        {player.condition.suspended ? <Text> 🟥</Text> : null}
-        {player.condition.loanOwnerId ? <Text style={{ color: theme.colors.blue }}> {t('loan.badge')}</Text> : null}
-      </Text>
-      <Text style={[styles.cell, styles.cNum, styles.dim]}>{player.age}</Text>
-      <Text style={[styles.ovr, styles.cNum, { color: attrColor(ovr) }]}>{to100(naturalOverallFine(player))}</Text>
-      <Text style={[styles.cell, styles.cNum, styles.dim]}>{player.condition.morale}</Text>
-      <Text style={[styles.cell, styles.cNum, { color: fitnessColor(player.condition.fitness), fontWeight: '700' }]}>
-        {player.condition.fitness}
-      </Text>
-      <Text style={[styles.cell, styles.cVal]}>{money(player.marketValue)}</Text>
-    </Pressable>
+    // Arrastar a linha para a ESQUERDA revela o painel do salário à direita.
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      snapToOffsets={[0, WAGE_PANEL_W]}
+      snapToEnd={false}
+      decelerationRate="fast"
+      style={styles.swipe}
+      contentContainerStyle={{ width: ROW_W + WAGE_PANEL_W }}
+    >
+      <Pressable onPress={onPress} style={({ pressed }) => [
+        styles.row,
+        { width: ROW_W },
+        starter && styles.rowStarter,
+        pressed && styles.rowPressed,
+        unavailable && styles.rowUnavailable,
+      ]}>
+        <Face seed={player.id} size={40} shirt={clubColor} ring={starterRing} />
+
+        {/* Nome (linha inteira) + linha de detalhe por baixo */}
+        <View style={styles.info}>
+          <Text style={styles.name} numberOfLines={1} ellipsizeMode="tail">
+            {fullName(player)}
+            {isWonderkid(player) ? <Text style={{ color: theme.colors.yellow }}> ★</Text> : null}
+            {player.transferListed ? <Text style={{ color: theme.colors.blue }}> €</Text> : null}
+            {expiring ? <Text style={{ color: theme.colors.yellow }}> ⌛</Text> : null}
+            {injured ? <Text style={{ color: theme.colors.red }}> 🚑</Text> : null}
+            {player.condition.suspended ? <Text> 🟥</Text> : null}
+            {player.condition.loanOwnerId ? <Text style={{ color: theme.colors.blue }}> {t('loan.badge')}</Text> : null}
+          </Text>
+          <View style={styles.subLine}>
+            <PosText position={player.positions[0]!} />
+            <Text style={styles.subDim}>· {player.age}</Text>
+            <Text style={styles.subDim}>· {t('squad.sort.mor')} {player.condition.morale}</Text>
+            <Text style={[styles.subStat, { color: fitnessColor(player.condition.fitness) }]}>
+              · {t('squad.sort.fit')} {player.condition.fitness}
+            </Text>
+          </View>
+        </View>
+
+        {/* OVR grande + valor de mercado à direita + pega de arrasto */}
+        <View style={styles.rightCol}>
+          <Text style={[styles.ovr, { color: attrColor(ovr) }]}>{to100(naturalOverallFine(player))}</Text>
+          <Text style={styles.valSmall}>{money(player.marketValue)}</Text>
+        </View>
+        <Text style={styles.grip}>‹</Text>
+      </Pressable>
+
+      {/* Painel de salário revelado ao arrastar */}
+      <Pressable onPress={onPress} style={[styles.wagePanel, { width: WAGE_PANEL_W }]}>
+        <Text style={styles.wageLbl}>{t('squad.col.wage')}</Text>
+        <Text style={styles.wageVal}>{wage(player.wage)}</Text>
+        <Text style={styles.wagePer}>{t('squad.perWeek')}</Text>
+      </Pressable>
+    </ScrollView>
   );
 }
 
@@ -240,26 +270,46 @@ const styles = StyleSheet.create({
   rotText: { color: theme.colors.yellow, fontSize: theme.font.small, fontWeight: '700' },
   rotAction: { color: theme.colors.blue, fontSize: theme.font.small, fontWeight: '700' },
 
-  headRow: {
-    flexDirection: 'row', alignItems: 'center', paddingVertical: theme.spacing(1), gap: 4,
-    backgroundColor: theme.colors.bg, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border,
+  // Barra de ordenação (chips)
+  sortScroll: { flexGrow: 0, flexShrink: 0, marginTop: theme.spacing(0.5), marginBottom: theme.spacing(0.25) },
+  sortBar: { gap: 6, paddingVertical: theme.spacing(0.5), alignItems: 'center' },
+  sortChip: {
+    paddingVertical: 6, paddingHorizontal: 12, borderRadius: 100,
+    borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface,
   },
-  h: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700' },
-  hOn: { color: theme.colors.blue },
-  hCenter: { textAlign: 'center' },
-  hRight: { textAlign: 'right' },
-  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: theme.spacing(1.2), gap: 5 },
+  sortChipOn: { borderColor: theme.colors.blue, backgroundColor: theme.colors.surfaceAlt },
+  sortChipText: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700' },
+  sortChipTextOn: { color: theme.colors.blue },
+
+  // Linha de jogador (duas linhas: nome inteiro + detalhe)
+  row: {
+    flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1.25),
+    paddingVertical: theme.spacing(1.1), paddingHorizontal: theme.spacing(0.5),
+    borderLeftWidth: 3, borderLeftColor: 'transparent',
+  },
+  rowStarter: { borderLeftColor: theme.colors.blue, backgroundColor: theme.colors.surface },
   rowPressed: { backgroundColor: theme.colors.surfaceAlt },
   rowUnavailable: { opacity: 0.5 },
-  cell: { color: theme.colors.text, fontSize: theme.font.body, fontVariant: ['tabular-nums'] },
-  name: { color: theme.colors.text, fontSize: 15, fontWeight: '700' },
-  ovr: { fontSize: 16, fontWeight: '800', textAlign: 'center', fontVariant: ['tabular-nums'] },
-  dim: { color: theme.colors.textDim },
-  cPos: { width: 28 },
-  cName: { flex: 1 },
-  cNum: { width: 34, textAlign: 'center' },
-  cVal: { width: 64, textAlign: 'right' },
+  info: { flex: 1, minWidth: 0 },
+  name: { color: theme.colors.text, fontSize: 16, fontWeight: '700' },
+  subLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'nowrap' },
+  subDim: { color: theme.colors.textDim, fontSize: theme.font.small, fontVariant: ['tabular-nums'] },
+  subStat: { fontSize: theme.font.small, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  rightCol: { alignItems: 'flex-end', minWidth: 60 },
+  ovr: { fontSize: 20, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  valSmall: { color: theme.colors.textDim, fontSize: theme.font.small, fontVariant: ['tabular-nums'], marginTop: 1 },
+  grip: { color: theme.colors.border, fontSize: 20, fontWeight: '900', marginLeft: 2, marginRight: -4 },
   sep: { height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.border },
+
+  // Arrastar linha → painel de salário
+  swipe: { flexGrow: 0 },
+  wagePanel: {
+    backgroundColor: theme.colors.surfaceAlt, alignItems: 'center', justifyContent: 'center',
+    borderLeftWidth: 3, borderLeftColor: theme.colors.green,
+  },
+  wageLbl: { color: theme.colors.textDim, fontSize: 9.5, fontWeight: '800', letterSpacing: 0.6, textTransform: 'uppercase' },
+  wageVal: { color: theme.colors.green, fontSize: 17, fontWeight: '800', fontVariant: ['tabular-nums'], marginTop: 2 },
+  wagePer: { color: theme.colors.textDim, fontSize: 10, marginTop: 1 },
 
   trialMsg: { color: theme.colors.green, fontSize: theme.font.small, marginBottom: theme.spacing(0.5) },
   trialBtn: {

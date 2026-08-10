@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useGameStore } from '../../src/state/gameStore';
@@ -7,17 +7,19 @@ import { AdReward } from '../../src/monetization';
 import { OBJECTIVE_KEYS, dailyBonusAmount } from '../../src/core/career';
 import { computeTeamStrength } from '../../src/core/engine';
 import { TrainingFocus } from '../../src/core/training';
-import { Club, goalDifference, naturalOverallFine, Player } from '../../src/core/models';
+import { Club, GameState, goalDifference, naturalOverallFine, Player } from '../../src/core/models';
 import type { ReturnedLoan } from '../../src/core/game';
 import { money, to100, wage } from '../../src/ui/format';
-import { isInsolvent, suggestedWage, wageBudgetRemaining } from '../../src/core/economy';
+import { cashWarning, isInsolvent, RUNWAY_WARNING_WEEKS, suggestedWage } from '../../src/core/economy';
 import { useT, useTMsg } from '../../src/ui/i18n';
 import { fitnessColor, reputationStars, theme } from '../../src/ui/theme';
 import { Face } from '../../src/ui/Face';
 import { PreMatchSheet, WeekReportModal } from '../../src/ui/dialogs';
 import { Toast } from '../../src/ui/Toast';
+import { haptic, playSound } from '../../src/ui/sound';
 import {
   Bar, Body, contrastOn, CrestCircle, darken, DashCard, FormDots, RowKV, Screen, Stars, StrengthTriplet,
+  BalanceSplit,
 } from '../components';
 import { showInterstitial, showRewarded } from '../../src/native/ads';
 import AdBanner from '../../src/native/AdBanner';
@@ -38,7 +40,13 @@ export default function Dashboard() {
   const upcoming = useGameStore((s) => s.upcomingFixtures);
   const managedLeague = useGameStore((s) => s.managedLeague);
   const acceptOffer = useGameStore((s) => s.acceptOffer);
+  const meritOffers = useGameStore((s) => s.meritOffers);
+  const acceptMerit = useGameStore((s) => s.acceptMerit);
+  const declineMerit = useGameStore((s) => s.declineMerit);
   const lastSeason = useGameStore((s) => s.lastSeason);
+  const nextIsEuropean = useGameStore((s) => s.nextIsEuropean);
+  const nextEuroMatch = useGameStore((s) => s.nextEuroMatch);
+  const resolveCrisis = useGameStore((s) => s.resolveCrisis);
   const claimDaily = useGameStore((s) => s.claimDaily);
   const dailyAvailable = useGameStore((s) => s.dailyAvailable);
   const blockedCounts = useGameStore((s) => s.blockedCounts);
@@ -47,6 +55,7 @@ export default function Dashboard() {
   const pendingReport = useGameStore((s) => s.pendingReport);
   const clearReport = useGameStore((s) => s.clearReport);
   const expiringDecisions = useGameStore((s) => s.expiringDecisions);
+  const retiringSoon = useGameStore((s) => s.retiringSoon);
   const renewExpiring = useGameStore((s) => s.renewExpiring);
   const releaseExpiring = useGameStore((s) => s.releaseExpiring);
   const returnedLoansPending = useGameStore((s) => s.returnedLoansPending);
@@ -56,6 +65,7 @@ export default function Dashboard() {
 
   const inboxItems = useGameStore((s) => s.inboxItems);
   const acceptBid = useGameStore((s) => s.acceptBid);
+  const counterBid = useGameStore((s) => s.counterBid);
   const rejectBid = useGameStore((s) => s.rejectBid);
   const resolveRenewal = useGameStore((s) => s.resolveRenewal);
   const resolveRequest = useGameStore((s) => s.resolveRequest);
@@ -69,6 +79,9 @@ export default function Dashboard() {
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'error' | 'info'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [askRotate, setAskRotate] = useState(false);
+  // Dispensa dos popups de reforma, por época (para não reaparecerem).
+  const [ackRetiring, setAckRetiring] = useState(-1);
+  const [ackRetired, setAckRetired] = useState(-1);
 
   // O ecrã inicial fica montado por baixo de /match, e um Modal do RN aparece
   // por cima de TUDO — sem este guarda o balanço tapava o jogo ao vivo.
@@ -77,9 +90,17 @@ export default function Dashboard() {
   // mas ainda estamos focados por 1+ frame → sem este flag, o modal pisca antes
   // de /match tomar o ecrã. Limpa-se ao voltar ao painel.
   const [launching, setLaunching] = useState(false);
+  /** Classificação "antes da jornada", mostrada enquanto o jogo não é visto. */
+  const [frozen, setFrozen] = useState<{
+    table: ReturnType<typeof standings>;
+    position: number;
+    myRow: ReturnType<typeof standings>[number] | null;
+    lastResults: ('W' | 'D' | 'L')[];
+  } | null>(null);
   useFocusEffect(useCallback(() => {
     setFocused(true);
     setLaunching(false);
+    setFrozen(null); // de volta ao painel: já viste o jogo, mostra os números reais
     return () => setFocused(false);
   }, []));
 
@@ -105,6 +126,12 @@ export default function Dashboard() {
   const runMatch = async () => {
     if (busy) return;
     setBusy(true);
+    // CONGELA a classificação com os números de ANTES da jornada. `advance()`
+    // simula o jogo já, por isso sem isto os pontos e a diferença de golos
+    // mudavam à frente do utilizador antes de ele sequer ver o jogo — spoiler
+    // do resultado e, pior, dava a sensação de que as trocas ao vivo (tática,
+    // pressão, mentalidade) não contavam para nada.
+    setFrozen({ table, position, myRow, lastResults });
     setLaunching(true); // esconde o balanço enquanto o jogo arranca (evita o flash)
     await new Promise((r) => setTimeout(r, 16)); // deixa pintar o estado ocupado
     try {
@@ -125,6 +152,15 @@ export default function Dashboard() {
     if (pre && pre.warnings.length > 0) { setAskRotate(true); return; }
     await runMatch();
   };
+
+  // Fanfarra ao fechar uma época com título ou subida — uma vez por época.
+  const celebrated = useRef<number | null>(null);
+  useEffect(() => {
+    const rec = lastSeason?.record;
+    if (!rec || celebrated.current === rec.season) return;
+    celebrated.current = rec.season;
+    if (rec.champion || rec.promoted) { playSound('trophy'); haptic('success'); }
+  }, [lastSeason]);
 
   const position = useMemo(
     () => table.findIndex((r) => r.clubId === club?.id) + 1,
@@ -156,6 +192,10 @@ export default function Dashboard() {
   const divFactor = Math.pow(0.5, (state.leagues[club.leagueId]?.tier ?? 1) - 1);
   const scaled = (v: number) => Math.round(v * divFactor / 10_000) * 10_000;
   const schedule = state.schedules[managedLeague()];
+  const euroNight = nextIsEuropean();
+  // Numa noite europeia o clube pode NÃO estar em prova: aí só há pausa.
+  const euroMatch = euroNight ? nextEuroMatch() : null;
+  const euroOpp = euroMatch ? state.clubs[euroMatch.opponentId] : null;
   const nextOppId = next ? (next.homeClubId === club.id ? next.awayClubId : next.homeClubId) : null;
   const nextOpp = nextOppId ? state.clubs[nextOppId] : null;
   const isHome = next?.homeClubId === club.id;
@@ -166,7 +206,10 @@ export default function Dashboard() {
     const t = state.tactics[clubId];
     if (!t) return null;
     const s = computeTeamStrength(t, state.players);
-    return { def: Math.round(s.defence * 5), mid: Math.round(s.midfield * 5), att: Math.round(s.attack * 5) };
+    // Teto de 100: mentalidade + linha alta multiplicam a força e um plantel de
+    // topo chegava a mostrar "MED 101", o que lê como bug na escala 0-100.
+    const cap = (v: number) => Math.min(100, Math.round(v * 5));
+    return { def: cap(s.defence), mid: cap(s.midfield), att: cap(s.attack) };
   };
   const myStrength = strengthOf(club.id);
   const oppStrength = nextOppId ? strengthOf(nextOppId) : null;
@@ -178,12 +221,19 @@ export default function Dashboard() {
 
   const myTactic = state.tactics[club.id];
 
-  // Mini-classificação: 5 linhas à volta do clube.
-  const miniStart = Math.max(0, Math.min(position - 3, table.length - 5));
-  const mini = table.slice(miniStart, miniStart + 5);
-
   // Linha da tabela do clube gerido (para o cabeçalho: pontos, diferença de golos).
   const myRow = table.find((r) => r.clubId === club.id) ?? null;
+
+  // Valores MOSTRADOS: enquanto o jogo da jornada não for visto, usa-se o
+  // retrato de antes de avançar (ver `frozen` em `runMatch`).
+  const shownTable = frozen?.table ?? table;
+  const shownPosition = frozen?.position ?? position;
+  const shownMyRow = frozen ? frozen.myRow : myRow;
+  const shownResults = frozen?.lastResults ?? lastResults;
+
+  // Mini-classificação: 5 linhas à volta do clube.
+  const miniStart = Math.max(0, Math.min(shownPosition - 3, shownTable.length - 5));
+  const mini = shownTable.slice(miniStart, miniStart + 5);
 
   const inbox = inboxItems();
 
@@ -217,11 +267,11 @@ export default function Dashboard() {
             <ClubHero
               club={club}
               leagueName={state.leagues[club.leagueId]?.name ?? ''}
-              position={position}
+              position={shownPosition}
               objective={t(OBJECTIVE_KEYS[career.objective])}
-              form={lastResults}
-              points={myRow?.points ?? 0}
-              gd={myRow ? goalDifference(myRow) : 0}
+              form={shownResults}
+              points={shownMyRow?.points ?? 0}
+              gd={shownMyRow ? goalDifference(shownMyRow) : 0}
               t={t}
             />
 
@@ -229,6 +279,49 @@ export default function Dashboard() {
             {inbox.length > 0 ? (
               <DashCard title={t('dash.inbox', { n: inbox.length })} accent={theme.colors.blue}>
                 {inbox.map((item) => {
+                  // CRISE FINANCEIRA — o dilema. Não fala de um jogador só: a
+                  // direção põe candidatos em cima da mesa e QUEM decide é o
+                  // treinador. Antes, a venda acontecia sozinha e levava o
+                  // melhor do plantel sem uma palavra.
+                  if (item.kind === 'CRISIS') {
+                    return (
+                      <View key={item.id} style={styles.crisisBox}>
+                        <Text style={styles.crisisTitle}>⚠ {t('crisis.title')}</Text>
+                        <Text style={styles.crisisMeta}>
+                          {t('crisis.meta', { debt: money(item.debt) })}
+                        </Text>
+                        {item.candidates.map((cid) => {
+                          const c = state.players[cid];
+                          if (!c) return null;
+                          const price = Math.round(c.marketValue * 0.7);
+                          return (
+                            <View key={cid} style={styles.crisisRow}>
+                              <Face seed={c.id} size={30} shirt={club.primaryColor} />
+                              <Pressable style={{ flex: 1 }} onPress={() => router.push(`/player/${c.id}`)}>
+                                <Text style={styles.bidName} numberOfLines={1}>
+                                  {c.firstName} {c.lastName} ›
+                                </Text>
+                                <Text style={styles.sub}>
+                                  {c.positions[0]} · {c.age} · OVR {to100(naturalOverallFine(c))}
+                                </Text>
+                              </Pressable>
+                              <MiniBtn
+                                label={t('crisis.sellFor', { v: money(price) })}
+                                bg={theme.colors.red}
+                                onPress={() => {
+                                  const r = resolveCrisis(item.id, cid);
+                                  setFeedback(r.ok
+                                    ? { kind: 'ok', text: t('crisis.toast', { name: r.playerName ?? '', v: money(r.amount) }) }
+                                    : { kind: 'error', text: r.errorKey ? t(r.errorKey) : '' });
+                                }}
+                              />
+                            </View>
+                          );
+                        })}
+                      </View>
+                    );
+                  }
+
                   const p = state.players[item.playerId];
                   if (!p) return null;
                   const name = `${p.firstName} ${p.lastName}`;
@@ -237,14 +330,24 @@ export default function Dashboard() {
                     const buyer = state.clubs[item.fromClubId];
                     if (!buyer) return null;
                     return (
-                      <InboxRow key={item.id} accent={theme.colors.green} face={<Face seed={p.id} size={30} shirt={club.primaryColor} />}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.bidName}>{name}</Text>
-                          <Text style={styles.sub}>{t('inbox.bidMeta', { buyer: buyer.shortName, fee: money(item.fee) })}</Text>
-                        </View>
+                      <InboxRow key={item.id} accent={theme.colors.green}
+                        face={<Face seed={p.id} size={30} shirt={club.primaryColor} />}
+                        name={name} meta={t('inbox.bidMeta', { buyer: buyer.shortName, fee: money(item.fee) })}
+                        onOpen={() => router.push(`/player/${p.id}`)}>
                         <MiniBtn label={t('btn.sell')} bg={theme.colors.green} onPress={() => {
                           const r = acceptBid(item.id);
-                          if (r.ok) setFeedback({ kind: 'ok', text: t('toast.sold', { name, fee: money(r.fee ?? item.fee) }) });
+                          // O ramo de ERRO faltava: quando a venda falhava (por
+                          // exemplo, o comprador sem verba) não aparecia nada e o
+                          // botão parecia estar avariado.
+                          setFeedback(r.ok
+                            ? { kind: 'ok', text: t('toast.sold', { name, fee: money(r.fee ?? item.fee) }) }
+                            : { kind: 'error', text: r.error ?? t('player.sellFailed') });
+                        }} />
+                        {/* Pedir mais: os clubes atiravam propostas baixas e só dava
+                            para aceitar ou recusar. Pede-se +30%; se for demais, desistem. */}
+                        <MiniBtn label={t('bid.counter.button')} bg={theme.colors.yellow} ink="#20242A" onPress={() => {
+                          const r = counterBid(item.id, Math.round(item.fee * 1.3));
+                          setFeedback({ kind: r.ok ? 'ok' : 'info', text: tMsg({ key: r.messageKey, params: { ...r.messageParams, club: buyer.shortName } }) });
                         }} />
                         <MiniX onPress={() => rejectBid(item.id)} />
                       </InboxRow>
@@ -254,11 +357,10 @@ export default function Dashboard() {
                   if (item.kind === 'RENEWAL') {
                     const asked = suggestedWage(p, state.meta.season);
                     return (
-                      <InboxRow key={item.id} accent={theme.colors.yellow} face={<Face seed={p.id} size={30} shirt={club.primaryColor} />}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.bidName}>{name}</Text>
-                          <Text style={styles.sub}>{t('inbox.renewalMeta', { wage: wage(asked) })}</Text>
-                        </View>
+                      <InboxRow key={item.id} accent={theme.colors.yellow}
+                        face={<Face seed={p.id} size={30} shirt={club.primaryColor} />}
+                        name={name} meta={t('inbox.renewalMeta', { wage: wage(asked) })}
+                        onOpen={() => router.push(`/player/${p.id}`)}>
                         <MiniBtn label={t('btn.renew3')} bg={theme.colors.blue} onPress={() => {
                           const r = resolveRenewal(item.id, 3);
                           setFeedback(r.ok
@@ -276,13 +378,13 @@ export default function Dashboard() {
                       : item.status === 'REJECTED' ? theme.colors.red
                       : theme.colors.border;
                     return (
-                      <InboxRow key={item.id} accent={border} face={<Face seed={p.id} size={30} shirt={state.clubs[item.toClubId]?.primaryColor} />}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.bidName}>{name}</Text>
-                          <Text style={styles.sub}>{item.status === 'PENDING'
-                            ? t('inbox.offerPending', { fee: money(item.fee) })
-                            : item.reasonKey ? tMsg({ key: item.reasonKey, params: item.reasonParams }) : ''}</Text>
-                        </View>
+                      <InboxRow key={item.id} accent={border}
+                        face={<Face seed={p.id} size={30} shirt={state.clubs[item.toClubId]?.primaryColor} />}
+                        name={name}
+                        meta={item.status === 'PENDING'
+                          ? t('inbox.offerPending', { fee: money(item.fee) })
+                          : item.reasonKey ? tMsg({ key: item.reasonKey, params: item.reasonParams }) : ''}
+                        onOpen={() => router.push(`/player/${p.id}`)}>
                         {item.status === 'COUNTER' ? (
                           <MiniBtn label={t('btn.accept')} bg={theme.colors.yellow} ink="#20242A" onPress={() => {
                             const r = acceptCounter(item.id);
@@ -298,11 +400,10 @@ export default function Dashboard() {
 
                   const label = t(item.request === 'WAGE_RISE' ? 'inbox.reqWage' : 'inbox.reqLeave');
                   return (
-                    <InboxRow key={item.id} accent={theme.colors.red} face={<Face seed={p.id} size={30} shirt={club.primaryColor} />}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.bidName}>{name}</Text>
-                        <Text style={styles.sub}>{t('inbox.reqMeta', { label, morale: p.condition.morale })}</Text>
-                      </View>
+                    <InboxRow key={item.id} accent={theme.colors.red}
+                      face={<Face seed={p.id} size={30} shirt={club.primaryColor} />}
+                      name={name} meta={t('inbox.reqMeta', { label, morale: p.condition.morale })}
+                      onOpen={() => router.push(`/player/${p.id}`)}>
                       <MiniBtn label={t('btn.accept')} bg={theme.colors.green} onPress={() => { const m = resolveRequest(item.id, true); setFeedback(m ? { kind: 'info', text: tMsg(m) } : null); }} />
                       <MiniBtn label={t('btn.reject')} bg={theme.colors.surfaceAlt} onPress={() => { const m = resolveRequest(item.id, false); setFeedback(m ? { kind: 'info', text: tMsg(m) } : null); }} />
                     </InboxRow>
@@ -330,10 +431,58 @@ export default function Dashboard() {
 
             {/* PRÓXIMO JOGO — cartão-herói com os dois escudos */}
             <View style={styles.matchCard}>
-              {next && nextOpp ? (
+              {/* NOITE EUROPEIA: nas semanas de Europa não se joga a liga, e o
+                  cartão mostrava na mesma o próximo jogo do campeonato. O
+                  utilizador preparava a equipa para a liga (rodava, aliviava a
+                  pressão) e levava com um jogo europeu — "de repente puf,
+                  afinal era Europa". */}
+              {/* Três casos distintos, e antes eram todos o mesmo cartão:
+                  1) noite europeia EM QUE JOGAS   → adversário europeu;
+                  2) noite europeia sem ti         → pausa, e o cartão passa a
+                     mostrar claramente o PRÓXIMO jogo do campeonato;
+                  3) semana normal                 → jogo da liga. */}
+              {euroNight ? (
+                <View style={styles.euroBanner}>
+                  <Text style={styles.euroBannerText}>
+                    🏆 {euroMatch ? `${t('euro.night')} · ${t(`euro.name.${euroMatch.comp}`)}` : t('euro.pause')}
+                  </Text>
+                  <Text style={styles.euroBannerSub}>
+                    {euroMatch ? t('euro.nightHint') : t('euro.pauseHint')}
+                  </Text>
+                </View>
+              ) : null}
+              {euroNight && euroMatch && euroOpp ? (
                 <>
                   <Text style={styles.matchEyebrow}>
-                    {t('match.gameOf', {
+                    {euroMatch.superCup
+                      ? t('euro.superCup.title')
+                      : euroMatch.stage === 'LEAGUE'
+                        ? `${t('euro.leaguePhase')} · ${t('euro.matchday', { n: euroMatch.matchday })}`
+                        : t(`euro.stage.${euroMatch.stage}`)}
+                    {` · ${t(euroMatch.isHome ? 'common.home' : 'common.away')}`}
+                  </Text>
+                  <View style={styles.versus}>
+                    <View style={styles.vTeam}>
+                      <CrestCircle club={euroMatch.isHome ? club : euroOpp} size={48} />
+                      <Text style={styles.vName} numberOfLines={1}>{(euroMatch.isHome ? club : euroOpp).shortName}</Text>
+                    </View>
+                    <Text style={styles.vVs}>VS</Text>
+                    <View style={styles.vTeam}>
+                      <CrestCircle club={euroMatch.isHome ? euroOpp : club} size={48} />
+                      <Text style={styles.vName} numberOfLines={1}>{(euroMatch.isHome ? euroOpp : club).shortName}</Text>
+                    </View>
+                  </View>
+                  <View style={[styles.matchMetaRow, { justifyContent: 'center' }]}>
+                    <Stars value={reputationStars(euroOpp.reputation)} />
+                  </View>
+                  <Pressable onPress={() => router.push(`/club/${euroOpp.id}` as never)} style={{ alignSelf: 'center' }}>
+                    <Text style={styles.oppLink}>{t('match.scoutOpponent', { club: euroOpp.shortName })}</Text>
+                  </Pressable>
+                </>
+              ) : next && nextOpp ? (
+                <>
+                  <Text style={styles.matchEyebrow}>
+                    {euroNight ? t('euro.leagueNext') : t('match.gameOf', {
                       n: next.round,
                       total: schedule?.totalRounds ?? '?',
                       venue: t(isHome ? 'common.home' : 'common.away'),
@@ -356,6 +505,10 @@ export default function Dashboard() {
                       <FormDots results={pre.opponent.form} />
                     ) : null}
                   </View>
+                  {/* Espreitar o plantel do adversário antes de decidir a tática. */}
+                  <Pressable onPress={() => router.push(`/club/${nextOpp.id}` as never)} style={{ alignSelf: 'center' }}>
+                    <Text style={styles.oppLink}>{t('match.scoutOpponent', { club: nextOpp.shortName })}</Text>
+                  </Pressable>
                 </>
               ) : (
                 <View style={styles.matchTop}>
@@ -433,10 +586,10 @@ export default function Dashboard() {
                   <Text style={[styles.energyVal, { color: fitnessColor(avgFit) }]}>{avgFit}%</Text>
                 </View>
                 <StrengthTriplet def={myStrength.def} mid={myStrength.mid} att={myStrength.att} />
-                {lastResults.length > 0 ? (
+                {shownResults.length > 0 ? (
                   <View style={styles.teamForm}>
                     <Text style={styles.sub}>{t('label.form')}</Text>
-                    <FormDots results={lastResults} />
+                    <FormDots results={shownResults} />
                   </View>
                 ) : null}
               </DashCard>
@@ -444,7 +597,7 @@ export default function Dashboard() {
 
             {/* TREINO + FINANÇAS lado a lado */}
             <View style={styles.twoCol}>
-              <DashCard title={t('card.training')} style={styles.colCard}>
+              <DashCard title={t('card.training')} style={styles.colCard} onOpen={() => router.push('/training' as never)}>
                 <Stars value={club.facilities.training} />
                 <Text style={styles.trainSub}>{t('training.level', { n: club.facilities.training })}</Text>
                 <View style={styles.focusWrap}>
@@ -477,14 +630,14 @@ export default function Dashboard() {
                   const opp = state.clubs[oppId];
                   if (!opp) return null;
                   return (
-                    <View key={f.id} style={styles.schedRow}>
+                    <Pressable key={f.id} style={styles.schedRow} onPress={() => router.push(`/club/${opp.id}` as never)}>
                       <Text style={styles.schedRound}>J{f.round}</Text>
                       <CrestCircle club={opp} size={22} />
                       <Text style={styles.schedName} numberOfLines={1}>{opp.name}</Text>
                       <Text style={[styles.schedVenue, { color: home ? theme.colors.green : theme.colors.textDim }]}>
                         {t(home ? 'common.home' : 'common.away')}
                       </Text>
-                    </View>
+                    </Pressable>
                   );
                 })}
               </DashCard>
@@ -493,33 +646,38 @@ export default function Dashboard() {
             {/* CLASSIFICAÇÃO */}
             <DashCard title={t('card.standings')} onOpen={() => router.push('/league' as never)}>
               {mini.map((r) => {
-                const pos = table.indexOf(r) + 1;
+                const pos = shownTable.indexOf(r) + 1;
                 const me = r.clubId === club.id;
                 const c = state.clubs[r.clubId];
                 return (
-                  <View key={r.clubId} style={[styles.miniRow, me && styles.miniRowMe]}>
+                  <Pressable key={r.clubId} style={[styles.miniRow, me && styles.miniRowMe]}
+                    onPress={() => router.push(`/club/${r.clubId}` as never)}>
                     <Text style={[styles.miniPos, me && styles.bold]}>{pos}</Text>
                     {c ? <CrestCircle club={c} size={20} /> : null}
                     <Text style={[styles.body, { flex: 1 }, me && styles.bold]} numberOfLines={1}>
                       {c?.name ?? r.clubId}
                     </Text>
                     <Text style={[styles.miniPts, me && styles.bold]}>{r.points}</Text>
-                  </View>
+                  </Pressable>
                 );
               })}
             </DashCard>
 
             {/* FINANÇAS */}
+            {/* UM saldo só, repartido em três destinos. Antes mostravam-se dois
+                montes de dinheiro independentes (saldo e verba) sem relação
+                visível — e eles chegavam mesmo a divergir. */}
             <DashCard title={t('card.finances')} onOpen={() => router.push('/club' as never)}>
-              <RowKV k={t('fin.balance')} v={money(finance.balance)} vColor={finance.balance >= 0 ? theme.colors.green : theme.colors.red} />
-              <RowKV k={t('fin.transferBudget')} v={money(finance.transferBudget)} />
+              <RowKV k={t('fin.balance')} v={money(finance.balance)} vColor={finance.balance > 0 ? theme.colors.green : theme.colors.red} />
+              <BalanceSplit fin={finance} />
               <RowKV k={t('fin.wages')} v={money(finance.expenses.wages)} vColor={theme.colors.red} />
-              <RowKV k={t('fin.wageMargin')}
-                v={t('fin.wageMarginVal', { remaining: money(wageBudgetRemaining(finance)), cap: money(finance.wageBudget) })}
-                vColor={wageBudgetRemaining(finance) > 0 ? theme.colors.green : theme.colors.red} />
               {isInsolvent(finance) ? (
                 <Body style={{ color: theme.colors.red, fontWeight: '700', marginTop: 4 }}>
                   {t('fin.insolvent')}
+                </Body>
+              ) : cashWarning(finance) ? (
+                <Body style={{ color: theme.colors.yellow, fontWeight: '700', marginTop: 4 }}>
+                  {t('fin.runway.short', { n: RUNWAY_WARNING_WEEKS })}
                 </Body>
               ) : null}
             </DashCard>
@@ -605,6 +763,19 @@ export default function Dashboard() {
         onRelease={releaseExpiring}
       />
 
+      {/* VÃO REFORMAR-SE — aviso no fim de época (informativo) */}
+      <RetiringModal
+        players={focused && ackRetiring !== state.meta.season ? retiringSoon() : []}
+        onClose={() => setAckRetiring(state.meta.season)}
+      />
+
+      {/* REFORMARAM-SE — no arranque da nova época */}
+      <RetiredModal
+        names={focused && lastSeason && ackRetired !== lastSeason.record.season
+          ? lastSeason.youth.retiredManaged : []}
+        onClose={() => lastSeason && setAckRetired(lastSeason.record.season)}
+      />
+
       {/* FIM DE EMPRÉSTIMO — comprar o passe do jogador que regressou ao dono */}
       <ReturnedLoansModal
         loans={focused ? returnedLoansPending() : []}
@@ -616,15 +787,43 @@ export default function Dashboard() {
         }}
         onSkip={dismissReturnedLoan}
       />
+
+      {/* OFERTA POR MÉRITO — clube maior quer o treinador (opcional) */}
+      <MeritOfferModal
+        offers={focused && !fired ? meritOffers() : []}
+        clubs={state.clubs}
+        leagues={state.leagues}
+        onAccept={(id) => { acceptMerit(id); router.replace('/' as never); }}
+        onDecline={declineMerit}
+      />
     </Screen>
   );
 }
 
 /** Uma linha da caixa de entrada, com fio de cor à esquerda. */
-function InboxRow({ accent, face, children }: { accent: string; face: React.ReactNode; children: React.ReactNode }) {
+/**
+ * Linha da caixa de entrada. A zona do retrato + nome abre a FICHA do jogador
+ * (`onOpen`) — sem isso, decidir sobre uma proposta obrigava a ir procurar o
+ * jogador ao plantel para ver quem era.
+ */
+function InboxRow({ accent, face, name, meta, onOpen, children }: {
+  accent: string; face: React.ReactNode; name: string; meta: string;
+  onOpen?: () => void; children: React.ReactNode;
+}) {
+  const body = (
+    <>
+      {face}
+      <View style={{ flex: 1 }}>
+        <Text style={styles.bidName} numberOfLines={1}>{name}{onOpen ? ' ›' : ''}</Text>
+        <Text style={styles.sub} numberOfLines={2}>{meta}</Text>
+      </View>
+    </>
+  );
   return (
     <View style={[styles.inboxRow, { borderLeftColor: accent }]}>
-      {face}
+      {onOpen
+        ? <Pressable style={styles.inboxTap} onPress={onOpen}>{body}</Pressable>
+        : <View style={styles.inboxTap}>{body}</View>}
       {children}
     </View>
   );
@@ -824,8 +1023,111 @@ function ReturnedLoansModal({
   );
 }
 
+/** Oferta por MÉRITO: um clube maior quer o treinador. Aceitar muda de clube. */
+function MeritOfferModal({
+  offers, clubs, leagues, onAccept, onDecline,
+}: {
+  offers: string[];
+  clubs: GameState['clubs'];
+  leagues: GameState['leagues'];
+  onAccept: (id: string) => void;
+  onDecline: () => void;
+}) {
+  const t = useT();
+  if (offers.length === 0) return null;
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onDecline}>
+      <View style={styles.cdBackdrop}>
+        <View style={[styles.cdCard, { borderColor: theme.colors.blue }]}>
+          <Text style={[styles.cdTitle, { color: theme.colors.blue }]}>📈 {t('merit.title')}</Text>
+          <Text style={styles.cdSub}>{t('merit.sub')}</Text>
+          <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+            {offers.map((id) => {
+              const c = clubs[id];
+              if (!c) return null;
+              const lg = leagues[c.leagueId];
+              return (
+                <View key={id} style={styles.cdRow}>
+                  <CrestCircle club={c} size={34} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.cdName} numberOfLines={1}>{c.name}</Text>
+                    <Text style={styles.sub}>{t('merit.clubMeta', { league: lg?.name ?? '', rep: c.reputation })}</Text>
+                  </View>
+                  <MiniBtn label={t('merit.accept')} bg={theme.colors.green} onPress={() => onAccept(id)} />
+                </View>
+              );
+            })}
+          </ScrollView>
+          <Pressable style={styles.meritStay} onPress={onDecline}>
+            <Text style={styles.meritStayText}>{t('merit.stay')}</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+/** Popup FIM DE ÉPOCA: jogadores que se vão reformar (informativo). */
+function RetiringModal({ players, onClose }: { players: Player[]; onClose: () => void }) {
+  const t = useT();
+  if (players.length === 0) return null;
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.cdBackdrop}>
+        <View style={[styles.cdCard, { borderColor: theme.colors.blue }]}>
+          <Text style={[styles.cdTitle, { color: theme.colors.blue }]}>👋 {t('retire.soon.title')}</Text>
+          <Text style={styles.cdSub}>{t('retire.soon.sub')}</Text>
+          <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+            {players.map((p) => (
+              <View key={p.id} style={styles.cdRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cdName} numberOfLines={1}>{p.firstName} {p.lastName}</Text>
+                  <Text style={styles.sub}>{p.positions[0]} · {t('retire.age', { age: p.age })} · OVR {to100(naturalOverallFine(p))}</Text>
+                </View>
+              </View>
+            ))}
+          </ScrollView>
+          <Pressable style={[styles.dlgBtn, { backgroundColor: theme.colors.blue }]} onPress={onClose}>
+            <Text style={styles.dlgBtnText}>{t('common.ok')}</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+/** Popup ARRANQUE DA ÉPOCA: jogadores que se reformaram na época anterior. */
+function RetiredModal({ names, onClose }: { names: string[]; onClose: () => void }) {
+  const t = useT();
+  if (names.length === 0) return null;
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.cdBackdrop}>
+        <View style={styles.cdCard}>
+          <Text style={styles.cdTitle}>🎖️ {t('retire.done.title')}</Text>
+          <Text style={styles.cdSub}>{t('retire.done.sub')}</Text>
+          <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+            {names.map((n, i) => (
+              <View key={i} style={styles.cdRow}>
+                <Text style={styles.cdName} numberOfLines={1}>🎖️  {n}</Text>
+              </View>
+            ))}
+          </ScrollView>
+          <Pressable style={[styles.dlgBtn, { backgroundColor: theme.colors.yellow }]} onPress={onClose}>
+            <Text style={[styles.dlgBtnText, { color: '#20242A' }]}>{t('common.ok')}</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 const styles = StyleSheet.create({
   body: { color: theme.colors.text, fontSize: theme.font.body },
+  dlgBtn: { marginTop: theme.spacing(1.25), paddingVertical: theme.spacing(1.2), borderRadius: theme.radius.sm, alignItems: 'center' },
+  meritStay: { marginTop: theme.spacing(1), paddingVertical: theme.spacing(1), alignItems: 'center' },
+  meritStayText: { color: theme.colors.textDim, fontSize: theme.font.body, fontWeight: '700' },
+  dlgBtnText: { color: '#fff', fontSize: theme.font.body, fontWeight: '800' },
 
   // ---- Cabeçalho do clube (hero) ----
   heroWrap: { marginBottom: theme.spacing(1.25) },
@@ -863,6 +1165,27 @@ const styles = StyleSheet.create({
   tileK: { color: theme.colors.textDim, fontSize: 9, fontWeight: '800', letterSpacing: 0.5, textTransform: 'uppercase', marginTop: 2 },
 
   // ---- Cartão-herói do próximo jogo ----
+  crisisBox: {
+    backgroundColor: theme.colors.bg, borderRadius: theme.radius.sm,
+    borderLeftWidth: 3, borderLeftColor: theme.colors.red,
+    padding: theme.spacing(1), marginBottom: theme.spacing(0.75), gap: theme.spacing(0.75),
+  },
+  crisisTitle: { color: theme.colors.red, fontSize: theme.font.body, fontWeight: '900' },
+  crisisMeta: { color: theme.colors.textDim, fontSize: theme.font.small },
+  crisisRow: {
+    flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1), flexWrap: 'wrap',
+  },
+
+  euroBanner: {
+    alignSelf: 'stretch', alignItems: 'center', gap: 2,
+    backgroundColor: theme.colors.surfaceAlt, borderRadius: theme.radius.sm,
+    borderWidth: 1, borderColor: theme.colors.accent,
+    paddingVertical: theme.spacing(1), paddingHorizontal: theme.spacing(1.5),
+    marginBottom: theme.spacing(1),
+  },
+  euroBannerText: { color: theme.colors.accent, fontSize: theme.font.body, fontWeight: '900', letterSpacing: 0.5 },
+  euroBannerSub: { color: theme.colors.textDim, fontSize: theme.font.small, textAlign: 'center' },
+
   matchEyebrow: {
     color: theme.colors.green, fontSize: 9, fontWeight: '800', letterSpacing: 1.2,
     textTransform: 'uppercase', textAlign: 'center', marginBottom: theme.spacing(1),
@@ -921,8 +1244,14 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.bg, borderRadius: theme.radius.sm,
     borderLeftWidth: 3, paddingVertical: theme.spacing(1), paddingHorizontal: theme.spacing(1),
     marginBottom: theme.spacing(0.75),
+    // Em ecrãs estreitos os botões ("Vender" + "Pedir mais" + ✕) não cabiam na
+    // mesma linha do nome e saíam fora do cartão — ficava só o ✕ acessível.
+    // Com wrap descem para uma segunda linha em vez de desaparecerem.
+    flexWrap: 'wrap',
   },
   bidName: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '700' },
+  inboxTap: { flex: 1, minWidth: 150, flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1) },
+  oppLink: { color: theme.colors.blue, fontSize: theme.font.small, fontWeight: '700', marginTop: theme.spacing(0.5) },
   miniBtn: { borderRadius: theme.radius.sm, paddingHorizontal: theme.spacing(1.25), paddingVertical: theme.spacing(0.85) },
   miniBtnText: { fontSize: theme.font.small, fontWeight: '700' },
   miniX: { borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.sm, paddingHorizontal: theme.spacing(1), paddingVertical: theme.spacing(0.85) },

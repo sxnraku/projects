@@ -10,6 +10,7 @@ import {
 import { deriveSeed, Rng } from '../engine/rng';
 import { simulateMatch } from '../engine';
 import { addNews } from '../news';
+import { moveMoney } from '../economy';
 
 /**
  * Taça — eliminatória a jogo único com TODOS os clubes da pirâmide.
@@ -111,8 +112,7 @@ export function playCupRound(state: GameState): Fixture[] {
     cup.winnerClubId = champion;
     const fin = state.finances[champion];
     if (fin) {
-      fin.balance += CUP_WINNER_PRIZE;
-      fin.transferBudget += Math.round(CUP_WINNER_PRIZE / 2);
+      moveMoney(fin, CUP_WINNER_PRIZE);
     }
     if (champion === managedId) {
       state.career.trophies.push({ season: cup.season, key: 'trophy.cup' });

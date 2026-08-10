@@ -146,7 +146,8 @@ export function WeekReportModal({
                 {report.notes.map((n, i) => (
                   <View key={i} style={styles.noteRow}>
                     <Text style={[styles.noteMark, { color: noteColor(n.kind) }]}>
-                      {n.kind === 'INJURY' ? '+' : n.kind === 'GROWTH' ? '★' : n.kind === 'TRANSFER' ? '⇄' : '·'}
+                      {n.kind === 'INJURY' ? '+' : n.kind === 'GROWTH' ? '★'
+                        : n.kind === 'TRANSFER' ? '⇄' : n.kind === 'FINANCE' ? '€' : '·'}
                     </Text>
                     <Text style={[styles.noteText, { color: noteColor(n.kind) }]}>{tMsg(n)}</Text>
                   </View>
@@ -168,6 +169,7 @@ function noteColor(kind: WeekReport['notes'][number]['kind']): string {
   return kind === 'INJURY' ? theme.colors.red
     : kind === 'GROWTH' ? theme.colors.yellow
     : kind === 'TRANSFER' ? theme.colors.blue
+    : kind === 'FINANCE' ? theme.colors.accent
     : theme.colors.textDim;
 }
 

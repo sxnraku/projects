@@ -1,9 +1,11 @@
 import {
   Club,
   computeOverall,
+  computeOverallFine,
   defaultFacilities,
   emptyGameState,
   Finance,
+  Foot,
   GameMeta,
   GameState,
   League,
@@ -14,11 +16,33 @@ import {
 } from '../models';
 import { assignObjective } from '../career';
 import { generateCup } from '../cup';
-import { computeMarketValue, recalcUpkeep, suggestedWage } from '../economy';
+import {
+  computeMarketValue, countryPrestige, recalcIncome, recalcUpkeep, suggestedWage, syncBudgets,
+} from '../economy';
 import { emptyStandings, generateSchedule } from '../season';
 import { Rng } from '../engine/rng';
 import { autoPickLineup } from './lineup';
-import { CITIES, FIRST_NAMES, LAST_NAMES, NameStyle, NATIONALITIES, suffixesFor } from './names';
+import { CITIES, CLUB_SUFFIXES, FIRST_NAMES, LAST_NAMES, NATIONALITIES } from './names';
+import { WORLD_TEAMS, WorldTeam, PlayerTuple } from '../data/world/worldTeams';
+import { loadCountryPlayers } from '../data/world/playerIndex';
+import { buildBackgroundWorld } from './background';
+
+/** Jogador da base, descodificado de um PlayerTuple do mundo. */
+export interface BasePlayerData { teamId: number; name: string; pos: Position; nat: string; age: number; foot: Foot; ovr: number; pot: number; }
+/**
+ * Limpa o sufixo numérico dos nomes da base ("Rayan Petit 24" → "Rayan Petit").
+ *
+ * O importador do Excel desambiguou nomes repetidos acrescentando um número, e
+ * isso ia parar ao ecrã: 720 dos 1276 jogadores franceses (e 671 dos brasileiros)
+ * apareciam no mercado com um número colado ao apelido. Portugal saiu limpo, por
+ * isso só se notava no mercado internacional.
+ */
+const stripNameIndex = (name: string): string => name.replace(/\s+\d+$/, '');
+
+export const decodeTuple = (t: PlayerTuple): BasePlayerData =>
+  ({ teamId: t[0], name: stripNameIndex(t[1]), pos: t[2], nat: t[3], age: t[4], foot: t[5], ovr: t[6], pot: t[7] });
+/** País ativo por omissão (o antigo mundo Portugal). */
+export const DEFAULT_COUNTRY = 'portugal';
 
 export interface NewGameOptions {
   managerName: string;
@@ -27,7 +51,10 @@ export interface NewGameOptions {
   divisions?: number; // nº de divisões, default 3
   season?: number; // default 2026
   seed?: number; // default aleatório
-  nameStyle?: NameStyle; // estilo dos nomes de clube, default 'serious'
+  country?: string; // país ativo (slug de WORLD_TEAMS); default 'portugal'. Só com useBase.
+  // Usa a base FIXA de equipas/jogadores (docs/excel_todos_os_clubes_overalls_ajustados.xlsx)
+  // em vez da geração aleatória. Ativado no jogo real; os testes usam procedural.
+  useBase?: boolean;
 }
 
 /** Nome e banda de reputação/nível por tier. */
@@ -93,7 +120,10 @@ export function createNewGame(opts: NewGameOptions): GameState {
   const season = opts.season ?? 2026;
   const seed = opts.seed ?? Math.floor(Math.random() * 0xffffffff);
   const rng = new Rng(seed);
-  const suffixes = suffixesFor(opts.nameStyle ?? 'serious');
+  const suffixes = CLUB_SUFFIXES;
+  // País ativo (só com useBase): valida contra o mundo, senão cai no default.
+  const country = opts.useBase && WORLD_TEAMS.some((t) => t.slug === opts.country)
+    ? opts.country! : DEFAULT_COUNTRY;
 
   const meta: GameMeta = {
     saveId: `save_${seed}`,
@@ -108,6 +138,14 @@ export function createNewGame(opts: NewGameOptions): GameState {
   };
   const state = emptyGameState(meta);
 
+  // O mundo de fundo existe SEMPRE — mesmo com o mundo gerado. É dele que saem
+  // a qualificação europeia e o mercado internacional; sem ele um jogo gerado
+  // ficava sem Europa nenhuma.
+  state.background = buildBackgroundWorld(country, seed); // resto do mundo, simulado barato
+
+  if (opts.useBase) {
+    buildBaseWorld(state, season, seed, rng, country);
+  } else {
   const usedClubNames = new Set<string>();
   const usedShorts = new Set<string>();
 
@@ -140,7 +178,7 @@ export function createNewGame(opts: NewGameOptions): GameState {
       }
       club.squad = squadIds;
       state.clubs[clubId] = club;
-      const fin = makeFinance(clubId, tier, t, state.players, squadIds);
+      const fin = makeFinance(club, tier, state.players, squadIds);
       recalcUpkeep(club, fin); // manutenção a partir das instalações/estádio
       state.finances[clubId] = fin;
       state.tactics[clubId] = autoPickLineup(clubId, squadIds, state.players);
@@ -149,9 +187,13 @@ export function createNewGame(opts: NewGameOptions): GameState {
     state.schedules[leagueId] = generateSchedule(leagueId, league.clubIds, seed + tier);
     state.standings[leagueId] = emptyStandings(league.clubIds);
   }
+  } // fim do ramo procedural
 
-  // Clube gerido: reputação média da ÚLTIMA divisão — começa-se em baixo.
-  const bottomLeague = state.leagues[`liga_${divisions}`]!;
+  // Clube gerido: reputação média da ÚLTIMA divisão do país — começa-se em baixo.
+  const lastTier = opts.useBase
+    ? Math.max(...WORLD_TEAMS.filter((t) => t.slug === country).map((t) => t.tier))
+    : divisions;
+  const bottomLeague = state.leagues[`liga_${lastTier}`]!;
   const sortedByRep = [...bottomLeague.clubIds].sort(
     (a, b) => state.clubs[a]!.reputation - state.clubs[b]!.reputation,
   );
@@ -166,10 +208,136 @@ export function createNewGame(opts: NewGameOptions): GameState {
   return state;
 }
 
+/** Média de overall (0-100) de um plantel — para ranquear economia dentro da divisão. */
+function avgOvrOf(players: BasePlayerData[]): number {
+  return players.length ? players.reduce((s, p) => s + p.ovr, 0) / players.length : 60;
+}
+
+/**
+ * Constrói o mundo ATIVO a partir da pirâmide do PAÍS escolhido (WORLD_TEAMS +
+ * plantéis carregados sob demanda). Cada divisão usa o nome REAL da liga e é
+ * ordenada por força (média de overall) → mais forte = mais reputação/dinheiro/
+ * estádio. Reutiliza a mesma economia/plumbing do ramo procedural.
+ */
+function buildBaseWorld(state: GameState, season: number, seed: number, rng: Rng, country: string): void {
+  const countryTeams = WORLD_TEAMS.filter((wt) => wt.slug === country);
+
+  // Plantéis do país (tuplos → objetos), agrupados por equipa.
+  const byTeam = new Map<number, BasePlayerData[]>();
+  for (const tp of loadCountryPlayers(country)) {
+    const d = decodeTuple(tp);
+    if (!byTeam.has(d.teamId)) byTeam.set(d.teamId, []);
+    byTeam.get(d.teamId)!.push(d);
+  }
+
+  const byTier = new Map<number, WorldTeam[]>();
+  for (const wt of countryTeams) {
+    if (!byTier.has(wt.tier)) byTier.set(wt.tier, []);
+    byTier.get(wt.tier)!.push(wt);
+  }
+
+  for (const tier of [...byTier.keys()].sort((a, b) => a - b)) {
+    const leagueId = `liga_${tier}`;
+    const tierTeams = byTier.get(tier)!;
+    const league: League = { id: leagueId, name: tierTeams[0]!.league, country, tier, clubIds: [] };
+    state.leagues[leagueId] = league;
+
+    const teams = tierTeams
+      .map((wt) => ({ wt, avg: avgOvrOf(byTeam.get(wt.id) ?? []) }))
+      .sort((a, b) => a.avg - b.avg); // fraco → forte
+
+    teams.forEach(({ wt }) => {
+      const clubId = `club_${wt.id}`;
+      // Reputação da FORÇA real (dataset) + estatura do país — não do escalão.
+      const reputation = baseReputation(wt.forca, wt.slug);
+      const club = makeClubFromBase(wt, clubId, leagueId, reputation);
+      league.clubIds.push(clubId);
+
+      const squadIds: string[] = [];
+      (byTeam.get(wt.id) ?? []).forEach((bp, i) => {
+        const player = makePlayerFromBase(`${clubId}_p${i}`, clubId, bp, season, rng);
+        player.marketValue = computeMarketValue(player, season);
+        state.players[player.id] = player;
+        squadIds.push(player.id);
+      });
+      club.squad = squadIds;
+      state.clubs[clubId] = club;
+      const fin = makeFinance(club, tier, state.players, squadIds);
+      recalcUpkeep(club, fin);
+      state.finances[clubId] = fin;
+      state.tactics[clubId] = autoPickLineup(clubId, squadIds, state.players);
+    });
+
+    state.schedules[leagueId] = generateSchedule(leagueId, league.clubIds, seed + tier);
+    state.standings[leagueId] = emptyStandings(league.clubIds);
+  }
+}
+
+/** Clube a partir de uma equipa da base (nome/sigla/cor fixos; economia pela reputação). */
+function makeClubFromBase(
+  bt: WorldTeam, clubId: string, leagueId: string, reputation: number,
+): Club {
+  // Estádio proporcional à reputação (força+país), não ao escalão — Andorra tem
+  // estádios pequenos mesmo sendo "1ª divisão".
+  const capacity = Math.round((1_500 + Math.pow(reputation / 95, 2) * 58_000) / 500) * 500;
+  const cityName = bt.name.split(' ')[0] ?? bt.name;
+  return {
+    id: clubId, name: bt.name, shortName: bt.sigla, country: bt.slug, leagueId,
+    primaryColor: bt.color, secondaryColor: '#ffffff',
+    stadiumName: `Estádio ${cityName}`,
+    stadiumCapacity: capacity, reputation, facilities: defaultFacilities(), squad: [],
+  };
+}
+
+/**
+ * Jogador a partir da base: nome/posição/nacionalidade/idade/pé fixos, e atributos
+ * DERIVADOS do overall — gera um perfil de posição e ESCALA-o para que o overall
+ * fino bata exatamente o valor da base (justo). Potencial = pot/5 (≥ overall).
+ */
+export function makePlayerFromBase(id: string, clubId: string, bp: BasePlayerData, season: number, rng: Rng): Player {
+  const position = bp.pos;
+  const targetFine = clamp(bp.ovr / 5, 1, 20); // escala interna 1-20
+  const attrs = makeAttributes(position, Math.round(targetFine), rng);
+  const fine = computeOverallFine(attrs, position) || targetFine;
+  const k = targetFine / fine; // computeOverallFine é linear → escala certa
+  for (const key in attrs) {
+    const kk = key as keyof PlayerAttributes;
+    attrs[kk] = clamp(attrs[kk] * k, 1, 20);
+  }
+  // Potencial: parte do valor da base, mas os JOVENS ganham alguma margem para
+  // haver evolução visível ao treinar (a base traz margens muito apertadas).
+  // Moderado — nem todos os jovens são craques garantidos.
+  const youthCeiling = bp.age <= 18 ? rng.int(2, 4)
+    : bp.age <= 20 ? rng.int(1, 3)
+    : bp.age <= 22 ? rng.int(0, 2) : 0;
+  const potential = clamp(Math.max(bp.pot / 5, targetFine + youthCeiling), targetFine, 20);
+  const parts = bp.name.split(' ');
+  const firstName = parts[0] ?? bp.name;
+  const lastName = parts.length > 1 ? parts.slice(1).join(' ') : firstName;
+
+  const player: Player = {
+    id, clubId,
+    firstName, lastName,
+    age: bp.age, nationality: bp.nat, foot: bp.foot,
+    positions: [position], attributes: attrs, potential,
+    condition: { form: rng.int(55, 80), morale: rng.int(60, 85), fitness: 100, status: 'AVAILABLE', injuryDaysRemaining: 0 },
+    contractUntil: season + rng.int(1, 5), wage: 0, marketValue: 0, transferListed: false,
+  };
+  player.wage = suggestedWage(player, season);
+  return player;
+}
+
 /**
  * (Re)atribui o objetivo da direção para o clube gerido, com base no ranking
  * de reputação dentro da liga atual. Usado no arranque, no rollover e ao
  * aceitar uma oferta de emprego.
+ *
+ * PISO por resultado imediato: se a época que acabou (a mais recente em
+ * `career.seasons`, se for a DESTE clube) terminou em título ou subida, o
+ * objetivo nunca cai para "evitar despromoção" — a reputação do clube só sobe
+ * gradualmente (ver `seasonReputationDelta`), e sem este piso um clube que
+ * tinha acabado de ser campeão continuava, na prática, com o MESMO objetivo de
+ * sempre, só porque o ranking de reputação ainda não tinha apanhado o sucesso.
  */
 export function setManagedObjective(state: GameState): void {
   const club = state.clubs[state.meta.managedClubId];
@@ -180,7 +348,23 @@ export function setManagedObjective(state: GameState): void {
     (a, b) => (state.clubs[b]?.reputation ?? 0) - (state.clubs[a]?.reputation ?? 0),
   );
   const expectedRank = ranked.indexOf(club.id) + 1;
-  state.career.objective = assignObjective(expectedRank, league.clubIds.length);
+  let objective = assignObjective(expectedRank, league.clubIds.length);
+
+  // A DIREÇÃO TEM MEMÓRIA. O objetivo saía só do ranking de reputação, por isso
+  // um clube que acabara de ser campeão podia receber "primeira metade da
+  // tabela" — absurdo, e foi exatamente a queixa do playtest ("ganhei cinco
+  // campeonatos e continuam a pedir-me a metade de cima").
+  const lastSeason = state.career.seasons[state.career.seasons.length - 1];
+  if (lastSeason && lastSeason.clubId === club.id) {
+    if (lastSeason.champion && !lastSeason.promoted) {
+      // Campeão em título na MESMA divisão: revalidar é o mínimo exigível.
+      objective = 'TITLE';
+    } else if ((lastSeason.champion || lastSeason.promoted) && objective === 'AVOID_RELEGATION') {
+      // Subiu de escalão: dão-lhe crédito, mas não lhe exigem o título logo.
+      objective = 'TOP_HALF';
+    }
+  }
+  state.career.objective = objective;
 }
 
 /**
@@ -310,38 +494,52 @@ function makeAttributes(position: Position, base: number, rng: Rng): PlayerAttri
   };
 }
 
+/**
+ * Reputação (5..95) de um clube: qualidade do plantel (FORÇA global do dataset,
+ * mediana ~68.5) + estatura da LIGA (prestígio do país). Sem o termo do país, a
+ * 1ª divisão de Andorra ganhava a mesma reputação que a de Inglaterra → 5 estrelas
+ * num clube andorrano. Agora Andorra fica com poucas estrelas, Inglaterra com
+ * muitas — coerente com os dados.
+ */
+export function baseReputation(forca: number, slug: string): number {
+  const quality = 50 + (forca - 68.5) * 2.3; // força global → reputação
+  const stature = (countryPrestige(slug) - 1) * 18; // liga forte soma, fraca corta
+  return clamp(Math.round(quality + stature), 5, 95);
+}
+
+/**
+ * Saldo em caixa inicial a partir da REPUTAÇÃO (cresce exponencialmente). Desliga
+ * a confusão "escalão = dinheiro": a 1ª divisão de Andorra não é a de Inglaterra,
+ * por isso não parte com dezenas de milhões só por ser "tier 1".
+ */
+export function balanceFromReputation(rep: number): number {
+  return Math.round(40_000 * Math.exp(0.075 * rep) / 10_000) * 10_000;
+}
+
 function makeFinance(
-  clubId: string,
+  club: Club,
   tier: number,
-  t: number,
   players: Record<string, Player>,
   squadIds: string[],
 ): Finance {
-  const econ = econOf(tier);
   const wages = squadIds.reduce((s, id) => s + (players[id]?.wage ?? 0), 0);
+  const balance = balanceFromReputation(club.reputation);
 
-  // Saldo em caixa e receitas semanais ancorados ao ESCALÃO (valores realistas).
-  // Um clube da 3ª divisão fica com centenas de milhares — não com milhões.
-  const balance = Math.round(lerp(econ.balMin, econ.balMax, t) / 10_000) * 10_000;
-  const weeklyIncome = lerp(econ.incMin, econ.incMax, t);
-
-  return {
-    clubId,
+  const fin: Finance = {
+    clubId: club.id,
     balance,
-    transferBudget: Math.round(balance * 0.35),
+    // Fatias derivadas do saldo — `syncBudgets` preenche-as em baixo, depois de
+    // as despesas correntes estarem calculadas (a reserva salarial depende delas).
+    transferBudget: 0,
     wageBudget: Math.round(wages * 1.3),
-    income: {
-      tickets: 0,
-      sponsorship: Math.round(weeklyIncome * 0.40),
-      tvRights: Math.round(weeklyIncome * 0.45),
-      merchandising: Math.round(weeklyIncome * 0.15),
-    },
-    expenses: {
-      wages,
-      facilities: 0, // calculado a partir das instalações (recalcUpkeep)
-      staff: Math.round(weeklyIncome * 0.30),
-    },
+    income: { tickets: 0, sponsorship: 0, tvRights: 0, merchandising: 0 },
+    expenses: { wages, facilities: 0, staff: 0 },
   };
+  // Receitas/staff a partir da reputação E do escalão — a MESMA fórmula do
+  // rollover (recalcIncome), para o arranque e as épocas seguintes baterem certo.
+  recalcIncome(club, tier, fin);
+  syncBudgets(fin);
+  return fin;
 }
 
 function clamp(v: number, min: number, max: number): number {

@@ -7,6 +7,11 @@ import { CLOUD_SAVE_NAME } from './cloudConfig';
 const DRIVE = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
 
+// O formato do ficheiro (envelope + versão) vive em src/persistence/cloudEnvelope.ts.
+// Aqui só entra o transporte: pedir, enviar e trazer bytes.
+export { wrapSave, unwrapSave } from '../persistence/cloudEnvelope';
+export type { CloudEnvelope } from '../persistence/cloudEnvelope';
+
 /** Procura o ficheiro do save na pasta escondida da app. Devolve o id ou null. */
 async function findSaveFileId(token: string): Promise<string | null> {
   const q = encodeURIComponent(`name='${CLOUD_SAVE_NAME}'`);
