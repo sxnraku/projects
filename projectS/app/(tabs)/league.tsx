@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useGameStore } from '../../src/state/gameStore';
+import { Spot } from '../../src/ui/tutorial/Spot';
+import { TutorialTargets } from '../../src/ui/tutorial/registry';
 import { Club, cupRoundMsg, goalDifference, shortName, StandingRow } from '../../src/core/models';
 import { leagueStats } from '../../src/core/game';
 import { theme, zoneColor } from '../../src/ui/theme';
@@ -78,7 +80,7 @@ export default function League() {
             onOpen={() => router.push(`/club/${item.clubId}` as never)} />
         )}
         ListHeaderComponent={
-          <View style={[styles.row, styles.head]}>
+          <Spot id={TutorialTargets.leagueTable} style={[styles.row, styles.head]}>
             <View style={styles.zone} />
             <Text style={[styles.h, styles.pos]}>#</Text>
             <Text style={[styles.h, { flex: 1, textAlign: 'left' }]}>{t('league.col.club')}</Text>
@@ -88,7 +90,7 @@ export default function League() {
             <Text style={[styles.h, styles.num]}>D</Text>
             <Text style={[styles.h, styles.num]}>DG</Text>
             <Text style={[styles.h, styles.pts]}>Pts</Text>
-          </View>
+          </Spot>
         }
         ListFooterComponent={
           <View style={styles.legend}>

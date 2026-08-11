@@ -2,7 +2,10 @@ import React, { useMemo, useState } from 'react';
 import { Dimensions, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useGameStore } from '../../src/state/gameStore';
+import { MaybeSpot, Spot } from '../../src/ui/tutorial/Spot';
+import { TutorialTargets } from '../../src/ui/tutorial/registry';
 import { isWonderkid, lineupWarnings, ROTATION_ALERT_FITNESS } from '../../src/core/game';
+import { individualFocus } from '../../src/core/training';
 import { fullName, naturalOverall, naturalOverallFine, Player, POSITION_GROUP, PositionGroup } from '../../src/core/models';
 import { money, to100, wage } from '../../src/ui/format';
 import { useT } from '../../src/ui/i18n';
@@ -102,14 +105,14 @@ export default function Squad() {
     <Screen>
       <Toast text={feedback?.text ?? null} kind={feedback?.kind ?? 'ok'} onHide={() => setFeedback(null)} />
       {/* Filtros + pesquisa */}
-      <View style={styles.filters}>
+      <Spot id={TutorialTargets.squadFilters} style={styles.filters}>
         {FILTER_KEYS.map((key) => (
           <Pressable key={key} onPress={() => setFilter(key)}
             style={[styles.filterBtn, filter === key && styles.filterActive]}>
             <Text style={[styles.filterText, filter === key && styles.filterTextActive]}>{t(`squad.filter.${key}`)}</Text>
           </Pressable>
         ))}
-      </View>
+      </Spot>
       <TextInput
         style={styles.search}
         placeholder={t('squad.search')}
@@ -155,7 +158,8 @@ export default function Squad() {
         data={rows}
         keyExtractor={(p) => p.id}
         extraData={state}
-        renderItem={({ item }) => (
+        renderItem={({ item, index }) => (
+          <MaybeSpot on={index === 0} id={TutorialTargets.squadRow}>
           <PlayerRow
             player={item}
             clubColor={clubColor}
@@ -163,6 +167,7 @@ export default function Squad() {
             expiring={!!state && item.contractUntil === state.meta.season}
             onPress={() => router.push(`/player/${item.id}` as never)}
           />
+          </MaybeSpot>
         )}
         ItemSeparatorComponent={() => <View style={styles.sep} />}
         ListFooterComponent={
@@ -181,6 +186,9 @@ function PlayerRow({
   const t = useT();
   const ovr = naturalOverall(player);
   const injured = player.condition.status === 'INJURED';
+  // Plano de treino individual — só se via na ficha do jogador; agora lê-se na lista.
+  const focus = individualFocus(player);
+  const retrain = player.condition.retraining;
   // Quem não pode jogar não deve exigir leitura: a linha inteira apaga-se.
   const unavailable = injured || player.condition.fitness < 45;
 
@@ -215,6 +223,8 @@ function PlayerRow({
             {injured ? <Text style={{ color: theme.colors.red }}> 🚑</Text> : null}
             {player.condition.suspended ? <Text> 🟥</Text> : null}
             {player.condition.loanOwnerId ? <Text style={{ color: theme.colors.blue }}> {t('loan.badge')}</Text> : null}
+            {focus ? <Text style={{ color: theme.colors.green }}> 🎯</Text> : null}
+            {retrain ? <Text style={{ color: theme.colors.blue }}> ⇄</Text> : null}
           </Text>
           <View style={styles.subLine}>
             <PosText position={player.positions[0]!} />
@@ -224,6 +234,22 @@ function PlayerRow({
               · {t('squad.sort.fit')} {player.condition.fitness}
             </Text>
           </View>
+          {/* Segunda linha só para quem tem trabalho à parte — o plantel normal
+              não ganha ruído por causa de dois ou três jogadores. */}
+          {focus || retrain ? (
+            <View style={styles.workLine}>
+              {focus ? (
+                <Text style={[styles.workChip, styles.workFocus]} numberOfLines={1}>
+                  🎯 {t(`focus.${focus}`)}
+                </Text>
+              ) : null}
+              {retrain ? (
+                <Text style={[styles.workChip, styles.workRetrain]} numberOfLines={1}>
+                  ⇄ {t('retrain.busy', { pos: retrain.position, weeks: retrain.weeksLeft })}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
         </View>
 
         {/* OVR grande + valor de mercado à direita + pega de arrasto */}
@@ -295,6 +321,15 @@ const styles = StyleSheet.create({
   subLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'nowrap' },
   subDim: { color: theme.colors.textDim, fontSize: theme.font.small, fontVariant: ['tabular-nums'] },
   subStat: { fontSize: theme.font.small, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  // Trabalho à parte (plano individual / reconversão)
+  workLine: { flexDirection: 'row', gap: 5, marginTop: 4, flexWrap: 'wrap' },
+  workChip: {
+    fontSize: 10, fontWeight: '800', paddingHorizontal: 6, paddingVertical: 2,
+    borderRadius: 100, borderWidth: 1, overflow: 'hidden',
+  },
+  workFocus: { color: theme.colors.green, borderColor: theme.colors.green },
+  workRetrain: { color: theme.colors.blue, borderColor: theme.colors.blue },
+
   rightCol: { alignItems: 'flex-end', minWidth: 60 },
   ovr: { fontSize: 20, fontWeight: '800', fontVariant: ['tabular-nums'] },
   valSmall: { color: theme.colors.textDim, fontSize: theme.font.small, fontVariant: ['tabular-nums'], marginTop: 1 },

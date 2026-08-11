@@ -17,6 +17,8 @@ import { Club, Finance, POSITION_GROUP, Position } from '../src/core/models';
 import { managedLeagueId, nextRound } from '../src/core/game';
 import { infrastructureFunds, wageReserve } from '../src/core/economy';
 import { useGameStore } from '../src/state/gameStore';
+import { Spot } from '../src/ui/tutorial/Spot';
+import { TutorialTargets } from '../src/ui/tutorial/registry';
 import { money } from '../src/ui/format';
 import { useT } from '../src/ui/i18n';
 import { haptic, playSound } from '../src/ui/sound';
@@ -43,23 +45,145 @@ export function darken(hex: string, factor: number): string {
   return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
 }
 
-/** Escudo circular (estilo "logo token" dos ecrãs de referência). */
+/** Mistura duas cores hex (t = 0 devolve `a`, t = 1 devolve `b`). */
+export function mix(a: string, b: string, t: number): string {
+  const pa = a.replace('#', ''); const pb = b.replace('#', '');
+  if (pa.length < 6 || pb.length < 6) return a;
+  const ch = (i: number) => {
+    const va = parseInt(pa.slice(i, i + 2), 16);
+    const vb = parseInt(pb.slice(i, i + 2), 16);
+    return Math.round(va + (vb - va) * t);
+  };
+  return `#${((ch(0) << 16) | (ch(2) << 8) | ch(4)).toString(16).padStart(6, '0')}`;
+}
+
+/** Hash estável de uma string — dá sempre o mesmo emblema ao mesmo clube. */
+function hashString(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return Math.abs(h);
+}
+
+/** Padrões de emblema. Um clube fica sempre com o mesmo (derivado do id). */
+const CREST_PATTERNS = ['SOLID', 'HALF', 'STRIPES', 'SASH', 'HOOP', 'QUARTERS'] as const;
+
+/**
+ * EMBLEMA DO CLUBE.
+ *
+ * Escudo (não círculo): topo largo e base arredondada, com um padrão herdado do
+ * id do clube — metade, riscas, banda, faixa ou quartos — nas duas cores do
+ * equipamento. Todos os 1085 clubes ficam com emblema sem precisar de imagens.
+ *
+ * A sigla é o problema que isto resolve: antes saía do símbolo em nomes de 3
+ * letras largas e ficava descentrada (`letterSpacing` acrescenta espaço DEPOIS
+ * do último caráter, e no Android o `includeFontPadding` empurra o texto para
+ * baixo). Agora o texto vive numa caixa de largura fixa, com o tamanho de letra
+ * a diminuir conforme o nº de caracteres e `adjustsFontSizeToFit` como rede de
+ * segurança.
+ */
 export function CrestCircle({ club, size = 32 }: { club: Club; size?: number }) {
+  const primary = club.primaryColor;
+  // Se as duas cores forem quase iguais, o padrão desaparecia: cria contraste.
+  const rawSecondary = club.secondaryColor || '#ffffff';
+  const secondary = rawSecondary.toLowerCase() === primary.toLowerCase()
+    ? mix(primary, contrastOn(primary) === '#FFFFFF' ? '#ffffff' : '#000000', 0.35)
+    : rawSecondary;
+
+  const h = hashString(club.id);
+  const pattern = CREST_PATTERNS[h % CREST_PATTERNS.length]!;
+  const ink = contrastOn(primary);
+  const outline = mix(primary, '#000000', 0.45);
+
+  const initials = (club.shortName || club.name).replace(/[^A-Za-zÀ-ÿ0-9]/g, '').slice(0, 3).toUpperCase();
+  // Menos letras = letra maior. Sem isto, 3 caracteres largos transbordavam.
+  const fontSize = size * (initials.length >= 3 ? 0.3 : initials.length === 2 ? 0.38 : 0.46);
+
+  const fill = { position: 'absolute' as const, left: 0, right: 0, top: 0, bottom: 0 };
+
   return (
-    <View style={[
-      styles.crestCircle,
-      {
-        width: size, height: size, borderRadius: size / 2,
-        backgroundColor: club.primaryColor,
-        borderColor: club.secondaryColor,
-        borderWidth: Math.max(1.5, size * 0.06),
-      },
-    ]}>
-      <Text style={[styles.crestCircleText, {
-        fontSize: size * 0.36, color: contrastOn(club.primaryColor),
-      }]}>
-        {club.shortName.slice(0, 3)}
-      </Text>
+    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+      <View
+        style={{
+          width: size, height: size, overflow: 'hidden',
+          backgroundColor: primary,
+          borderWidth: Math.max(1, size * 0.055),
+          borderColor: outline,
+          // Escudo: ombros quadrados em cima, ponta arredondada em baixo.
+          borderTopLeftRadius: size * 0.24,
+          borderTopRightRadius: size * 0.24,
+          borderBottomLeftRadius: size * 0.46,
+          borderBottomRightRadius: size * 0.46,
+          alignItems: 'center', justifyContent: 'center',
+        }}
+      >
+        {/* Padrão */}
+        {pattern === 'HALF' ? (
+          <View style={[fill, { left: size * 0.5, backgroundColor: secondary }]} />
+        ) : null}
+        {pattern === 'STRIPES' ? (
+          <View style={[fill, { flexDirection: 'row' }]}>
+            {[0, 1, 2, 3, 4].map((i) => (
+              <View key={i} style={{ flex: 1, backgroundColor: i % 2 === 1 ? secondary : 'transparent' }} />
+            ))}
+          </View>
+        ) : null}
+        {pattern === 'SASH' ? (
+          <View
+            style={{
+              position: 'absolute',
+              width: size * 2, height: size * 0.34,
+              left: -size * 0.5, top: size * 0.33,
+              backgroundColor: secondary,
+              transform: [{ rotate: '-35deg' }],
+            }}
+          />
+        ) : null}
+        {pattern === 'HOOP' ? (
+          <View style={[fill, { top: size * 0.36, bottom: size * 0.36, backgroundColor: secondary }]} />
+        ) : null}
+        {pattern === 'QUARTERS' ? (
+          <>
+            <View style={{ position: 'absolute', left: 0, top: 0, width: size * 0.5, height: size * 0.5, backgroundColor: secondary }} />
+            <View style={{ position: 'absolute', left: size * 0.5, top: size * 0.5, width: size * 0.5, height: size * 0.5, backgroundColor: secondary }} />
+          </>
+        ) : null}
+
+        {/* Brilho no topo — dá volume sem imagens. */}
+        <View style={[fill, { bottom: size * 0.55, backgroundColor: 'rgba(255,255,255,0.12)' }]} />
+
+        {/* Anel interior */}
+        <View
+          style={{
+            position: 'absolute',
+            left: size * 0.1, right: size * 0.1, top: size * 0.09, bottom: size * 0.11,
+            borderWidth: Math.max(0.5, size * 0.025),
+            borderColor: ink === '#FFFFFF' ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.28)',
+            borderTopLeftRadius: size * 0.16,
+            borderTopRightRadius: size * 0.16,
+            borderBottomLeftRadius: size * 0.36,
+            borderBottomRightRadius: size * 0.36,
+          }}
+        />
+
+        {/* Sigla — caixa de largura fixa, centrada nos dois eixos. */}
+        <View style={{ width: size * 0.74, alignItems: 'center', justifyContent: 'center' }}>
+          <Text
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.6}
+            style={[styles.crestCircleText, {
+              fontSize,
+              lineHeight: fontSize * 1.12,
+              color: ink,
+              textShadowColor: ink === '#FFFFFF' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.4)',
+              textShadowOffset: { width: 0, height: 1 },
+              textShadowRadius: 1.5,
+            }]}
+          >
+            {initials}
+          </Text>
+        </View>
+      </View>
     </View>
   );
 }
@@ -117,7 +241,7 @@ export function TopBar() {
       </View>
 
       {/* Tira de recursos */}
-      <View style={styles.resBar}>
+      <Spot id={TutorialTargets.topBar} style={styles.resBar}>
         <Text style={styles.resSeason} numberOfLines={1}>
           {round
             ? t('top.season', { y: careerYear, season: seasonLabel, round })
@@ -128,7 +252,7 @@ export function TopBar() {
           <ResPill icon="✚" text={String(injured)} color={injured > 0 ? theme.colors.red : theme.colors.textDim} />
           <ResPill icon="€" text={money(balance)} color={balance >= 0 ? theme.colors.green : theme.colors.red} />
         </View>
-      </View>
+      </Spot>
     </SafeAreaView>
   );
 }
@@ -364,25 +488,9 @@ export function Stepper({
 
 /** Escudo do clube — pequeno, informativo. */
 export function Crest({ club, size = 24 }: { club: Club; size?: number }) {
-  return (
-    <View
-      style={[
-        styles.crest,
-        {
-          width: size,
-          height: size * 1.1,
-          backgroundColor: club.primaryColor,
-          borderColor: club.secondaryColor,
-          borderTopLeftRadius: size * 0.16,
-          borderTopRightRadius: size * 0.16,
-          borderBottomLeftRadius: size * 0.5,
-          borderBottomRightRadius: size * 0.5,
-        },
-      ]}
-    >
-      <Text style={[styles.crestText, { fontSize: size * 0.34 }]}>{club.shortName.slice(0, 3)}</Text>
-    </View>
-  );
+  // Um só emblema em todo o jogo: este alias existe para os ecrãs que já o
+  // usavam (partida, escolha de clube) não terem de mudar.
+  return <CrestCircle club={club} size={size} />;
 }
 
 /** Texto de posição colorido pelo setor (estado informativo, sem fundo). */
@@ -463,7 +571,12 @@ const styles = StyleSheet.create({
   resPillText: { fontSize: theme.font.small, fontWeight: '800', fontVariant: ['tabular-nums'] },
 
   crestCircle: { alignItems: 'center', justifyContent: 'center' },
-  crestCircleText: { fontWeight: '900', letterSpacing: 0.5 },
+  // Sem letterSpacing: o RN acrescenta o espaço DEPOIS do último caráter e a
+  // sigla ficava descentrada dentro do emblema.
+  crestCircleText: {
+    fontWeight: '900', textAlign: 'center', includeFontPadding: false,
+    textAlignVertical: 'center',
+  },
 
   stars: { color: theme.colors.yellow, fontSize: 10, letterSpacing: 1 },
   starRow: { flexDirection: 'row', alignItems: 'center' },
@@ -558,8 +671,6 @@ const styles = StyleSheet.create({
   stepBtnText: { color: theme.colors.text, fontSize: 16, fontWeight: '700' },
   stepVal: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '700', minWidth: 72, textAlign: 'center', fontVariant: ['tabular-nums'] },
 
-  crest: { borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
-  crestText: { color: '#fff', fontWeight: '800' },
 
   posText: { fontSize: theme.font.small, fontWeight: '800' },
 

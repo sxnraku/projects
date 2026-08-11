@@ -3,6 +3,8 @@ import { FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, View } from '
 import { useIsFocused } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { useGameStore } from '../../src/state/gameStore';
+import { Spot } from '../../src/ui/tutorial/Spot';
+import { TutorialTargets } from '../../src/ui/tutorial/registry';
 import {
   checkInterest, defaultReleaseClause, minReleaseClause, requiredWageWith, suggestedWage,
 } from '../../src/core/economy';
@@ -190,6 +192,7 @@ export default function Market() {
       {/* Filtros: posição, só acessíveis, OVR mínimo.
           `style` com altura fixa + flexGrow:0: sem isto, um ScrollView horizontal
           dentro do Screen (flex-column) colapsa a altura e corta os chips. */}
+      <Spot id={TutorialTargets.marketList}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false}
         style={styles.filterScroll} contentContainerStyle={styles.filterBar}>
         {(['ALL', 'GOALKEEPER', 'DEFENCE', 'MIDFIELD', 'ATTACK'] as const).map((g) => (
@@ -207,6 +210,7 @@ export default function Market() {
           <Pressable onPress={() => setMinOvr((v) => Math.min(99, v + 5))} hitSlop={6}><Text style={styles.stepBtn}>+</Text></Pressable>
         </View>
       </ScrollView>
+      </Spot>
 
       {/* Propostas à espera de resposta — o suspense fica visível (fora da lista). */}
       {pending.length > 0 ? (

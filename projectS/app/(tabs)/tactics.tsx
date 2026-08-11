@@ -10,14 +10,22 @@ import {
   View,
 } from 'react-native';
 import { useGameStore } from '../../src/state/gameStore';
+import { Spot } from '../../src/ui/tutorial/Spot';
+import { TutorialTargets } from '../../src/ui/tutorial/registry';
 import {
+  CornerFocus,
   effectiveOverall,
   effectiveOverallFine,
+  effectiveRole,
   Formation,
   FORMATION_FAMILIES,
   isNaturalPosition,
   Mentality,
+  PlayerRole,
   Position,
+  rolesFor,
+  ROLE_SPECS,
+  roleFit,
   shortName,
   Tactic,
   Tempo,
@@ -33,6 +41,7 @@ import { Body, PosText, Screen, Section } from '../components';
 
 const MENTALITIES: Mentality[] = ['DEFENSIVE', 'BALANCED', 'ATTACKING'];
 const TEMPOS: Tempo[] = ['SLOW', 'NORMAL', 'FAST'];
+const CORNER_FOCUSES: CornerFocus[] = ['MIXED', 'NEAR', 'FAR', 'SHORT'];
 
 /** Coordenadas normalizadas por formação (x: 0-1 esq→dir; y: 0-1 baliza→ataque). */
 const LAYOUTS: Record<Formation, { x: number; y: number }[]> = {
@@ -137,6 +146,7 @@ export default function Tactics() {
 
   const [pitchW, setPitchW] = useState(0);
   const [pickSlot, setPickSlot] = useState<number | null>(null); // slot a escolher
+  const [pickTaker, setPickTaker] = useState<'FK' | 'CK' | null>(null); // bola parada
   const [formOpen, setFormOpen] = useState(false); // gaveta das formações
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'info'; text: string } | null>(null);
 
@@ -165,6 +175,22 @@ export default function Tactics() {
     const bench = club.squad.filter((id) => !inLineup.has(id)).slice(0, 7);
     setTactic({ ...tactic, lineup, bench });
     setPickSlot(null);
+  };
+
+  /** Define (ou limpa) o papel de um slot do onze. */
+  const assignRole = (slotIndex: number, role: PlayerRole) => {
+    const lineup = tactic.lineup.map((s, i) => (i === slotIndex ? { ...s, role } : s));
+    setTactic({ ...tactic, lineup });
+  };
+
+  /** Nome do marcador escolhido, ou "automático" quando o motor decide. */
+  const takerName = (id: string | null | undefined): string => {
+    if (!id) return t('tac.taker.auto');
+    const p = state.players[id];
+    if (!p) return t('tac.taker.auto');
+    // Um marcador fora do onze não bate nada — a UI diz-lo antes do jogo.
+    const inXI = tactic.lineup.some((s) => s.playerId === id);
+    return inXI ? shortName(p) : `${shortName(p)} (${t('tac.taker.benched')})`;
   };
 
   const onPitchLayout = (e: LayoutChangeEvent) => setPitchW(e.nativeEvent.layout.width);
@@ -217,12 +243,14 @@ export default function Tactics() {
         {/* FORMAÇÕES EM GAVETA. São doze; em fila deixavam o ecrã ilegível.
             Fechada mostra só a atual; aberta agrupa-as por linha defensiva. */}
         <Section title={t('tac.formation')} />
+        <Spot id={TutorialTargets.formation}>
         <Pressable style={styles.drawerHead} onPress={() => setFormOpen((v) => !v)}>
           <Text style={styles.drawerCurrent}>{tactic.formation}</Text>
           <Text style={styles.drawerHint}>
             {formOpen ? t('tac.formation.close') : t('tac.formation.change')} {formOpen ? '▴' : '▾'}
           </Text>
         </Pressable>
+        </Spot>
         {formOpen ? (
           <View style={styles.drawerBody}>
             {FORMATION_FAMILIES.map((family) => (
@@ -260,7 +288,8 @@ export default function Tactics() {
         </View>
 
         {/* CAMPO — toca num jogador para o substituir (lista, não drag) */}
-        <View style={styles.pitch} onLayout={onPitchLayout}>
+        <Spot id={TutorialTargets.pitch} style={styles.pitch}>
+        <View style={StyleSheet.absoluteFill} onLayout={onPitchLayout} pointerEvents="box-none">
           <PitchStripes />
           <FieldMarkings />
           {pitchW > 0 && tactic.lineup.map((slot, i) => {
@@ -288,11 +317,17 @@ export default function Tactics() {
                   ovr={p ? String(to100(effectiveOverallFine(p, slot.position))) : '—'}
                   pos={`${slot.position}${outOfPos ? '!' : ''}`}
                   name={p ? shortName(p) : '—'}
+                  // Papel escolhido: lê-se no campo, senão o trabalho táctico
+                  // ficava escondido dentro de um modal.
+                  role={slot.role && !ROLE_SPECS[effectiveRole(slot.role, slot.position)]?.neutral
+                    ? t(`roleShort.${effectiveRole(slot.role, slot.position)}`)
+                    : undefined}
                 />
               </Pressable>
             );
           })}
         </View>
+        </Spot>
         <Text style={styles.hint}>{t('tac.hint')}</Text>
 
         <Section title={t('tac.mentality')} />
@@ -333,6 +368,35 @@ export default function Tactics() {
 
         {/* O preço da tática, em números — decidir pressão alta é decidir
             estoirar o plantel para a jornada seguinte. */}
+        {/* BOLAS PARADAS — quem bate e para onde vai o canto. */}
+        <Spot id={TutorialTargets.setPieces}>
+        <Section title={t('tac.setPieces')} />
+        <Pressable style={styles.takerRow} onPress={() => setPickTaker('FK')}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.takerLabel}>{t('tac.freeKickTaker')}</Text>
+            <Text style={styles.takerHint}>{t('tac.freeKickTaker.hint')}</Text>
+          </View>
+          <Text style={styles.takerValue}>{takerName(tactic.freeKickTakerId)}</Text>
+        </Pressable>
+        <Pressable style={styles.takerRow} onPress={() => setPickTaker('CK')}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.takerLabel}>{t('tac.cornerTaker')}</Text>
+            <Text style={styles.takerHint}>{t('tac.cornerTaker.hint')}</Text>
+          </View>
+          <Text style={styles.takerValue}>{takerName(tactic.cornerTakerId)}</Text>
+        </Pressable>
+        <View style={{ height: theme.spacing(0.75) }} />
+        <Segment
+          options={CORNER_FOCUSES.map((f) => ({
+            key: f,
+            label: t(`corner.${f}`),
+            active: (tactic.cornerFocus ?? 'MIXED') === f,
+            onPress: () => setTactic({ ...tactic, cornerFocus: f }),
+          }))}
+        />
+        <Text style={styles.hint}>{t(`corner.${tactic.cornerFocus ?? 'MIXED'}.hint`)}</Text>
+        </Spot>
+
         <View style={[styles.loadBox, { borderColor: loadColor }]}>
           <Text style={[styles.loadTitle, { color: loadColor }]}>
             {t('load.title', {
@@ -355,6 +419,30 @@ export default function Tactics() {
             <Text style={styles.modalTitle}>
               {t('tac.pick', { pos: slotPosition ?? '' })}
             </Text>
+
+            {/* PAPEL do slot. Vive aqui e não num ecrã à parte porque escolher
+                quem joga e o que ele faz é a mesma decisão. */}
+            {slotPosition !== null && pickSlot !== null ? (
+              <View style={styles.roleBox}>
+                <Text style={styles.roleTitle}>{t('tac.role')}</Text>
+                <View style={styles.chips}>
+                  {rolesFor(slotPosition).map((role) => (
+                    <Chip
+                      key={role}
+                      label={t(`role.${role}`)}
+                      active={effectiveRole(tactic.lineup[pickSlot]!.role, slotPosition) === role}
+                      onPress={() => assignRole(pickSlot, role)}
+                    />
+                  ))}
+                </View>
+                <RoleNote
+                  role={effectiveRole(tactic.lineup[pickSlot]!.role, slotPosition)}
+                  player={state.players[tactic.lineup[pickSlot]!.playerId]}
+                  position={slotPosition}
+                />
+              </View>
+            ) : null}
+
             <FlatList
               data={candidates}
               keyExtractor={(c) => c.p.id}
@@ -400,7 +488,92 @@ export default function Tactics() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* MARCADOR DE BOLA PARADA — só o onze, porque só o onze bate. */}
+      <Modal visible={pickTaker !== null} animationType="fade" transparent onRequestClose={() => setPickTaker(null)}>
+        <Pressable style={styles.modalBack} onPress={() => setPickTaker(null)}>
+          <Pressable style={styles.modalBox} onPress={() => {}}>
+            <Text style={styles.modalTitle}>
+              {pickTaker === 'FK' ? t('tac.freeKickTaker') : t('tac.cornerTaker')}
+            </Text>
+            <Pressable
+              style={styles.pickRow}
+              onPress={() => {
+                setTactic(pickTaker === 'FK'
+                  ? { ...tactic, freeKickTakerId: null }
+                  : { ...tactic, cornerTakerId: null });
+                setPickTaker(null);
+              }}
+            >
+              <Text style={styles.pickName}>{t('tac.taker.auto')}</Text>
+            </Pressable>
+            <View style={styles.sep} />
+            <FlatList
+              data={tactic.lineup.map((s) => state.players[s.playerId]).filter(Boolean)}
+              keyExtractor={(p) => p!.id}
+              style={{ maxHeight: 420 }}
+              renderItem={({ item }) => {
+                const p = item!;
+                const current = (pickTaker === 'FK' ? tactic.freeKickTakerId : tactic.cornerTakerId) === p.id;
+                // O que importa num batedor: remate/compostura no livre,
+                // passe/visão no canto. Mostra-se o número que decide.
+                const value = pickTaker === 'FK'
+                  ? Math.round(p.attributes.finishing * 0.45 + p.attributes.composure * 0.25 + p.attributes.vision * 0.3)
+                  : Math.round(p.attributes.passing * 0.55 + p.attributes.vision * 0.3 + p.attributes.composure * 0.15);
+                return (
+                  <Pressable
+                    style={({ pressed }) => [styles.pickRow, pressed && { backgroundColor: theme.colors.surfaceAlt }]}
+                    onPress={() => {
+                      setTactic(pickTaker === 'FK'
+                        ? { ...tactic, freeKickTakerId: p.id }
+                        : { ...tactic, cornerTakerId: p.id });
+                      setPickTaker(null);
+                    }}
+                  >
+                    <Text style={[styles.pickOvr, { color: attrColor(value) }]}>{to100(value)}</Text>
+                    <Face seed={p.id} size={30} shirt={club.primaryColor} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.pickName}>
+                        {shortName(p)}
+                        {current ? <Text style={{ color: theme.colors.blue }}>  {t('tac.current')}</Text> : null}
+                      </Text>
+                      <PosText position={p.positions[0]!} />
+                    </View>
+                  </Pressable>
+                );
+              }}
+              ItemSeparatorComponent={() => <View style={styles.sep} />}
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
     </Screen>
+  );
+}
+
+/**
+ * Diz, em linguagem de treinador, se o papel assenta a este jogador.
+ * É o que transforma a escolha de papel numa decisão informada em vez de um
+ * menu decorativo.
+ */
+function RoleNote({
+  role, player, position,
+}: { role: PlayerRole; player?: { attributes: Parameters<typeof roleFit>[1]; foot: Parameters<typeof roleFit>[2] }; position: Position }) {
+  const t = useT();
+  const spec = ROLE_SPECS[role];
+  if (!spec || spec.neutral || !player) {
+    return <Text style={styles.roleHint}>{t(`role.${role}.hint`)}</Text>;
+  }
+  const fit = roleFit(role, player.attributes, player.foot, position);
+  const color = fit >= 1.05 ? theme.colors.green : fit <= 0.96 ? theme.colors.red : theme.colors.textDim;
+  const verdict = fit >= 1.05 ? t('role.fit.good') : fit <= 0.96 ? t('role.fit.bad') : t('role.fit.ok');
+  return (
+    <>
+      <Text style={styles.roleHint}>{t(`role.${role}.hint`)}</Text>
+      <Text style={[styles.roleFit, { color }]}>
+        {verdict} · {t('role.fit.delta', { pct: `${fit >= 1 ? '+' : ''}${Math.round((fit - 1) * 100)}` })}
+      </Text>
+    </>
   );
 }
 
@@ -454,8 +627,8 @@ function Segment({ options }: { options: { key: string; label: string; active: b
 
 /** Marcador de jogador em forma de camisola (cabeça + camisola + posição + nome). */
 function PlayerMarker({
-  shirtColor, gk, outOfPos, injured, suspended, ovr, pos, name,
-}: { shirtColor: string; gk: boolean; outOfPos: boolean; injured?: boolean; suspended?: boolean; ovr: string; pos: string; name: string }) {
+  shirtColor, gk, outOfPos, injured, suspended, ovr, pos, name, role,
+}: { shirtColor: string; gk: boolean; outOfPos: boolean; injured?: boolean; suspended?: boolean; ovr: string; pos: string; name: string; role?: string }) {
   const fill = gk ? theme.colors.yellow : shirtColor;
   const ink = readableOn(fill);
   return (
@@ -471,6 +644,7 @@ function PlayerMarker({
         <Text style={styles.mkPosText}>{pos}</Text>
       </View>
       <Text style={styles.mkName} numberOfLines={1}>{name}</Text>
+      {role ? <Text style={styles.mkRole} numberOfLines={1}>{role}</Text> : null}
     </>
   );
 }
@@ -586,6 +760,34 @@ const styles = StyleSheet.create({
     color: '#fff', fontSize: 10.5, fontWeight: '700', marginTop: 2, maxWidth: MARK_W + 18,
     textShadowColor: 'rgba(0,0,0,0.8)', textShadowRadius: 2,
   },
+  mkRole: {
+    color: theme.colors.yellow, fontSize: 9, fontWeight: '800', maxWidth: MARK_W + 22,
+    letterSpacing: 0.2, textShadowColor: 'rgba(0,0,0,0.85)', textShadowRadius: 2,
+  },
+
+  // Papéis (dentro do seletor de jogador)
+  roleBox: {
+    borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.sm,
+    padding: theme.spacing(1), marginBottom: theme.spacing(1),
+    backgroundColor: theme.colors.surface,
+  },
+  roleTitle: {
+    color: theme.colors.textDim, fontSize: 10, fontWeight: '800',
+    letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: theme.spacing(0.75),
+  },
+  roleHint: { color: theme.colors.textDim, fontSize: theme.font.small, marginTop: theme.spacing(0.75) },
+  roleFit: { fontSize: theme.font.small, fontWeight: '800', marginTop: 2 },
+
+  // Bolas paradas
+  takerRow: {
+    flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1),
+    backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border,
+    borderRadius: theme.radius.sm, paddingHorizontal: theme.spacing(1.25),
+    paddingVertical: theme.spacing(1), marginTop: theme.spacing(0.75),
+  },
+  takerLabel: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '700' },
+  takerHint: { color: theme.colors.textDim, fontSize: theme.font.small, marginTop: 1 },
+  takerValue: { color: theme.colors.blue, fontSize: theme.font.small, fontWeight: '800' },
 
   // Seletor segmentado (Mentalidade / Ritmo)
   segment: {

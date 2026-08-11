@@ -14,6 +14,11 @@ export interface SeasonContext {
   players: Record<string, Player>; // todos os jogadores relevantes
   tactics: Record<string, Tactic>; // tática por clubId
   baseSeed: number; // seed-mãe do GameState
+  /**
+   * Diz se dois clubes são rivais. Opcional: sem isto nenhum jogo é dérbi, que
+   * é o que os testes e as simulações isoladas querem.
+   */
+  isDerby?: (homeClubId: string, awayClubId: string) => boolean;
 }
 
 /**
@@ -48,6 +53,8 @@ export function playRound(
       ctx.players,
       // Deriva por jornada+jogo para que cada partida seja única e reproduzível.
       ctx.baseSeed ^ (round * 1000003),
+      undefined,
+      { derby: ctx.isDerby?.(fx.homeClubId, fx.awayClubId) === true },
     );
 
     fx.result = result;

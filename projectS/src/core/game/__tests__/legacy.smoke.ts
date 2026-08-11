@@ -84,7 +84,17 @@ assert(sample.condition.history!.length <= lines + 1,
 
 // ------------------------------------------------------- prémio de assinatura
 console.log('\nSubir de divisão nunca custa prémio:');
-const my = s.clubs[s.meta.managedClubId]!;
+// O clube de referência tem de ter divisões ABAIXO dele — usa-se o gerido
+// quando serve, senão um do topo. Sem isto o teste passava a depender de o
+// clube gerido não ter descido nas três épocas simuladas acima, e uma mudança
+// qualquer no motor apagava a verificação em silêncio (0 jogadores analisados).
+const bottomTier = Math.max(...Object.values(s.leagues).map((l) => l.tier));
+const managed = s.clubs[s.meta.managedClubId]!;
+const my = s.leagues[managed.leagueId]!.tier < bottomTier
+  ? managed
+  : Object.values(s.clubs)
+    .filter((c) => !c.european && (s.leagues[c.leagueId]?.tier ?? 1) === 1)
+    .sort((a, b) => b.reputation - a.reputation)[0]!;
 const myTier = s.leagues[my.leagueId]!.tier;
 let upwardBonus = 0, upwardChecked = 0;
 for (const p of Object.values(s.players)) {

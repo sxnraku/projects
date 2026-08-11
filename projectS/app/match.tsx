@@ -23,6 +23,11 @@ const EVENT_ICON: Record<string, string> = {
   INJURY: '🚑', HALF_TIME: '⏸', FULL_TIME: '🏁', KICKOFF: '▶',
 };
 
+/** Origem do lance — um golo de livre não se lê como um golo de jogada corrida. */
+const DETAIL_ICON: Record<string, string> = {
+  FREE_KICK: '🎯', CORNER: '🚩', HEADER: '🗣',
+};
+
 /** Duração de um minuto de jogo em ms, por velocidade. */
 const SPEED_MS: Record<number, number> = { 1: 500, 2: 250, 4: 100 };
 const FULL_TIME_MIN = 90;
@@ -667,7 +672,9 @@ function StatCompare({ label, home, away }: { label: string; home: number; away:
 }
 
 function TimelineRow({ event, player, highlight }: { event: MatchEvent; player: string; highlight?: boolean }) {
-  const icon = EVENT_ICON[event.type] ?? '•';
+  const base = EVENT_ICON[event.type] ?? '•';
+  const mark = event.detail ? DETAIL_ICON[event.detail] : undefined;
+  const icon = mark ? `${base}${mark}` : base;
   const isGoal = event.type === 'GOAL';
   const neutral = event.side === null;
   const content = (

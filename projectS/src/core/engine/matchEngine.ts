@@ -1,9 +1,12 @@
 import {
+  CornerFocus,
   MatchEvent,
   MatchResult,
   Player,
   PlayerMatchStat,
   POSITION_GROUP,
+  ROLE_SPECS,
+  effectiveRole,
   Side,
   Tactic,
 } from '../models';
@@ -23,6 +26,29 @@ const CFG = {
   injuryPerMatch: 0.12,
   assistChance: 0.7,
   redWeaken: 0.9,
+  /** Num dérbi, a vantagem de casa sobe disto (1.08 → 1.13). */
+  derbyHomeExtra: 0.05,
+  /** …e sai mais cartão. */
+  derbyCardFactor: 1.3,
+  /** Livres em zona de remate por jogo (por equipa). */
+  freeKicksPer90: 0.95,
+  /** Cantos por jogo (por equipa) — escalados pela pressão ofensiva. */
+  cornersPer90: 4.8,
+};
+
+/**
+ * Instrução de canto → o que muda no lance.
+ *
+ * `direct` mexe na probabilidade de golo direto do canto; `aerial` diz quanto
+ * do lance se decide no ar (e portanto quanto pesa o cabeceamento das duas
+ * equipas). O canto curto tira a bola do ar: converte menos, mas também não
+ * depende de ter gente alta.
+ */
+const CORNER_MOD: Record<CornerFocus, { direct: number; aerial: number }> = {
+  MIXED: { direct: 0, aerial: 1 },
+  NEAR: { direct: 0.006, aerial: 1.25 },
+  FAR: { direct: 0.004, aerial: 1.15 },
+  SHORT: { direct: -0.007, aerial: 0.45 },
 };
 
 interface SideCtx {
@@ -31,6 +57,8 @@ interface SideCtx {
   strength: TeamStrength;
   scorers: { id: string; weight: number }[];
   assisters: { id: string; weight: number }[];
+  /** Quem sobe à área nos cantos — inclui centrais, que é como se marca de canto. */
+  headers: { id: string; weight: number }[];
   outfield: string[];
   goals: number;
   shots: number;
@@ -53,7 +81,13 @@ interface Sim {
   homePossession: number;
   homeRate: number;
   awayRate: number;
+  homeSetPieceRate: SetPieceRate;
+  awaySetPieceRate: SetPieceRate;
+  derby: boolean;
 }
+
+/** Probabilidade POR MINUTO de haver um livre perigoso / um canto. */
+interface SetPieceRate { fk: number; corner: number; }
 
 /**
  * Mudança de tática (substituições + mentalidade/ritmo) para um lado, a entrar
@@ -66,11 +100,21 @@ export interface TacticChange {
   minute: number;
 }
 
+/** Contexto do jogo que não vem da tática de nenhuma das equipas. */
+export interface MatchContext {
+  /**
+   * Dérbi. A casa vale mais (o estádio está cheio e é dele) e joga-se mais
+   * áspero — a diferença é pequena por lance, mas decide dérbis.
+   */
+  derby?: boolean;
+}
+
 function buildSide(
   clubId: string, side: Side, strength: TeamStrength, tactic: Tactic, players: Record<string, Player>,
 ): SideCtx {
   const scorers: { id: string; weight: number }[] = [];
   const assisters: { id: string; weight: number }[] = [];
+  const headers: { id: string; weight: number }[] = [];
   const outfield: string[] = [];
   for (const slot of tactic.lineup) {
     const p = players[slot.playerId];
@@ -79,11 +123,16 @@ function buildSide(
     if (group !== 'GOALKEEPER') {
       outfield.push(p.id);
       assisters.push({ id: p.id, weight: p.attributes.passing + p.attributes.vision });
+      // Nos cantos sobem avançados e centrais; os laterais ficam a cobrir.
+      const upW = group === 'ATTACK' ? 1 : group === 'MIDFIELD' ? 0.5
+        : slot.position === 'CB' ? 0.9 : 0.2;
+      const aerialRole = 1 + (ROLE_SPECS[effectiveRole(slot.role, slot.position)]?.aerial ?? 0);
+      headers.push({ id: p.id, weight: (p.attributes.heading * 0.75 + p.attributes.strength * 0.25) * upW * aerialRole });
     }
     const posW = group === 'ATTACK' ? 1.0 : group === 'MIDFIELD' ? 0.45 : group === 'DEFENCE' ? 0.12 : 0;
     if (posW > 0) scorers.push({ id: p.id, weight: p.attributes.finishing * posW });
   }
-  return { clubId, side, strength, scorers, assisters, outfield, goals: 0, shots: 0, onTarget: 0, xg: 0, reds: 0 };
+  return { clubId, side, strength, scorers, assisters, headers, outfield, goals: 0, shots: 0, onTarget: 0, xg: 0, reds: 0 };
 }
 
 const shotRatePerMin = (atk: SideCtx, def: SideCtx) => {
@@ -95,9 +144,25 @@ const shotRatePerMin = (atk: SideCtx, def: SideCtx) => {
   return Math.min(0.9, expected / CFG.matchMinutes);
 };
 
+/**
+ * Frequência de bolas paradas. Cantos acompanham a pressão ofensiva (quem
+ * ataca mais ganha mais cantos); livres perigosos acompanham a pressão de quem
+ * DEFENDE, que é quem faz as faltas.
+ */
+const setPieceRatePerMin = (atk: SideCtx, def: SideCtx): SetPieceRate => {
+  const pressure = Math.max(0.4, Math.min(2.2, atk.strength.attack / def.strength.defence));
+  const fouls = 1 + (def.strength.pressing - 5) * 0.05;
+  return {
+    fk: (CFG.freeKicksPer90 * pressure * fouls) / CFG.matchMinutes,
+    corner: (CFG.cornersPer90 * pressure) / CFG.matchMinutes,
+  };
+};
+
 function recomputeRates(sim: Sim): void {
   sim.homeRate = shotRatePerMin(sim.home, sim.away);
   sim.awayRate = shotRatePerMin(sim.away, sim.home);
+  sim.homeSetPieceRate = setPieceRatePerMin(sim.home, sim.away);
+  sim.awaySetPieceRate = setPieceRatePerMin(sim.away, sim.home);
 }
 
 function pickWeighted(rng: Rng, pool: { id: string; weight: number }[]): string | null {
@@ -122,6 +187,7 @@ function applyTacticChange(sim: Sim, side: SideCtx, tactic: Tactic, players: Rec
   side.strength = fresh.strength;
   side.scorers = fresh.scorers.filter((x) => !isOff(x.id));
   side.assisters = fresh.assisters.filter((x) => !isOff(x.id));
+  side.headers = fresh.headers.filter((x) => !isOff(x.id));
   side.outfield = fresh.outfield.filter((id) => !isOff(id));
   // Fichas para jogadores NOVOS (que entraram).
   for (const slot of tactic.lineup) {
@@ -163,6 +229,91 @@ function resolveShot(sim: Sim, atk: SideCtx, def: SideCtx, minute: number): void
   }
 }
 
+/**
+ * LIVRE EM ZONA DE REMATE.
+ *
+ * Bate-o o marcador designado (ou o melhor do onze). Converte entre ~2% e ~14%
+ * conforme a qualidade dele — é pouco por lance, mas ao longo de uma época um
+ * especialista faz a diferença entre 6 e 12 golos de bola parada na equipa.
+ */
+function resolveFreeKick(sim: Sim, atk: SideCtx, def: SideCtx, minute: number): void {
+  const { rng, events, stat } = sim;
+  const sp = atk.strength.setPiece;
+  const taker = sp.freeKickTakerId && stat[sp.freeKickTakerId] && !stat[sp.freeKickTakerId]!.red
+    ? sp.freeKickTakerId
+    : pickWeighted(rng, atk.scorers);
+  if (!taker) return;
+
+  atk.shots++;
+  // A barreira e o guarda-redes contam: uma defesa forte tapa mais ângulo.
+  const goalP = Math.max(0.015, Math.min(0.16,
+    0.048 + (sp.freeKick - 10) * 0.0075 - (def.strength.defence - 12) * 0.002));
+  atk.xg += goalP;
+  if (rng.chance(goalP)) {
+    atk.goals++;
+    stat[taker]!.goals++;
+    events.push({ minute, type: 'GOAL', side: atk.side, playerId: taker, text: 'GOLO de livre direto!', detail: 'FREE_KICK' });
+    atk.onTarget++;
+    return;
+  }
+  // Falhado: metade vai à baliza (defesa), metade sai ao lado.
+  if (rng.chance(0.45)) {
+    atk.onTarget++;
+    events.push({ minute, type: 'SAVE', side: atk.side, playerId: taker, text: 'Livre à figura do guarda-redes.', detail: 'FREE_KICK' });
+  } else {
+    events.push({ minute, type: 'CHANCE', side: atk.side, playerId: taker, text: 'Livre por cima da barra.', detail: 'FREE_KICK' });
+  }
+}
+
+/**
+ * CANTO.
+ *
+ * O lance decide-se em duas partes: a qualidade do cruzamento (o marcador) e
+ * quem ganha o ar (os quatro melhores cabeceadores contra a defesa adversária).
+ * A instrução de canto pesa nas duas — o canto curto tira o lance do ar e passa
+ * a valer menos golo direto, mas não pede gente alta.
+ */
+function resolveCorner(sim: Sim, atk: SideCtx, def: SideCtx, minute: number): void {
+  const { rng, events, stat } = sim;
+  const sp = atk.strength.setPiece;
+  const mod = CORNER_MOD[sp.focus] ?? CORNER_MOD.MIXED;
+
+  atk.shots++;
+  const delivery = (sp.corner - 10) * 0.0016;
+  const air = (sp.aerialAttack - def.strength.setPiece.aerialDefence) * 0.0035 * mod.aerial;
+  const goalP = Math.max(0.004, Math.min(0.09, 0.018 + delivery + air + mod.direct));
+  atk.xg += goalP;
+
+  if (rng.chance(goalP)) {
+    // Quem remata no canto é quem sobe: com foco curto, quem remata é de fora.
+    const pool = sp.focus === 'SHORT' ? atk.scorers : atk.headers;
+    const scorer = pickWeighted(rng, pool.filter((x) => !stat[x.id]?.red)) ?? pickWeighted(rng, atk.scorers);
+    if (!scorer) return;
+    atk.goals++;
+    atk.onTarget++;
+    stat[scorer]!.goals++;
+    const header = sp.focus !== 'SHORT';
+    events.push({
+      minute, type: 'GOAL', side: atk.side, playerId: scorer,
+      text: header ? 'GOLO de cabeça, no canto!' : 'GOLO na sequência de um canto!',
+      detail: header ? 'HEADER' : 'CORNER',
+    });
+    // O canto conta como assistência para quem o bateu (se não foi ele a marcar).
+    const taker = sp.cornerTakerId;
+    if (taker && taker !== scorer && stat[taker]) {
+      stat[taker]!.assists++;
+      events.push({ minute, type: 'ASSIST', side: atk.side, playerId: taker, text: 'Canto batido.', detail: 'CORNER' });
+    }
+    return;
+  }
+  // Sem golo, o canto ainda pode obrigar a uma defesa.
+  if (rng.chance(0.22)) {
+    atk.onTarget++;
+    const who = pickWeighted(rng, atk.headers.length > 0 ? atk.headers : atk.scorers);
+    events.push({ minute, type: 'SAVE', side: atk.side, playerId: who, text: 'Cabeceamento defendido no canto.', detail: 'CORNER' });
+  }
+}
+
 function bookPlayer(sim: Sim, side: SideCtx, minute: number): void {
   if (side.outfield.length === 0) return;
   const id = sim.rng.pick(side.outfield);
@@ -184,13 +335,19 @@ function bookPlayer(sim: Sim, side: SideCtx, minute: number): void {
 
 /** Simula um intervalo de minutos [from, to] no contexto atual. */
 function simulateMinutes(sim: Sim, from: number, to: number): void {
-  const yellowPerMin = CFG.yellowPer90 / CFG.matchMinutes;
+  const yellowPerMin = (CFG.yellowPer90 * (sim.derby ? CFG.derbyCardFactor : 1)) / CFG.matchMinutes;
   for (let minute = from; minute <= to; minute++) {
     if (minute === 45) {
       sim.events.push({ minute, type: 'HALF_TIME', side: null, playerId: null, text: `Intervalo: ${sim.home.goals}-${sim.away.goals}` });
     }
     if (sim.rng.chance(sim.homeRate)) resolveShot(sim, sim.home, sim.away, minute);
     if (sim.rng.chance(sim.awayRate)) resolveShot(sim, sim.away, sim.home, minute);
+    // Bolas paradas — sorteadas à parte das jogadas corridas, para que uma
+    // equipa possa ser perigosa nelas sem o ser no jogo aberto.
+    if (sim.rng.chance(sim.homeSetPieceRate.fk)) resolveFreeKick(sim, sim.home, sim.away, minute);
+    if (sim.rng.chance(sim.awaySetPieceRate.fk)) resolveFreeKick(sim, sim.away, sim.home, minute);
+    if (sim.rng.chance(sim.homeSetPieceRate.corner)) resolveCorner(sim, sim.home, sim.away, minute);
+    if (sim.rng.chance(sim.awaySetPieceRate.corner)) resolveCorner(sim, sim.away, sim.home, minute);
     if (sim.rng.chance(yellowPerMin)) {
       const idx = sim.rng.weightedIndex([5 + sim.home.strength.pressing, 5 + sim.away.strength.pressing]);
       bookPlayer(sim, idx === 0 ? sim.home : sim.away, minute);
@@ -200,13 +357,14 @@ function simulateMinutes(sim: Sim, from: number, to: number): void {
 
 function buildSim(
   homeClubId: string, awayClubId: string, homeTactic: Tactic, awayTactic: Tactic,
-  players: Record<string, Player>, seed: number,
+  players: Record<string, Player>, seed: number, derby: boolean,
 ): Sim {
   const rng = new Rng(seed);
   const homeStr = computeTeamStrength(homeTactic, players);
   const awayStr = computeTeamStrength(awayTactic, players);
-  homeStr.attack *= CFG.homeAdvantage;
-  homeStr.defence *= CFG.homeAdvantage;
+  const homeAdv = CFG.homeAdvantage + (derby ? CFG.derbyHomeExtra : 0);
+  homeStr.attack *= homeAdv;
+  homeStr.defence *= homeAdv;
   const home = buildSide(homeClubId, 'HOME', homeStr, homeTactic, players);
   const away = buildSide(awayClubId, 'AWAY', awayStr, awayTactic, players);
 
@@ -228,7 +386,12 @@ function buildSim(
   }
   const midTotal = homeStr.midfield + awayStr.midfield;
   const homePossession = Math.round((homeStr.midfield / midTotal) * 100);
-  const sim: Sim = { rng, home, away, events: [], stat, statSide, statGroup, yellowCount, orderedIds, homePossession, homeRate: 0, awayRate: 0 };
+  const sim: Sim = {
+    rng, home, away, events: [], stat, statSide, statGroup, yellowCount, orderedIds, homePossession,
+    homeRate: 0, awayRate: 0,
+    homeSetPieceRate: { fk: 0, corner: 0 }, awaySetPieceRate: { fk: 0, corner: 0 },
+    derby,
+  };
   recomputeRates(sim);
   sim.events.push({ minute: 0, type: 'KICKOFF', side: null, playerId: null, text: 'Arranque da partida.' });
   return sim;
@@ -282,9 +445,10 @@ function finalize(homeClubId: string, awayClubId: string, seed: number, sim: Sim
 export function simulateMatch(
   homeClubId: string, awayClubId: string, homeTactic: Tactic, awayTactic: Tactic,
   players: Record<string, Player>, baseSeed: number, changes?: TacticChange[],
+  context?: MatchContext,
 ): MatchResult {
   const seed = deriveSeed(baseSeed, homeClubId, awayClubId);
-  const sim = buildSim(homeClubId, awayClubId, homeTactic, awayTactic, players, seed);
+  const sim = buildSim(homeClubId, awayClubId, homeTactic, awayTactic, players, seed, context?.derby === true);
   const ordered = (changes ?? [])
     .filter((c) => c.minute >= 1 && c.minute < CFG.matchMinutes)
     .sort((a, b) => a.minute - b.minute);

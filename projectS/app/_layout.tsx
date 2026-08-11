@@ -13,6 +13,20 @@ import { ForcedUpdateGate } from '../src/ui/ForcedUpdateGate';
 import { setAudioSettings } from '../src/ui/sound';
 import { theme } from '../src/ui/theme';
 import ErrorBoundary from './ErrorBoundary';
+import Tutorial from './tutorial';
+
+/**
+ * Decide se o tutorial guiado aparece: uma vez por carreira, e só depois de a
+ * carreira existir (com clube escolhido). Fica à parte do `RootLayout` para
+ * que subscrever o estado do jogo não force o layout inteiro a redesenhar.
+ */
+function TutorialGate() {
+  const state = useGameStore((s) => s.state);
+  const markTutorialSeen = useGameStore((s) => s.markTutorialSeen);
+  const menuPassed = useGameStore((s) => s.menuPassed);
+  if (!state || !menuPassed || state.meta.managerName === '' || state.career.tutorialSeen) return null;
+  return <Tutorial onDone={markTutorialSeen} />;
+}
 
 export default function RootLayout() {
   const [ready, setReady] = useState(false);
@@ -108,7 +122,14 @@ export default function RootLayout() {
           <Stack.Screen name="world" options={{ title: 'Mundo' }} />
           <Stack.Screen name="europe" options={{ title: 'Europa' }} />
           <Stack.Screen name="history" options={{ title: 'Histórico' }} />
+          <Stack.Screen name="manual" options={{ title: 'Manual' }} />
         </Stack>
+        {/* TUTORIAL GUIADO — vive na RAIZ, não dentro do separador Início.
+            Ele navega entre abas para mostrar cada coisa no sítio; montado
+            dentro de uma aba, mudar de aba podia congelar ou desmontar o ecrã
+            que o segura e o tutorial desaparecia a meio. Aqui fica por cima de
+            toda a navegação, como o gate de update. */}
+        <TutorialGate />
         {/* Overlay bloqueante — fica por cima de tudo se houver update obrigatório. */}
         <ForcedUpdateGate />
       </SafeAreaProvider>

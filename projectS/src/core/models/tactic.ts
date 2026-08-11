@@ -1,4 +1,5 @@
 import { Position } from './enums';
+import { PlayerRole } from './roles';
 
 /**
  * Formações suportadas. A string codifica a distribuição defesa-meio-ataque.
@@ -58,7 +59,28 @@ export type Tempo = (typeof Tempo)[keyof typeof Tempo];
 export interface LineupSlot {
   position: Position;
   playerId: string;
+  /**
+   * Papel táctico. Ausente = papel neutro da posição, exatamente o
+   * comportamento anterior aos papéis (ver `models/roles.ts`). Viaja dentro do
+   * blob JSON `lineup`, por isso não precisa de migração do save.
+   */
+  role?: PlayerRole;
 }
+
+/**
+ * Instrução de canto — para onde vai a bola.
+ *
+ * NEAR/FAR pedem gente alta e trocam o cruzamento por cabeceamento; SHORT tira
+ * a bola do ar e joga-a no chão, com menos golo direto mas menos risco de
+ * contra-ataque. MIXED é o meio-termo.
+ */
+export const CornerFocus = {
+  MIXED: 'MIXED',
+  NEAR: 'NEAR',
+  FAR: 'FAR',
+  SHORT: 'SHORT',
+} as const;
+export type CornerFocus = (typeof CornerFocus)[keyof typeof CornerFocus];
 
 /** Escala dos sliders táticos: 0..10, 5 = neutro. */
 export const SLIDER_MIN = 0;
@@ -90,6 +112,16 @@ export interface Tactic {
   bench: string[]; // ids dos suplentes
   captainId: string | null;
   penaltyTakerId: string | null;
+
+  /**
+   * BOLAS PARADAS. Opcionais: quando não estão definidos (saves antigos, e
+   * todas as equipas da IA), o motor escolhe sozinho o melhor do onze. Definir
+   * um marcador só interessa se ele for melhor do que a escolha automática —
+   * é uma decisão, não um formulário obrigatório.
+   */
+  freeKickTakerId?: string | null;
+  cornerTakerId?: string | null;
+  cornerFocus?: CornerFocus;
 }
 
 /** Validação mínima — o onze deve ter exatamente 11 jogadores. */

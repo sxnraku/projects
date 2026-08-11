@@ -5,6 +5,7 @@ export * from './enums';
 export * from './player';
 export * from './club';
 export * from './finance';
+export * from './roles';
 export * from './tactic';
 export * from './league';
 export * from './match';

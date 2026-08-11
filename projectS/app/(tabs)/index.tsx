@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useGameStore } from '../../src/state/gameStore';
+import { Spot } from '../../src/ui/tutorial/Spot';
+import { TutorialTargets } from '../../src/ui/tutorial/registry';
 import { useMonetizationStore } from '../../src/state/monetizationStore';
 import { AdReward } from '../../src/monetization';
 import { OBJECTIVE_KEYS, dailyBonusAmount } from '../../src/core/career';
@@ -23,7 +25,6 @@ import {
 } from '../components';
 import { showInterstitial, showRewarded } from '../../src/native/ads';
 import AdBanner from '../../src/native/AdBanner';
-import Tutorial from '../tutorial';
 
 const FOCUSES: TrainingFocus[] = ['PHYSICAL', 'TECHNICAL', 'TACTICAL', 'RECOVERY'] as TrainingFocus[];
 
@@ -61,7 +62,6 @@ export default function Dashboard() {
   const returnedLoansPending = useGameStore((s) => s.returnedLoansPending);
   const buyReturnedLoan = useGameStore((s) => s.buyReturnedLoan);
   const dismissReturnedLoan = useGameStore((s) => s.dismissReturnedLoan);
-  const markTutorialSeen = useGameStore((s) => s.markTutorialSeen);
 
   const inboxItems = useGameStore((s) => s.inboxItems);
   const acceptBid = useGameStore((s) => s.acceptBid);
@@ -113,6 +113,9 @@ export default function Dashboard() {
   // Nota do bloqueio, composta e traduzida a partir das contagens do core.
   const blockedNote = bc
     ? [
+        // A crise entrava nas contagens mas não na nota: quando era a ÚNICA
+        // coisa a bloquear, o aviso ficava "Bloqueado:" sem dizer porquê.
+        bc.crisis ? t('block.crisis') : null,
         bc.bids ? t('block.bids', { n: bc.bids }) : null,
         bc.reqs ? t('block.reqs', { n: bc.reqs }) : null,
         bc.counters ? t('block.counters', { n: bc.counters }) : null,
@@ -240,8 +243,6 @@ export default function Dashboard() {
   return (
     <Screen>
       <Toast text={feedback?.text ?? null} kind={feedback?.kind ?? 'ok'} onHide={() => setFeedback(null)} />
-      {/* Tutorial de abas — só na 1ª entrada de cada carreira. */}
-      {!state.career.tutorialSeen ? <Tutorial onDone={markTutorialSeen} /> : null}
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingTop: theme.spacing(1.25) }}>
         {fired ? (
           <DashCard title={t('fired.title')} accent={theme.colors.red}>
@@ -277,6 +278,7 @@ export default function Dashboard() {
 
             {/* CAIXA DE ENTRADA */}
             {inbox.length > 0 ? (
+              <Spot id={TutorialTargets.inbox}>
               <DashCard title={t('dash.inbox', { n: inbox.length })} accent={theme.colors.blue}>
                 {inbox.map((item) => {
                   // CRISE FINANCEIRA — o dilema. Não fala de um jogador só: a
@@ -410,6 +412,7 @@ export default function Dashboard() {
                   );
                 })}
               </DashCard>
+              </Spot>
             ) : null}
 
             {/* RESUMO DO FIM DE ÉPOCA */}
@@ -430,7 +433,7 @@ export default function Dashboard() {
             ) : null}
 
             {/* PRÓXIMO JOGO — cartão-herói com os dois escudos */}
-            <View style={styles.matchCard}>
+            <Spot id={TutorialTargets.nextMatch} style={styles.matchCard}>
               {/* NOITE EUROPEIA: nas semanas de Europa não se joga a liga, e o
                   cartão mostrava na mesma o próximo jogo do campeonato. O
                   utilizador preparava a equipa para a liga (rodava, aliviava a
@@ -488,6 +491,12 @@ export default function Dashboard() {
                       venue: t(isHome ? 'common.home' : 'common.away'),
                     })}
                   </Text>
+                  {/* DÉRBI — a semana não é igual às outras, e vê-se logo aqui. */}
+                  {pre?.derby && !euroNight ? (
+                    <View style={styles.derbyTag}>
+                      <Text style={styles.derbyText}>🔥 {t('derby.tag')}</Text>
+                    </View>
+                  ) : null}
                   <View style={styles.versus}>
                     <View style={styles.vTeam}>
                       <CrestCircle club={isHome ? club : nextOpp} size={48} />
@@ -567,14 +576,16 @@ export default function Dashboard() {
                 </View>
               ) : null}
 
-              <PlayButton
-                label={busy ? t('btn.processing') : blocked ? t('btn.blocked') : next ? t('btn.play') : t('btn.newSeason')}
-                icon={!busy && !blocked && !!next}
-                disabled={!!blocked || busy}
-                onPress={onPressPlay}
-              />
+              <Spot id={TutorialTargets.advance}>
+                <PlayButton
+                  label={busy ? t('btn.processing') : blocked ? t('btn.blocked') : next ? t('btn.play') : t('btn.newSeason')}
+                  icon={!busy && !blocked && !!next}
+                  disabled={!!blocked || busy}
+                  onPress={onPressPlay}
+                />
+              </Spot>
               {blocked ? <Text style={styles.blockedNote}>{t('blocked.note', { reason: blockedNote })}</Text> : null}
-            </View>
+            </Spot>
 
             {/* A MINHA EQUIPA */}
             {myStrength && myTactic ? (
@@ -1190,6 +1201,13 @@ const styles = StyleSheet.create({
     color: theme.colors.green, fontSize: 9, fontWeight: '800', letterSpacing: 1.2,
     textTransform: 'uppercase', textAlign: 'center', marginBottom: theme.spacing(1),
   },
+  derbyTag: {
+    alignSelf: 'center', borderWidth: 1, borderColor: theme.colors.red,
+    backgroundColor: 'rgba(220,60,60,0.12)', borderRadius: 100,
+    paddingHorizontal: 10, paddingVertical: 3, marginBottom: theme.spacing(1),
+  },
+  derbyText: { color: theme.colors.red, fontSize: 10, fontWeight: '900', letterSpacing: 0.8 },
+
   versus: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: theme.spacing(1.5), marginBottom: theme.spacing(0.75) },
   vTeam: { flex: 1, alignItems: 'center', gap: 6 },
   vName: { color: theme.colors.text, fontSize: 12, fontWeight: '700', maxWidth: 110, textAlign: 'center' },

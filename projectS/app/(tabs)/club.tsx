@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useGameStore } from '../../src/state/gameStore';
+import { Spot } from '../../src/ui/tutorial/Spot';
+import { TutorialTargets } from '../../src/ui/tutorial/registry';
 import { abilityTo100, STAFF_ROLES, StaffMember, StaffRole } from '../../src/core/staff';
 import { FACILITY_MAX_LEVEL, weeklyNet } from '../../src/core/models';
 import {
@@ -27,6 +30,7 @@ const FACILITY_TYPES: FacilityType[] = ['stadium', 'training', 'academy', 'medic
 const VOLUME_STEPS = [0, 0.25, 0.5, 0.75, 1] as const;
 
 export default function ClubScreen() {
+  const router = useRouter();
   const t = useT();
   const tMsg = useTMsg();
   const state = useGameStore((s) => s.state);
@@ -37,6 +41,7 @@ export default function ClubScreen() {
   const hireStaff = useGameStore((s) => s.hireStaff);
   const fireStaff = useGameStore((s) => s.fireStaff);
   const freeUpgradePending = useGameStore((s) => s.freeUpgradePending);
+  const replayTutorial = useGameStore((s) => s.replayTutorial);
   const claimFreeUpgrade = useGameStore((s) => s.claimFreeUpgrade);
   const newGame = useGameStore((s) => s.newGame);
   const lang = useGameStore((s) => s.lang);
@@ -110,7 +115,7 @@ export default function ClubScreen() {
         </View>
 
         {/* FINANÇAS — cartão com saldo grande + fluxo semanal */}
-        <Section title={t('club.section.balance')} />
+        <Spot id={TutorialTargets.clubFinances}><Section title={t('club.section.balance')} /></Spot>
         <View style={styles.card}>
           <View style={styles.finTop}>
             <View>
@@ -153,7 +158,7 @@ export default function ClubScreen() {
         </View>
 
         {/* INSTALAÇÕES — cartões com barra de nível */}
-        <Section title={t('club.section.facilities')} />
+        <Spot id={TutorialTargets.clubFacilities}><Section title={t('club.section.facilities')} /></Spot>
         {freeUpgradePending() ? (
           <View style={styles.freeBanner}>
             <Text style={styles.freeBannerText}>🎁 {t('facility.freeAvailable')}</Text>
@@ -219,7 +224,7 @@ export default function ClubScreen() {
 
 
         {/* EQUIPA TÉCNICA — pessoas, não níveis. Somam-se às instalações. */}
-        <Section title={t('staff.title')} />
+        <Spot id={TutorialTargets.clubStaff}><Section title={t('staff.title')} /></Spot>
         <Text style={styles.staffSubtitle}>{t('staff.subtitle')}</Text>
         <Text style={styles.staffBill}>
           {t('staff.wageBill', { amount: money(staffList.reduce((n, m) => n + m.wage, 0)) })}
@@ -382,6 +387,27 @@ export default function ClubScreen() {
         {/* DEFINIÇÕES */}
         <Section title={t('club.section.settings')} />
 
+        {/* AJUDA — manual completo + repetir o tutorial guiado. Fica em
+            primeiro nas Definições porque é o que alguém perdido procura. */}
+        <Spot id={TutorialTargets.manual}>
+          <Pressable style={styles.helpBtn} onPress={() => router.push('/manual' as never)}>
+            <Text style={styles.helpIcon}>📖</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.helpTitle}>{t('manual.title')}</Text>
+              <Text style={styles.helpSub}>{t('manual.subtitle')}</Text>
+            </View>
+            <Text style={styles.helpChevron}>›</Text>
+          </Pressable>
+        </Spot>
+        <Pressable style={styles.helpBtn} onPress={() => { replayTutorial(); router.push('/(tabs)' as never); }}>
+          <Text style={styles.helpIcon}>🎓</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.helpTitle}>{t('manual.replayTutorial')}</Text>
+            <Text style={styles.helpSub}>{t('manual.replayTutorial.sub')}</Text>
+          </View>
+          <Text style={styles.helpChevron}>›</Text>
+        </Pressable>
+
         {/* Idioma — 3 botões */}
         <Text style={styles.langLabel}>{t('club.lang')}</Text>
         <View style={styles.langRow}>
@@ -511,6 +537,18 @@ function FinLine({ k, v, up }: { k: string; v: number; up?: boolean }) {
 }
 
 const styles = StyleSheet.create({
+  // Ajuda (manual + tutorial)
+  helpBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1.25),
+    backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border,
+    borderRadius: theme.radius.sm, paddingHorizontal: theme.spacing(1.5),
+    paddingVertical: theme.spacing(1.25), marginBottom: theme.spacing(0.75),
+  },
+  helpIcon: { fontSize: 20 },
+  helpTitle: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '800' },
+  helpSub: { color: theme.colors.textDim, fontSize: theme.font.small, marginTop: 1 },
+  helpChevron: { color: theme.colors.textDim, fontSize: 20, fontWeight: '800' },
+
   staffSubtitle: { color: theme.colors.textDim, fontSize: 12, marginBottom: 2 },
   staffBill: { color: theme.colors.text, fontSize: 12, fontWeight: '700', marginBottom: 8 },
   staffCard: {

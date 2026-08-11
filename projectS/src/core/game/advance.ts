@@ -73,6 +73,7 @@ import {
 } from './inbox';
 import { pruneOffers, resolveDueOffers } from './offers';
 import { tickPromises } from './relations';
+import { isDerby } from './rivals';
 import { archivePlayerSeasons, archiveSeason } from './history';
 import { applyStaffCost, ensureStaff } from './staffOps';
 import { aiSignFreeAgents, freeAgentRng, resolvePreContracts } from './freeAgents';
@@ -202,6 +203,8 @@ export function advanceWeek(
   let displayRound = 0;
   const allPlayed: Fixture[] = [];
   const homeClubsThisWeek = new Set<string>();
+  /** Quem recebeu um DÉRBI em casa esta semana — bilheteira cheia e mais cara. */
+  const derbyHomeThisWeek = new Set<string>();
   const playedClubs = new Set<string>();
 
   // Dados recolhidos ao longo da semana para o relatório final.
@@ -277,11 +280,13 @@ export function advanceWeek(
       players: state.players,
       tactics: state.tactics,
       baseSeed: state.meta.rngSeed,
+      isDerby: (h, a) => isDerby(state, h, a),
     });
 
     for (const fx of played) {
       allPlayed.push(fx);
       homeClubsThisWeek.add(fx.homeClubId);
+      if (isDerby(state, fx.homeClubId, fx.awayClubId)) derbyHomeThisWeek.add(fx.homeClubId);
       playedClubs.add(fx.homeClubId);
       playedClubs.add(fx.awayClubId);
     }
@@ -420,6 +425,11 @@ export function advanceWeek(
     addNews(state, 'MATCH', key, {
       club: state.clubs[managedId]?.shortName ?? '', opp, score: `${mine}-${theirs}`, round: displayRound,
     });
+    // O dérbi tem manchete própria: não é o mesmo que ganhar a qualquer um.
+    if (isDerby(state, myFx.homeClubId, myFx.awayClubId)) {
+      const derbyKey = mine > theirs ? 'news.derby.win' : mine === theirs ? 'news.derby.draw' : 'news.derby.loss';
+      addNews(state, 'MATCH', derbyKey, { opp, score: `${mine}-${theirs}` });
+    }
   }
 
   // 2. Fadiga dos titulares que jogaram (pressing alto cansa mais).
@@ -442,7 +452,12 @@ export function advanceWeek(
     if (!fx.result) continue;
     const hg = fx.result.home.goals;
     const ag = fx.result.away.goals;
-    const deltaFor = (mine: number, theirs: number) => (mine > theirs ? 3 : mine < theirs ? -4 : -1);
+    // Num dérbi a moral mexe-se muito mais: ganhar ao vizinho segura um balneário
+    // uma época inteira, e perder estraga-a.
+    const derby = isDerby(state, fx.homeClubId, fx.awayClubId);
+    const scale = derby ? 2.2 : 1;
+    const deltaFor = (mine: number, theirs: number) =>
+      Math.round((mine > theirs ? 3 : mine < theirs ? -4 : -1) * scale);
     for (const [clubId, delta] of [
       [fx.homeClubId, deltaFor(hg, ag)],
       [fx.awayClubId, deltaFor(ag, hg)],
@@ -486,7 +501,7 @@ export function advanceWeek(
     recalcUpkeep(club, fin); // instalações maiores = manutenção maior
 
     const gate = homeClubsThisWeek.has(club.id)
-      ? matchdayGate(club, recentFormOf(state, club.id, 5))
+      ? matchdayGate(club, recentFormOf(state, club.id, 5), derbyHomeThisWeek.has(club.id))
       : { attendance: 0, revenue: 0 };
     if (club.id === managedId) managedGate = gate;
     fin.income.tickets = gate.revenue;
@@ -707,6 +722,24 @@ export function advanceWeek(
     if (p) {
       addNews(state, 'CLUB', r.request === 'WAGE_RISE' ? 'news.request.wage' : 'news.request.leave',
         { player: `${p.firstName} ${p.lastName}` });
+    }
+  }
+
+  // 7d. SEMANA DE DÉRBI — a imprensa avisa antes, que é o que faz a semana
+  // valer. Anuncia-se depois de a jornada estar jogada, quando o jogo seguinte
+  // já é conhecido; o clube tem a semana toda para preparar o onze.
+  {
+    const nextLeagueRound = nextRound(state, mLeagueId);
+    const nextFx = nextLeagueRound === null ? undefined : state.schedules[mLeagueId]?.fixtures.find(
+      (f) => f.round === nextLeagueRound && (f.homeClubId === managedId || f.awayClubId === managedId),
+    );
+    if (nextFx && isDerby(state, nextFx.homeClubId, nextFx.awayClubId)) {
+      const oppId = nextFx.homeClubId === managedId ? nextFx.awayClubId : nextFx.homeClubId;
+      const opp = state.clubs[oppId];
+      if (opp) {
+        addNews(state, 'MATCH', 'news.derby.week', { opp: opp.name, round: nextLeagueRound! });
+        notes.push({ kind: 'INFO', key: 'note.derby', params: { opp: opp.shortName } });
+      }
     }
   }
 

@@ -190,6 +190,8 @@ export interface GameStore {
   passMenu: () => void;
   /** Marca o tutorial de abas como visto (persiste no save da carreira). */
   markTutorialSeen: () => void;
+  /** Repõe o tutorial guiado para ser visto outra vez. */
+  replayTutorial: () => void;
 
   // Core loop
   advance: () => WeekResult | null;
@@ -459,6 +461,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
   markTutorialSeen: () => {
     const { state } = get();
     if (state) { state.career.tutorialSeen = true; set({ state: bump(state) }); }
+  },
+
+  /** Volta a mostrar o tutorial guiado (botão nas Definições). */
+  replayTutorial: () => {
+    const { state } = get();
+    if (state) { state.career.tutorialSeen = false; set({ state: bump(state) }); }
   },
 
   newGame: (opts) => {

@@ -3,6 +3,7 @@ import { matchdayGate, requiredReputation } from '../economy';
 import { matchFatigue } from '../engine/fatigue';
 import { currentPosition, managedLeagueId, nextRound, recentFormOf } from './advance';
 import { generateRenewalReminders } from './inbox';
+import { isDerby } from './rivals';
 import { FORMATION_POSITIONS } from './lineup';
 
 /**
@@ -91,6 +92,8 @@ export interface MatchdayPreview {
   fatiguePerMatch: number;
   /** Titulares em fim de contrato (só preenchido na janela Bosman). */
   expiringStarters: ExpiringStarter[];
+  /** Dérbi: estádio cheio, mais cartões e o dobro da moral em jogo. */
+  derby: boolean;
 }
 
 /** Média do overall efetivo do onze de um clube (0 se não houver tática). */
@@ -167,13 +170,15 @@ export function matchdayPreview(state: GameState): MatchdayPreview | null {
     }
   }
 
+  const derby = !!fixture && isDerby(state, fixture.homeClubId, fixture.awayClubId);
   const gate = isHome
-    ? matchdayGate(club, recentFormOf(state, clubId, 5))
+    ? matchdayGate(club, recentFormOf(state, clubId, 5), derby)
     : { attendance: 0, revenue: 0 };
 
   return {
     round,
     isHome,
+    derby,
     opponent,
     warnings: lineupWarnings(state, clubId),
     projectedGate: gate.revenue,

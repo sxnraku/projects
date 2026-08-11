@@ -5,6 +5,7 @@ import {
   LineupSlot,
   Player,
   Position,
+  roleAllowed,
   Tactic,
 } from '../models';
 
@@ -134,6 +135,24 @@ export function autoPickLineup(
 }
 
 /**
+ * Reaplica os PAPÉIS escolhidos a um onze recalculado.
+ *
+ * O papel pertence ao jogador, não ao slot: se o onze é refeito (um titular
+ * saiu, mudou-se de formação), quem continua a jogar mantém o seu papel — desde
+ * que a posição nova ainda o aceite. Sem isto, uma lesão apagava em silêncio
+ * todo o trabalho táctico do treinador.
+ */
+export function carryRoles(previous: LineupSlot[], next: LineupSlot[]): LineupSlot[] {
+  const byPlayer = new Map<string, NonNullable<LineupSlot['role']>>();
+  for (const s of previous) if (s.role) byPlayer.set(s.playerId, s.role);
+  if (byPlayer.size === 0) return next;
+  return next.map((s) => {
+    const role = byPlayer.get(s.playerId);
+    return role && roleAllowed(role, s.position) ? { ...s, role } : s;
+  });
+}
+
+/**
  * Garante que o onze de um clube só contém jogadores do seu plantel atual.
  * Se algum slot referenciar um jogador que já saiu (vendido/livre), volta a
  * escolher o melhor onze na formação atual. Muta o estado (a tática do clube).
@@ -151,7 +170,7 @@ export function ensureValidLineup(
   if (!broken) return;
   const fresh = autoPickLineup(clubId, squadIds, players, tactic.formation);
   // Preserva as instruções escolhidas pelo utilizador; só o onze é recalculado.
-  tactic.lineup = fresh.lineup;
+  tactic.lineup = carryRoles(tactic.lineup, fresh.lineup);
   tactic.bench = fresh.bench;
   tactic.captainId = fresh.captainId;
   tactic.penaltyTakerId = fresh.penaltyTakerId;
@@ -180,7 +199,7 @@ export function reselectLineup(
   return {
     ...previous, // instruções do treinador — nunca se perdem numa troca de onze
     formation,
-    lineup: picked.lineup,
+    lineup: carryRoles(previous.lineup, picked.lineup),
     bench: picked.bench,
     captainId: previous.captainId && inLineup.has(previous.captainId)
       ? previous.captainId : picked.captainId,

@@ -33,7 +33,7 @@ export async function saveGame(db: SqliteDb, state: GameState): Promise<void> {
     // — o erro era engolido pelo `persist().catch()` e o save NUNCA era escrito
     // (época nova a cada arranque). O insertAll reinsere na ordem inversa (pais
     // primeiro), que também respeita as FKs.
-    for (const table of ['history', 'europe', 'background', 'inbox', 'cup', 'news', 'career', 'schedules', 'standings', 'tactics', 'finances', 'players', 'clubs', 'leagues', 'meta']) {
+    for (const table of ['setpieces', 'history', 'europe', 'background', 'inbox', 'cup', 'news', 'career', 'schedules', 'standings', 'tactics', 'finances', 'players', 'clubs', 'leagues', 'meta']) {
       await db.execAsync(`DELETE FROM ${table};`);
     }
     await insertAll(db, rows);
@@ -85,6 +85,7 @@ async function insertAll(db: SqliteDb, rows: SaveRows): Promise<void> {
   await ins(`INSERT INTO background (id,data) VALUES (?,?)`, [rows.background.id, rows.background.data]);
   await ins(`INSERT INTO europe (id,data) VALUES (?,?)`, [rows.europe.id, rows.europe.data]);
   await ins(`INSERT INTO history (id,data) VALUES (?,?)`, [rows.history.id, rows.history.data]);
+  await ins(`INSERT INTO setpieces (id,data) VALUES (?,?)`, [rows.setpieces.id, rows.setpieces.data]);
 }
 
 /** Carrega o GameState do save. Devolve null se não houver save (sem meta). */
@@ -99,6 +100,7 @@ export async function loadGame(db: SqliteDb): Promise<GameState | null> {
   const backgroundRow = await db.getFirstAsync<SaveRows['background']>(`SELECT * FROM background WHERE id = 1`);
   const europeRow = await db.getFirstAsync<SaveRows['europe']>(`SELECT * FROM europe WHERE id = 1`);
   const historyRow = await db.getFirstAsync<SaveRows['history']>(`SELECT * FROM history WHERE id = 1`);
+  const setPiecesRow = await db.getFirstAsync<SaveRows['setpieces']>(`SELECT * FROM setpieces WHERE id = 1`);
   const rows: SaveRows = {
     meta,
     leagues: await db.getAllAsync(`SELECT * FROM leagues`),
@@ -115,6 +117,7 @@ export async function loadGame(db: SqliteDb): Promise<GameState | null> {
     background: backgroundRow ?? { id: 1, data: '' },
     europe: europeRow ?? { id: 1, data: '' },
     history: historyRow ?? { id: 1, data: '' },
+    setpieces: setPiecesRow ?? { id: 1, data: '' },
   };
   return deserialize(rows);
 }

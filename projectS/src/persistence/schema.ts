@@ -164,6 +164,16 @@ CREATE TABLE IF NOT EXISTS history (
   id   INTEGER PRIMARY KEY CHECK (id = 1),
   data TEXT NOT NULL
 );
+
+-- Bolas paradas (blob): marcador de livres, marcador de cantos e instrução de
+-- canto, por clube. Tabela à parte, e não colunas novas em tactics, porque o
+-- esquema não tem mecanismo de migração: um CREATE TABLE IF NOT EXISTS aparece
+-- nos saves antigos, um ALTER TABLE não. Os PAPÉIS não vivem aqui — viajam
+-- dentro do JSON do lineup, que já é um blob.
+CREATE TABLE IF NOT EXISTS setpieces (
+  id   INTEGER PRIMARY KEY CHECK (id = 1),
+  data TEXT NOT NULL
+);
 `;
 
 /** Versão do esquema — sincronizada com SCHEMA_VERSION do modelo. Migrações futuras aqui. */

@@ -25,6 +25,18 @@ export const Side = {
 } as const;
 export type Side = (typeof Side)[keyof typeof Side];
 
+/**
+ * Origem do lance. Opcional de propósito: um evento sem `detail` é jogada
+ * corrida, que é como todos os eventos gravados antes das bolas paradas se
+ * comportam. A UI usa isto para o ícone e para o texto do lance.
+ */
+export const MatchEventDetail = {
+  FREE_KICK: 'FREE_KICK',
+  CORNER: 'CORNER',
+  HEADER: 'HEADER',
+} as const;
+export type MatchEventDetail = (typeof MatchEventDetail)[keyof typeof MatchEventDetail];
+
 /** Um acontecimento na partida, com minuto e (quando aplica) jogador envolvido. */
 export interface MatchEvent {
   minute: number;
@@ -32,6 +44,7 @@ export interface MatchEvent {
   side: Side | null; // null para eventos neutros (HALF_TIME, FULL_TIME)
   playerId: string | null;
   text: string; // descrição em texto para a UI/log
+  detail?: MatchEventDetail;
 }
 
 /** Agregados por equipa no fim da partida. */

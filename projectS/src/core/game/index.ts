@@ -9,6 +9,7 @@ export * from './replay';
 export * from './inbox';
 export * from './offers';
 export * from './relations';
+export * from './rivals';
 export * from './matchday';
 export * from './names';
 export * from './scouting';

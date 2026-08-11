@@ -12,8 +12,12 @@ import { divisionBudgetFloor, divisionLiquidityFloor } from './divisions';
  * @param recentForm últimos resultados (mais recentes primeiro ou por ordem —
  *   só contam quantas vitórias/derrotas há). Vazio = sem efeito.
  */
-export function matchdayIncome(club: Club, recentForm: ('W' | 'D' | 'L')[] = []): number {
-  return matchdayGate(club, recentForm).revenue;
+export function matchdayIncome(
+  club: Club,
+  recentForm: ('W' | 'D' | 'L')[] = [],
+  derby = false,
+): number {
+  return matchdayGate(club, recentForm, derby).revenue;
 }
 
 /**
@@ -24,16 +28,21 @@ export function matchdayIncome(club: Club, recentForm: ('W' | 'D' | 'L')[] = [])
 export function matchdayGate(
   club: Club,
   recentForm: ('W' | 'D' | 'L')[] = [],
+  /** Dérbi: o estádio enche e o bilhete vale mais, mesmo em má fase. */
+  derby = false,
 ): { attendance: number; revenue: number } {
   const wins = recentForm.filter((r) => r === 'W').length;
   const losses = recentForm.filter((r) => r === 'L').length;
   const formMultiplier = 1 + wins * 0.05 - losses * 0.08;
 
   const base = 0.5 + (club.reputation / 100) * 0.45; // 0.5..0.95
-  const attendanceRate = Math.min(1, Math.max(0.35, base * formMultiplier));
+  const derbyMul = derby ? 1.18 : 1;
+  const attendanceRate = Math.min(1, Math.max(0.35, base * formMultiplier * derbyMul));
 
   const attendance = Math.round(club.stadiumCapacity * attendanceRate);
-  const ticketPrice = 8 + club.reputation * 0.25; // 8..33
+  // Num dérbi o bilhete é mais caro — é a receita que faz um clube pequeno
+  // aguentar a época com dois jogos grandes.
+  const ticketPrice = (8 + club.reputation * 0.25) * (derby ? 1.25 : 1); // 8..33
   return { attendance, revenue: Math.round(attendance * ticketPrice) };
 }
 

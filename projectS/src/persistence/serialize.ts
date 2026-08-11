@@ -39,6 +39,14 @@ export interface SaveRows {
   background: BlobRow;
   europe: BlobRow;
   history: BlobRow;
+  setpieces: BlobRow;
+}
+
+/** Bolas paradas de um clube, tal como vão para o blob `setpieces`. */
+interface SetPieceEntry {
+  fk: string | null;
+  ck: string | null;
+  focus: Tactic['cornerFocus'];
 }
 
 /** Linha única com blob JSON (news, cup). */
@@ -121,7 +129,23 @@ export function serialize(state: GameState): SaveRows {
     europe: { id: 1, data: JSON.stringify(state.europe ?? null) },
     // Memória do mundo: campeões/marcadores/provas de todas as épocas.
     history: { id: 1, data: JSON.stringify(state.history ?? emptyHistory()) },
+    // Bolas paradas: só os clubes que TÊM alguma escolha feita (a IA deixa o
+    // motor escolher), por isso o blob costuma ter uma entrada só.
+    setpieces: { id: 1, data: JSON.stringify(serializeSetPieces(state.tactics)) },
   };
+}
+
+function serializeSetPieces(tactics: Record<string, Tactic>): Record<string, SetPieceEntry> {
+  const out: Record<string, SetPieceEntry> = {};
+  for (const t of Object.values(tactics)) {
+    if (!t.freeKickTakerId && !t.cornerTakerId && !t.cornerFocus) continue;
+    out[t.clubId] = {
+      fk: t.freeKickTakerId ?? null,
+      ck: t.cornerTakerId ?? null,
+      focus: t.cornerFocus,
+    };
+  }
+  return out;
 }
 
 const serializeLeague = (l: League): LeagueRow => ({
@@ -201,13 +225,21 @@ export function deserialize(rows: SaveRows): GameState {
       income: JSON.parse(r.income), expenses: JSON.parse(r.expenses),
     };
   }
+  // Bolas paradas: blob à parte (ver schema.ts). Saves anteriores não têm a
+  // tabela — nesse caso ninguém tem marcador definido e o motor escolhe.
+  const setPieces: Record<string, SetPieceEntry> =
+    rows.setpieces?.data ? (JSON.parse(rows.setpieces.data) ?? {}) : {};
   for (const r of rows.tactics) {
+    const sp = setPieces[r.club_id];
     state.tactics[r.club_id] = {
       clubId: r.club_id, formation: r.formation as Tactic['formation'], mentality: r.mentality as Tactic['mentality'],
       tempo: r.tempo as Tactic['tempo'],
       pressing: r.pressing ?? 5, defensiveLine: r.defensive_line ?? 5, creativity: r.creativity ?? 5,
       lineup: JSON.parse(r.lineup), bench: JSON.parse(r.bench),
       captainId: r.captain_id, penaltyTakerId: r.penalty_taker_id,
+      freeKickTakerId: sp?.fk ?? null,
+      cornerTakerId: sp?.ck ?? null,
+      cornerFocus: sp?.focus,
     };
   }
   for (const r of rows.standings) {
