@@ -45,7 +45,9 @@ import {
   TierMove,
   transferWindow,
 } from '../season';
-import { evaluateSeason, SeasonRecord, updateConfidence, updateManagerReputation } from '../career';
+import {
+  evaluateSeason, objectiveTarget, SeasonRecord, updateConfidence, updateManagerReputation,
+} from '../career';
 import {
   fadePotential, individualFocus, INDIVIDUAL_GROWTH_BONUS,
   tickRetraining, trainPlayer, TrainingFocus,
@@ -74,6 +76,13 @@ import {
 import { pruneOffers, resolveDueOffers } from './offers';
 import { tickPromises } from './relations';
 import { isDerby } from './rivals';
+import { applyCards } from './discipline';
+import {
+  attendanceFactor, ensureFans, fanMood, FanMatchInput, fansOnDeparture, fansOnPromotion,
+  fansOnRelegation, fansOnTrophy, homeSupport, moraleFromFans, resetSupport, squadShare,
+  updateFansWeek, UNREST_CONFIDENCE_HIT,
+} from './fans';
+import { expirePress, generatePressConference, resolveClaim } from './press';
 import { archivePlayerSeasons, archiveSeason } from './history';
 import { applyStaffCost, ensureStaff } from './staffOps';
 import { aiSignFreeAgents, freeAgentRng, resolvePreContracts } from './freeAgents';
@@ -281,6 +290,9 @@ export function advanceWeek(
       tactics: state.tactics,
       baseSeed: state.meta.rngSeed,
       isDerby: (h, a) => isDerby(state, h, a),
+      // Só o clube gerido tem bancada simulada — os outros jogam com o apoio
+      // neutro de sempre, que é exatamente o comportamento anterior.
+      homeSupport: (h) => (h === managedId ? homeSupport(fanMood(state)) : undefined),
     });
 
     for (const fx of played) {
@@ -387,7 +399,34 @@ export function advanceWeek(
         p.condition.seasonRating = (p.condition.seasonRating ?? 0) + s.rating;
         p.condition.seasonApps = (p.condition.seasonApps ?? 0) + 1;
       }
-      if (s.red) p.condition.suspended = Math.max(p.condition.suspended ?? 0, 1); // vermelho → falha o jogo seguinte
+    }
+  }
+
+  // 1c-quater. DISCIPLINA — amarelos que atravessam jogos. O vermelho já valia
+  // um jogo de castigo; a acumulação (5 amarelos) não existia, e por isso não
+  // havia nenhuma decisão a tomar sobre quem entra num jogo áspero. Aplica-se a
+  // todos os clubes, e só o clube gerido é avisado.
+  {
+    const disc = applyCards(state, allPlayed);
+    for (const ban of disc.bans) {
+      if (ban.clubId !== managedId) continue;
+      const p = state.players[ban.playerId];
+      if (!p) continue;
+      const params = { player: `${p.firstName} ${p.lastName}`, games: ban.games };
+      const key = ban.reason === 'RED' ? 'news.ban.red' : 'news.ban.yellows';
+      addNews(state, 'CLUB', key, params);
+      notes.push({
+        kind: 'INFO',
+        key: ban.reason === 'RED' ? 'note.ban.red' : 'note.ban.yellows',
+        params: { player: p.lastName, games: ban.games },
+      });
+    }
+    for (const w of disc.warnings) {
+      if (w.clubId !== managedId) continue;
+      const p = state.players[w.playerId];
+      if (!p) continue;
+      addNews(state, 'CLUB', 'news.yellowRisk', { player: `${p.firstName} ${p.lastName}`, yellows: w.yellows });
+      notes.push({ kind: 'INFO', key: 'note.yellowRisk', params: { player: p.lastName, yellows: w.yellows } });
     }
   }
 
@@ -501,7 +540,12 @@ export function advanceWeek(
     recalcUpkeep(club, fin); // instalações maiores = manutenção maior
 
     const gate = homeClubsThisWeek.has(club.id)
-      ? matchdayGate(club, recentFormOf(state, club.id, 5), derbyHomeThisWeek.has(club.id))
+      ? matchdayGate(
+          club, recentFormOf(state, club.id, 5), derbyHomeThisWeek.has(club.id),
+          // O humor da bancada enche ou esvazia o estádio — mas só há bancada
+          // simulada no clube gerido; nos outros o fator fica em 1.
+          club.id === managedId ? attendanceFactor(fanMood(state)) : 1,
+        )
       : { attendance: 0, revenue: 0 };
     if (club.id === managedId) managedGate = gate;
     fin.income.tickets = gate.revenue;
@@ -525,6 +569,11 @@ export function advanceWeek(
     } else if (sanction.soldPlayerName && club.id === managedId) {
       addNews(state, 'CLUB', 'news.insolvency.sold',
         { player: sanction.soldPlayerName, amount: sanction.amount.toLocaleString('pt-PT') });
+      // A bancada não distingue "a direção vendeu" de "o treinador vendeu" —
+      // vê o jogador a sair. Sem isto, a venda mais dolorosa do jogo (a que se
+      // sofre sem escolher) era a única que passava em silêncio.
+      const sold = sanction.soldPlayerId ? state.players[sanction.soldPlayerId] : undefined;
+      if (sold) fansOnDeparture(state, sold, squadShare(state, naturalOverall(sold)));
     }
   }
 
@@ -627,7 +676,85 @@ export function advanceWeek(
   // 6. Confiança da direção (posição atual vs objetivo).
   const mLeague = state.leagues[mLeagueId]!;
   const position = currentPosition(state, mLeagueId, state.meta.managedClubId);
-  const confidence = updateConfidence(state.career, position, mLeague.clubIds.length);
+  let confidence = updateConfidence(state.career, position, mLeague.clubIds.length);
+
+  // 6b. ADEPTOS — a bancada reage ao que viu. Corre DEPOIS da confiança porque
+  // a contestação prolongada também morde a paciência da direção: quando o
+  // estádio vira, a direção deixa de ter onde se esconder.
+  //
+  // A reação é por JOGO (liga, taça e Europa contam), não por semana: uma
+  // eliminação na taça não pode passar em silêncio só porque a liga parou.
+  ensureFans(state);
+  let fanWeek: ReturnType<typeof updateFansWeek> | null = null;
+  {
+    const myClub = state.clubs[managedId];
+    const myMatches = allPlayed.filter(
+      (f) => f.result && (f.homeClubId === managedId || f.awayClubId === managedId),
+    );
+    const expectedPosition = objectiveTarget(state.career.objective, mLeague.clubIds.length);
+
+    // Sem jogo nenhum a semana ainda conta (classificação + esquecimento), por
+    // isso chama-se pelo menos uma vez.
+    const inputs = myMatches.length > 0 ? myMatches : [null];
+    for (const fx of inputs) {
+      let match: FanMatchInput | undefined;
+      if (fx?.result && myClub) {
+        const isHome = fx.homeClubId === managedId;
+        const oppId = isHome ? fx.awayClubId : fx.homeClubId;
+        const opp = state.clubs[oppId];
+        match = {
+          goalsFor: isHome ? fx.result.home.goals : fx.result.away.goals,
+          goalsAgainst: isHome ? fx.result.away.goals : fx.result.home.goals,
+          myReputation: myClub.reputation,
+          oppReputation: opp?.reputation ?? 50,
+          derby: isDerby(state, fx.homeClubId, fx.awayClubId),
+          oppName: opp?.shortName ?? '',
+        };
+      }
+      fanWeek = updateFansWeek(state, {
+        match,
+        position,
+        clubCount: mLeague.clubIds.length,
+        expectedPosition,
+      });
+    }
+
+    // O ambiente passa ao balneário: casa cheia levanta, casa vazia afunda.
+    const moraleDelta = moraleFromFans(fanWeek!.mood);
+    if (moraleDelta !== 0) {
+      for (const id of myClub?.squad ?? []) {
+        const p = state.players[id];
+        if (p) p.condition.morale = Math.max(10, Math.min(95, p.condition.morale + moraleDelta));
+      }
+    }
+
+    if (fanWeek!.unrest) {
+      confidence = Math.max(0, state.career.confidence - UNREST_CONFIDENCE_HIT);
+      state.career.confidence = confidence;
+      addNews(state, 'CLUB', 'news.fans.unrest', { mood: fanWeek!.mood });
+      notes.push({ kind: 'INFO', key: 'note.fans.unrest', params: { mood: fanWeek!.mood } });
+    } else if (fanWeek!.delta <= -6) {
+      notes.push({ kind: 'INFO', key: 'note.fans.down', params: { mood: fanWeek!.mood, delta: fanWeek!.delta } });
+    } else if (fanWeek!.delta >= 6) {
+      notes.push({ kind: 'INFO', key: 'note.fans.up', params: { mood: fanWeek!.mood, delta: `+${fanWeek!.delta}` } });
+    }
+
+    // BRAVATA: se prometeste alguma coisa à imprensa, o jogo desta jornada
+    // cobra-a. Ganhar paga com juros; empatar já é não cumprir.
+    if (myMatches.length > 0) {
+      const decisive = myMatches[myMatches.length - 1]!;
+      const isHome = decisive.homeClubId === managedId;
+      const mine = isHome ? decisive.result!.home.goals : decisive.result!.away.goals;
+      const theirs = isHome ? decisive.result!.away.goals : decisive.result!.home.goals;
+      const outcome = resolveClaim(state, mine > theirs);
+      if (outcome) {
+        confidence = state.career.confidence;
+        const key = outcome.delivered ? 'news.press.claimKept' : 'news.press.claimBroken';
+        addNews(state, 'CLUB', key);
+        notes.push({ kind: 'INFO', key: outcome.delivered ? 'note.press.kept' : 'note.press.broken' });
+      }
+    }
+  }
 
   // 7. Mercado: caducar propostas antigas e gerar novas pelos nossos jogadores.
   //    A IA só compra com a JANELA ABERTA — simétrico ao jogador, que também só
@@ -741,6 +868,44 @@ export function advanceWeek(
         notes.push({ kind: 'INFO', key: 'note.derby', params: { opp: opp.shortName } });
       }
     }
+  }
+
+  // 7e. IMPRENSA — a conferência da jornada. Fica na caixa de entrada, NÃO
+  // bloqueia o avanço (é uma oportunidade, não um imposto) e caduca ao fim de
+  // uma semana. Calar-se custa: os adeptos leem o silêncio como fuga.
+  {
+    expirePress(state);
+    const nextLeagueRound = nextRound(state, mLeagueId);
+    const nextFx = nextLeagueRound === null ? undefined : state.schedules[mLeagueId]?.fixtures.find(
+      (f) => f.round === nextLeagueRound && (f.homeClubId === managedId || f.awayClubId === managedId),
+    );
+    const nextOppId = nextFx ? (nextFx.homeClubId === managedId ? nextFx.awayClubId : nextFx.homeClubId) : '';
+    const myLast = allPlayed.find((f) => f.result && (f.homeClubId === managedId || f.awayClubId === managedId));
+    let lastMargin = 0;
+    if (myLast?.result) {
+      const isHome = myLast.homeClubId === managedId;
+      lastMargin = (isHome ? myLast.result.home.goals : myLast.result.away.goals)
+        - (isHome ? myLast.result.away.goals : myLast.result.home.goals);
+    }
+    const topBid = state.inbox.find((it) => it.kind === 'BID');
+    const bidPlayer = topBid?.kind === 'BID' ? state.players[topBid.playerId] : undefined;
+    const totalRounds = mSchedule?.totalRounds ?? 34;
+
+    const conf = generatePressConference(state, {
+      form: recentFormOf(state, managedId, 3),
+      nextIsDerby: !!nextFx && isDerby(state, nextFx.homeClubId, nextFx.awayClubId),
+      nextOpponent: state.clubs[nextOppId]?.shortName ?? '',
+      lastMargin,
+      fanMood: fanMood(state),
+      unrest: fanWeek?.unrest === true,
+      position,
+      clubCount: mLeague.clubIds.length,
+      seasonProgress: totalRounds > 0 ? displayRound / totalRounds : 0,
+      bidTarget: bidPlayer
+        ? { playerId: bidPlayer.id, playerName: `${bidPlayer.firstName} ${bidPlayer.lastName}` }
+        : undefined,
+    }, displayRound);
+    if (conf) notes.push({ kind: 'INFO', key: 'note.press.open' });
   }
 
   // 8. Avançar a data uma semana.
@@ -952,6 +1117,14 @@ export function rolloverSeason(state: GameState): SeasonSummary {
     state.career.trophies.push({ season: state.meta.season, key: 'trophy.league', params: { league: mLeague.name } });
   }
 
+  // --- 1b. Os adeptos fecham a época ---
+  // Um título ou uma subida compram paciência para a época seguinte; uma
+  // descida gasta-a toda. É a única coisa que atravessa o rollover: o humor
+  // NÃO se repõe a meio, porque a memória da bancada é o que lhe dá peso.
+  if (champion) fansOnTrophy(state, mLeague.name);
+  if (promoted && !champion) fansOnPromotion(state);
+  if (relegated) fansOnRelegation(state);
+
   // --- 2. Avaliação da direção + reputação do treinador ---
   const verdict = evaluateSeason(state.career, pos, leagueSize, relegated);
   updateManagerReputation(state.career, {
@@ -1045,6 +1218,7 @@ export function rolloverSeason(state: GameState): SeasonSummary {
     p.condition.seasonAssists = 0;
     p.condition.seasonRating = 0;
     p.condition.seasonApps = 0;
+    p.condition.seasonYellows = 0; // a acumulação disciplinar é POR ÉPOCA
     p.condition.devSeason = 0;
   }
   const returnedLoans = returnExpiredLoans(state); // empréstimos vencidos regressam aos donos
@@ -1159,6 +1333,7 @@ export function acceptJobOffer(state: GameState, clubId: string): boolean {
   state.meta.managedClubId = clubId;
   state.career.pendingOffers = [];
   state.career.confidence = 55;
+  resetSupport(state); // outra cidade, outra bancada: humor e imprensa recomeçam
   setManagedObjective(state);
   retargetManagedEurope(state); // a prova europeia segue o novo clube
   return true;
@@ -1199,6 +1374,7 @@ export function acceptMeritOffer(state: GameState, clubId: string): boolean {
   state.meta.managedClubId = clubId;
   state.career.meritOffers = [];
   state.career.confidence = 55;
+  resetSupport(state); // outra cidade, outra bancada: humor e imprensa recomeçam
   setManagedObjective(state);
   retargetManagedEurope(state); // a prova europeia segue o novo clube
   return true;

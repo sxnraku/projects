@@ -27,6 +27,7 @@ import { executeTransfer } from '../economy/transfers';
 import { deriveSeed, Rng } from '../engine/rng';
 import { GameState, naturalOverallFine, Player } from '../models';
 import { BOSMAN_WINDOW_ROUNDS, roundsRemaining } from './matchday';
+import { fansOnArrival } from './fans';
 
 /** Acordo fechado com um jogador que ainda pertence a outro clube. */
 export interface PreContract {
@@ -124,7 +125,10 @@ export function signFreeAgent(
     { playerId, fromClubId: clubId, fee: 0, wageOffer: wage, contractYears: years },
     state,
   );
-  return res.ok ? { ok: true } : { ok: false, errorKey: 'free.err.failed', params: { reason: res.error ?? '' } };
+  if (!res.ok) return { ok: false, errorKey: 'free.err.failed', params: { reason: res.error ?? '' } };
+  // Um livre a sério é um reforço a sério: a bancada não pergunta quanto custou.
+  fansOnArrival(state, player);
+  return { ok: true };
 }
 
 /**
@@ -310,6 +314,7 @@ export function resolvePreContracts(state: GameState): PreContractOutcome[] {
       { playerId: pre.playerId, fromClubId: clubId, fee: 0, wageOffer: pre.wage, contractYears: pre.years },
       state,
     );
+    if (res.ok) fansOnArrival(state, player);
     outcomes.push({ playerName: pre.playerName, joined: res.ok });
   }
 

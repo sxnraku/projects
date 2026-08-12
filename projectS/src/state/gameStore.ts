@@ -25,6 +25,10 @@ import {
   acceptBid as coreAcceptBid,
   counterBid as coreCounterBid,
   resolveCrisis as coreResolveCrisis,
+  answerPress as coreAnswerPress,
+  ensureFans,
+  fanBand,
+  fanMood,
   acceptCounter as coreAcceptCounter,
   optimizeLineup,
   availableBudget as coreAvailableBudget,
@@ -382,6 +386,10 @@ export interface GameStore {
   counterBid: (bidId: string, askedFee: number) => import('../core/game').CounterResult;
   /** Resolve a crise financeira vendendo o jogador escolhido. */
   resolveCrisis: (itemId: string, playerId: string) => import('../core/game').CrisisResult;
+  /** Responde à conferência de imprensa com um dos tons disponíveis. */
+  answerPress: (
+    itemId: string, tone: import('../core/game').PressTone,
+  ) => import('../core/game').PressAnswerResult;
   /** Começa a reconversão de posição de um jogador (treino de N semanas). */
   startRetrain: (playerId: string, position: import('../core/models').Position) => import('../core/training').RetrainResult;
   /** Cancela a reconversão em curso. */
@@ -404,6 +412,12 @@ export interface GameStore {
   squad: (clubId?: string) => Player[];
   inboxBids: () => BidItem[];
   inboxItems: () => InboxItem[];
+  /** Humor dos adeptos do clube gerido (0-100), a faixa e os últimos motivos. */
+  fans: () => {
+    mood: number;
+    band: import('../core/game').FanBand;
+    reasons: import('../core/game').FanReason[];
+  };
   /** Estado da janela de mercado na jornada atual. */
   marketWindow: () => WindowState;
 }
@@ -1066,6 +1080,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ state: bump(state) });
     return res;
   },
+  answerPress: (itemId, tone) => {
+    const { state } = get();
+    if (!state) return { ok: false, messageKey: 'press.gone' };
+    const res = coreAnswerPress(state, itemId, tone);
+    set({ state: bump(state) });
+    return res;
+  },
 
   counterBid: (bidId, askedFee) => {
     const { state } = get();
@@ -1277,7 +1298,23 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!state) return [];
     // Esconde itens cujo jogador já não existe (vendido/livre) — senão contavam
     // na inbox mas apareciam vazios e não davam para resolver. A crise
-    // financeira não fala de um jogador só, por isso passa sempre.
-    return state.inbox.filter((it) => it.kind === 'CRISIS' || !!state.players[it.playerId]);
+    // financeira e a conferência de imprensa não falam (necessariamente) de um
+    // jogador, por isso passam sempre.
+    return state.inbox.filter((it) => {
+      if (it.kind === 'CRISIS' || it.kind === 'PRESS') return true;
+      return !!state.players[it.playerId];
+    });
+  },
+
+  fans: () => {
+    const { state } = get();
+    // Sem jogo, o valor neutro: a UI desenha a barra a meio em vez de rebentar.
+    if (!state) return { mood: 55, band: fanBand(55), reasons: [] };
+    // `ensureFans` cria o estado se faltar (save antigo), mas NÃO se chama
+    // `set` aqui: um seletor que escreve na store durante o render mete o React
+    // em ciclo. O que ele muta é o objeto de estado, que a próxima gravação
+    // apanha na mesma.
+    const f = ensureFans(state);
+    return { mood: Math.round(fanMood(state)), band: fanBand(f.mood), reasons: f.reasons };
   },
 }));

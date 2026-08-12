@@ -5,8 +5,8 @@ import { useGameStore } from '../../src/state/gameStore';
 import { careerTotals } from '../../src/core/game';
 import { TrainingFocus } from '../../src/core/training';
 import {
-  bidForPlayer, canTalk, deservesCriticism, deservesPraise, isWonderkid,
-  potentialRange, seasonRating, trustOf,
+  bidForPlayer, canTalk, deservesCriticism, deservesPraise, isAtRisk, isWonderkid,
+  potentialRange, seasonRating, trustOf, yellowsToBan,
 } from '../../src/core/game';
 import {
   defaultReleaseClause, minReleaseClause, SELL_ON_STEPS, suggestedWage,
@@ -76,6 +76,8 @@ export default function PlayerDetail() {
   const potText = potR.exact ? String(potR.min) : `${potR.min}-${potR.max}`;
   const club = player.clubId ? state.clubs[player.clubId] : null;
   const a = player.attributes;
+  const yellows = player.condition.seasonYellows ?? 0;
+  const atRisk = isAtRisk(yellows);
   const askedWage = suggestedWage(player, state.meta.season);
   const isOurs = player.clubId === state.meta.managedClubId;
   const pendingBid = isOurs ? bidForPlayer(state, player.id) : null;
@@ -145,6 +147,22 @@ export default function PlayerDetail() {
             <RowKV k={t('mkt.marketValue')} v={money(player.marketValue)} />
             {player.condition.status === 'INJURED' ? (
               <RowKV k={t('player.statusLabel')} v={t('player.injuredDays', { days: player.condition.injuryDaysRemaining })} vColor={theme.colors.red} />
+            ) : null}
+            {/* DISCIPLINA — os amarelos deixaram de morrer no apito final: aos 5
+                custam um jogo, e o aviso tem de estar onde se olha para ele. */}
+            <RowKV
+              k={t('disc.yellows')}
+              v={yellows > 0
+                ? (atRisk ? `${yellows} · ${t('disc.atRisk')}` : `${yellows} · ${t('disc.toBan', { n: yellowsToBan(yellows) })}`)
+                : '0'}
+              vColor={atRisk ? theme.colors.yellow : undefined}
+            />
+            {player.condition.suspended ? (
+              <RowKV
+                k={t('player.statusLabel')}
+                v={t('disc.suspendedGames', { n: player.condition.suspended })}
+                vColor={theme.colors.red}
+              />
             ) : null}
           </View>
         ) : null}

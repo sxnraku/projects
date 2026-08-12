@@ -7,9 +7,10 @@ Toda a lógica de jogo é **TypeScript puro e determinístico**.
 ## Comandos
 - **Dev (Metro):** `npx expo start`
 - **Typecheck:** `npx tsc --noEmit -p tsconfig.core.json && npx tsc --noEmit -p tsconfig.json`
-- **Testes (gate):** `npm run smoke:all` — 22 suites, arranca com `check:version`, tem de imprimir "TODOS OS TESTES PASSARAM" e sair 0
-- **E2E (app real no browser):** `npm run e2e:all` — exporta a app para web e conduz 7 fluxos com
-  Playwright (carreira nova, tutorial guiado, todos os separadores, emblema, tática, manual, jogo).
+- **Testes (gate):** `npm run smoke:all` — 23 suites, arranca com `check:version`, tem de imprimir "TODOS OS TESTES PASSARAM" e sair 0
+- **E2E (app real no browser):** `npm run e2e:all` — exporta a app para web e conduz 11 fluxos com
+  Playwright (carreira nova, tutorial guiado, todos os separadores, emblema, tática, manual ×2,
+  adeptos, disciplina na ficha, conferência de imprensa, jogo).
   É o único teste que apanha erros de RENDER; os smoke tests só cobrem lógica.
 - **Dados:** `npm run smoke:data` valida `src/core/data/world/` (worldTeams + 55 JSONs; untracked no git, gerado do Excel)
 
@@ -29,7 +30,7 @@ Toda a lógica de jogo é **TypeScript puro e determinístico**.
 
 ## Verificação (antes de dar QUALQUER coisa por feita)
 1. `tsc` core + app limpos.
-2. `npm run smoke:all` a passar (22/22).
+2. `npm run smoke:all` a passar (23/23).
 3. Diagnósticos offline com `npx tsx <script>` quando mexes em regras de jogo.
 
 ## Release (Google Play — closed testing)

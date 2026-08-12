@@ -1,6 +1,7 @@
 import {
   GameState,
   MAX_ACTIVE_OFFERS,
+  naturalOverall,
   OfferItem,
   OfferStatus,
   Player,
@@ -14,6 +15,7 @@ import {
 } from '../economy';
 import { deriveSeed } from '../engine/rng';
 import { ensureValidLineup } from './lineup';
+import { fansOnSigning, squadShare } from './fans';
 
 /**
  * Propostas NOSSAS — negociação com espera.
@@ -277,7 +279,11 @@ function settle(state: GameState, item: OfferItem): OfferStatus {
     }
     item.status = 'ACCEPTED';
     item.reasonKey = 'offer.signedContract';
-    item.reasonParams = { player: `${player.firstName} ${player.lastName}` };
+    const playerName = `${player.firstName} ${player.lastName}`;
+    item.reasonParams = { player: playerName };
+    // O reforço já está no plantel: o peso dele mede-se AGORA, contra os
+    // companheiros. Só um nome à altura do melhor da casa move a bancada.
+    fansOnSigning(state, playerName, squadShare(state, naturalOverall(player)));
     return item.status;
   }
 

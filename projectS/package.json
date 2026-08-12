@@ -22,7 +22,7 @@
     "smoke:persist": "tsx src/persistence/__tests__/persistence.smoke.ts",
     "smoke:ads": "tsx src/monetization/__tests__/monetization.smoke.ts",
     "smoke:career": "tsx src/core/career/__tests__/career.smoke.ts",
-    "smoke:all": "npm run check:version && npm run smoke:data && npm run smoke && npm run smoke:engine && npm run smoke:season && npm run smoke:economy && npm run smoke:game && npm run smoke:persist && npm run smoke:ads && npm run smoke:career && npm run smoke:world && npm run smoke:inbox && npm run smoke:finance && npm run smoke:divisions && npm run smoke:matchday && npm run smoke:scouting && npm run smoke:academy && npm run smoke:contracts && npm run smoke:flow && npm run smoke:legacy && npm run smoke:tactics && npm run smoke:europe && npm run smoke:play",
+    "smoke:all": "npm run check:version && npm run smoke:data && npm run smoke && npm run smoke:engine && npm run smoke:season && npm run smoke:economy && npm run smoke:game && npm run smoke:persist && npm run smoke:ads && npm run smoke:career && npm run smoke:world && npm run smoke:inbox && npm run smoke:finance && npm run smoke:divisions && npm run smoke:matchday && npm run smoke:scouting && npm run smoke:academy && npm run smoke:contracts && npm run smoke:flow && npm run smoke:legacy && npm run smoke:tactics && npm run smoke:europe && npm run smoke:morale && npm run smoke:play",
     "smoke:europe": "tsx src/core/europe/__tests__/europe.smoke.ts",
     "smoke:world": "tsx src/core/cup/__tests__/world.smoke.ts",
     "smoke:inbox": "tsx src/core/game/__tests__/inbox.smoke.ts",
@@ -36,6 +36,7 @@
     "smoke:legacy": "tsx src/core/game/__tests__/legacy.smoke.ts",
     "smoke:tactics": "tsx src/core/game/__tests__/tactics.smoke.ts",
     "smoke:play": "tsx src/core/game/__tests__/playthrough.smoke.ts",
+    "smoke:morale": "tsx src/core/game/__tests__/morale.smoke.ts",
     "e2e:build": "expo export --platform web --output-dir web-build",
     "e2e": "playwright test -c e2e/playwright.config.ts",
     "e2e:all": "npm run e2e:build && npm run e2e"

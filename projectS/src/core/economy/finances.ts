@@ -16,8 +16,9 @@ export function matchdayIncome(
   club: Club,
   recentForm: ('W' | 'D' | 'L')[] = [],
   derby = false,
+  fanFactor = 1,
 ): number {
-  return matchdayGate(club, recentForm, derby).revenue;
+  return matchdayGate(club, recentForm, derby, fanFactor).revenue;
 }
 
 /**
@@ -30,6 +31,12 @@ export function matchdayGate(
   recentForm: ('W' | 'D' | 'L')[] = [],
   /** Dérbi: o estádio enche e o bilhete vale mais, mesmo em má fase. */
   derby = false,
+  /**
+   * HUMOR DOS ADEPTOS, já convertido em multiplicador (ver
+   * `core/game/fans.attendanceFactor`). 1 = indiferente. Só o clube gerido tem
+   * massa adepta simulada; para os outros fica 1 e nada muda.
+   */
+  fanFactor = 1,
 ): { attendance: number; revenue: number } {
   const wins = recentForm.filter((r) => r === 'W').length;
   const losses = recentForm.filter((r) => r === 'L').length;
@@ -37,7 +44,7 @@ export function matchdayGate(
 
   const base = 0.5 + (club.reputation / 100) * 0.45; // 0.5..0.95
   const derbyMul = derby ? 1.18 : 1;
-  const attendanceRate = Math.min(1, Math.max(0.35, base * formMultiplier * derbyMul));
+  const attendanceRate = Math.min(1, Math.max(0.3, base * formMultiplier * derbyMul * fanFactor));
 
   const attendance = Math.round(club.stadiumCapacity * attendanceRate);
   // Num dérbi o bilhete é mais caro — é a receita que faz um clube pequeno

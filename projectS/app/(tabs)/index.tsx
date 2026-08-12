@@ -10,7 +10,7 @@ import { OBJECTIVE_KEYS, dailyBonusAmount } from '../../src/core/career';
 import { computeTeamStrength } from '../../src/core/engine';
 import { TrainingFocus } from '../../src/core/training';
 import { Club, GameState, goalDifference, naturalOverallFine, Player } from '../../src/core/models';
-import type { ReturnedLoan } from '../../src/core/game';
+import { PRESS_OPTIONS, answerKey, questionKey, type ReturnedLoan } from '../../src/core/game';
 import { money, to100, wage } from '../../src/ui/format';
 import { cashWarning, isInsolvent, RUNWAY_WARNING_WEEKS, suggestedWage } from '../../src/core/economy';
 import { useT, useTMsg } from '../../src/ui/i18n';
@@ -48,6 +48,8 @@ export default function Dashboard() {
   const nextIsEuropean = useGameStore((s) => s.nextIsEuropean);
   const nextEuroMatch = useGameStore((s) => s.nextEuroMatch);
   const resolveCrisis = useGameStore((s) => s.resolveCrisis);
+  const answerPress = useGameStore((s) => s.answerPress);
+  const fans = useGameStore((s) => s.fans);
   const claimDaily = useGameStore((s) => s.claimDaily);
   const dailyAvailable = useGameStore((s) => s.dailyAvailable);
   const blockedCounts = useGameStore((s) => s.blockedCounts);
@@ -240,6 +242,12 @@ export default function Dashboard() {
 
   const inbox = inboxItems();
 
+  // Adeptos: a cor segue a faixa, não o número — é o que se lê de relance.
+  const fanState = fans();
+  const fansColor = fanState.band === 'RIOT' || fanState.band === 'ANGRY'
+    ? theme.colors.red
+    : fanState.band === 'CALM' ? theme.colors.yellow : theme.colors.green;
+
   return (
     <Screen>
       <Toast text={feedback?.text ?? null} kind={feedback?.kind ?? 'ok'} onHide={() => setFeedback(null)} />
@@ -281,6 +289,43 @@ export default function Dashboard() {
               <Spot id={TutorialTargets.inbox}>
               <DashCard title={t('dash.inbox', { n: inbox.length })} accent={theme.colors.blue}>
                 {inbox.map((item) => {
+                  // CONFERÊNCIA DE IMPRENSA — uma pergunta, três saídas. Não
+                  // bloqueia o avanço (é oportunidade, não imposto), mas deixar
+                  // caducar custa aos adeptos: o silêncio também é resposta.
+                  if (item.kind === 'PRESS') {
+                    return (
+                      <View key={item.id} style={styles.pressBox}>
+                        <Text style={styles.pressTitle}>🎙 {t('press.title')}</Text>
+                        <Text style={styles.pressQuestion}>
+                          {t(questionKey(item.topic), {
+                            opp: item.opponentName ?? '',
+                            player: item.playerName ?? '',
+                          })}
+                        </Text>
+                        {PRESS_OPTIONS[item.topic].map((opt) => (
+                          <Pressable
+                            key={opt.tone}
+                            style={styles.pressAnswer}
+                            onPress={() => {
+                              const r = answerPress(item.id, opt.tone);
+                              setFeedback(r.messageKey
+                                ? { kind: r.ok ? 'ok' : 'error', text: tMsg({ key: r.messageKey, params: r.messageParams }) }
+                                : null);
+                            }}
+                          >
+                            <Text style={styles.pressTone}>{t(`press.tone.${opt.tone}`)}</Text>
+                            <Text style={styles.pressLine}>
+                              {t(answerKey(item.topic, opt.tone), {
+                                opp: item.opponentName ?? '',
+                                player: item.playerName ?? '',
+                              })}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    );
+                  }
+
                   // CRISE FINANCEIRA — o dilema. Não fala de um jogador só: a
                   // direção põe candidatos em cima da mesa e QUEM decide é o
                   // treinador. Antes, a venda acontecia sozinha e levava o
@@ -431,6 +476,35 @@ export default function Dashboard() {
                 ) : null}
               </DashCard>
             ) : null}
+
+            {/* ADEPTOS — a segunda avaliação do treinador. A direção olha para
+                a tabela; a bancada olha para o que viu no sábado, e o que ela
+                sente enche o estádio, pesa no jogo em casa e chega ao balneário. */}
+            <DashCard title={t('fans.title')} accent={fansColor}>
+              <View style={styles.fansRow}>
+                <View style={{ flex: 1 }}>
+                  <Bar value={fanState.mood} color={fansColor} height={8} />
+                  <Text style={styles.fansBand}>{t(`fans.band.${fanState.band}`)}</Text>
+                </View>
+                <Text style={[styles.fansMood, { color: fansColor }]}>{fanState.mood}</Text>
+              </View>
+              {fanState.reasons.length > 0 ? (
+                <>
+                  <Text style={styles.sub}>{t('fans.why')}</Text>
+                  {fanState.reasons.slice(0, 3).map((r, i) => (
+                    <View key={`${r.key}_${i}`} style={styles.fansReason}>
+                      <Text style={styles.fansReasonText} numberOfLines={1}>{tMsg({ key: r.key, params: r.params })}</Text>
+                      <Text style={[styles.fansDelta, { color: r.delta > 0 ? theme.colors.green : theme.colors.red }]}>
+                        {r.delta > 0 ? `+${r.delta}` : r.delta}
+                      </Text>
+                    </View>
+                  ))}
+                </>
+              ) : (
+                <Text style={styles.sub}>{t('fans.none')}</Text>
+              )}
+              <Text style={styles.sub}>{t('fans.hint')}</Text>
+            </DashCard>
 
             {/* PRÓXIMO JOGO — cartão-herói com os dois escudos */}
             <Spot id={TutorialTargets.nextMatch} style={styles.matchCard}>
@@ -1186,6 +1260,38 @@ const styles = StyleSheet.create({
   crisisRow: {
     flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1), flexWrap: 'wrap',
   },
+
+  // ---- Conferência de imprensa ----
+  pressBox: {
+    backgroundColor: theme.colors.bg, borderRadius: theme.radius.sm,
+    borderLeftWidth: 3, borderLeftColor: theme.colors.accent,
+    padding: theme.spacing(1), marginBottom: theme.spacing(0.75), gap: theme.spacing(0.75),
+  },
+  pressTitle: {
+    color: theme.colors.accent, fontSize: theme.font.small, fontWeight: '900',
+    letterSpacing: 0.5, textTransform: 'uppercase',
+  },
+  pressQuestion: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '700' },
+  pressAnswer: {
+    backgroundColor: theme.colors.surfaceAlt, borderRadius: theme.radius.sm,
+    paddingVertical: theme.spacing(0.85), paddingHorizontal: theme.spacing(1), gap: 2,
+  },
+  pressTone: {
+    color: theme.colors.blue, fontSize: 10, fontWeight: '900',
+    letterSpacing: 0.5, textTransform: 'uppercase',
+  },
+  pressLine: { color: theme.colors.text, fontSize: theme.font.small },
+
+  // ---- Barra dos adeptos ----
+  fansRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1) },
+  fansMood: {
+    color: theme.colors.text, fontSize: 16, fontWeight: '900', fontVariant: ['tabular-nums'],
+    minWidth: 42, textAlign: 'right',
+  },
+  fansBand: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '800' },
+  fansReason: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing(0.75) },
+  fansReasonText: { color: theme.colors.textDim, fontSize: theme.font.small, flex: 1 },
+  fansDelta: { fontSize: theme.font.small, fontWeight: '900', fontVariant: ['tabular-nums'] },
 
   euroBanner: {
     alignSelf: 'stretch', alignItems: 'center', gap: 2,

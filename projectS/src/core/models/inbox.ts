@@ -10,6 +10,7 @@ export const InboxKind = {
   REQUEST: 'REQUEST', // o jogador pede algo (aumento / quer sair)
   OFFER: 'OFFER', // proposta NOSSA por um jogador de outro clube
   CRISIS: 'CRISIS', // dívida grave: é preciso vender alguém (decisão do treinador)
+  PRESS: 'PRESS', // conferência de imprensa: uma pergunta, três respostas
 } as const;
 export type InboxKind = (typeof InboxKind)[keyof typeof InboxKind];
 
@@ -104,7 +105,28 @@ export interface CrisisItem {
   createdDate: string;
 }
 
-export type InboxItem = BidItem | RenewalItem | RequestItem | OfferItem | CrisisItem;
+/**
+ * CONFERÊNCIA DE IMPRENSA — a única entrada da caixa que não fala de dinheiro.
+ *
+ * Não bloqueia o avanço (ver `blockingItems`): é uma oportunidade, não um
+ * imposto. Mas ignorá-la até caducar tem custo — os adeptos leem o silêncio.
+ * O assunto e o texto são resolvidos por `core/game/press.ts`; aqui só vive o
+ * necessário para a UI desenhar a pergunta.
+ */
+export interface PressItem {
+  kind: 'PRESS';
+  id: string;
+  topic: import('../game/press').PressTopic;
+  createdDate: string;
+  expiresDate: string;
+  /** Adversário do próximo jogo, quando a pergunta é sobre ele. */
+  opponentName?: string;
+  /** Jogador em causa (proposta recebida), quando a pergunta é sobre ele. */
+  playerId?: string;
+  playerName?: string;
+}
+
+export type InboxItem = BidItem | RenewalItem | RequestItem | OfferItem | CrisisItem | PressItem;
 
 /**
  * Este item do inbox diz respeito a este jogador?
@@ -115,6 +137,7 @@ export type InboxItem = BidItem | RenewalItem | RequestItem | OfferItem | Crisis
  */
 export function inboxRefersTo(item: InboxItem, playerId: string): boolean {
   if (item.kind === 'CRISIS') return item.candidates.includes(playerId);
+  // PRESS pode não falar de ninguém — `playerId` é opcional e fica undefined.
   return item.playerId === playerId;
 }
 

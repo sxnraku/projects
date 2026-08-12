@@ -30,6 +30,19 @@ const CFG = {
   derbyHomeExtra: 0.05,
   /** …e sai mais cartão. */
   derbyCardFactor: 1.3,
+  /**
+   * Quanto o APOIO da bancada mexe a vantagem de casa, do humor 0 ao 100.
+   *
+   * Calibrado por MEDIÇÃO (1140 jogos por nível), não por instinto. Com 0.06 a
+   * diferença entre um estádio revoltado e um ao rubro valia 1,5 pontos numa
+   * época inteira: direção certa, magnitude invisível. Com 0.11 fica em 4
+   * pontos entre os extremos (26,5 → 30,5 em 19 jogos em casa) e ~2,7 na faixa
+   * que se vive de verdade (humor 30-80) — a margem de uma luta pela
+   * manutenção. Os golos por jogo NÃO se mexem (2.89-2.95 em toda a gama) e o
+   * ponto neutro (55) dá exatamente os mesmos 27,9 de antes desta constante
+   * existir. Continua a empurrar sem decidir.
+   */
+  supportSwing: 0.11,
   /** Livres em zona de remate por jogo (por equipa). */
   freeKicksPer90: 0.95,
   /** Cantos por jogo (por equipa) — escalados pela pressão ofensiva. */
@@ -107,6 +120,11 @@ export interface MatchContext {
    * áspero — a diferença é pequena por lance, mas decide dérbis.
    */
   derby?: boolean;
+  /**
+   * APOIO DA BANCADA da equipa de casa, 0..100 (55 = neutro, o valor implícito
+   * de quem não tem massa adepta simulada). Ver `core/game/fans.ts`.
+   */
+  homeSupport?: number;
 }
 
 function buildSide(
@@ -357,12 +375,15 @@ function simulateMinutes(sim: Sim, from: number, to: number): void {
 
 function buildSim(
   homeClubId: string, awayClubId: string, homeTactic: Tactic, awayTactic: Tactic,
-  players: Record<string, Player>, seed: number, derby: boolean,
+  players: Record<string, Player>, seed: number, derby: boolean, support = 55,
 ): Sim {
   const rng = new Rng(seed);
   const homeStr = computeTeamStrength(homeTactic, players);
   const awayStr = computeTeamStrength(awayTactic, players);
-  const homeAdv = CFG.homeAdvantage + (derby ? CFG.derbyHomeExtra : 0);
+  // 55 é o humor neutro (FAN_NEUTRAL): sem apoio simulado, isto anula-se e o
+  // jogo corre exatamente como antes de os adeptos existirem.
+  const supportAdj = ((Math.max(0, Math.min(100, support)) - 55) / 45) * (CFG.supportSwing / 2);
+  const homeAdv = CFG.homeAdvantage + (derby ? CFG.derbyHomeExtra : 0) + supportAdj;
   homeStr.attack *= homeAdv;
   homeStr.defence *= homeAdv;
   const home = buildSide(homeClubId, 'HOME', homeStr, homeTactic, players);
@@ -448,7 +469,10 @@ export function simulateMatch(
   context?: MatchContext,
 ): MatchResult {
   const seed = deriveSeed(baseSeed, homeClubId, awayClubId);
-  const sim = buildSim(homeClubId, awayClubId, homeTactic, awayTactic, players, seed, context?.derby === true);
+  const sim = buildSim(
+    homeClubId, awayClubId, homeTactic, awayTactic, players, seed,
+    context?.derby === true, context?.homeSupport,
+  );
   const ordered = (changes ?? [])
     .filter((c) => c.minute >= 1 && c.minute < CFG.matchMinutes)
     .sort((a, b) => a.minute - b.minute);

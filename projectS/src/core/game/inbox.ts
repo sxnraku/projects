@@ -28,6 +28,7 @@ import {
   TransferOffer,
 } from '../economy';
 import { ensureValidLineup } from './lineup';
+import { fansOnSale, squadShare } from './fans';
 
 /**
  * Propostas de compra pelos jogadores do clube gerido — o motor de decisões.
@@ -60,6 +61,9 @@ export function pruneInbox(state: GameState): void {
     // As propostas NOSSAS referem jogadores de outros clubes — têm ciclo de
     // vida próprio (pruneOffers), por isso escapam ao filtro do plantel.
     if (it.kind === 'OFFER') return true;
+    // A conferência de imprensa não fala (necessariamente) de um jogador nosso;
+    // tem prazo próprio e quem a caduca é `expirePress`, que cobra o silêncio.
+    if (it.kind === 'PRESS') return true;
     // A crise financeira não se refere a UM jogador — mantém-se até ser
     // decidida (ou até as contas melhorarem sozinhas, ex.: prémio de jogo).
     if (it.kind === 'CRISIS') {
@@ -276,6 +280,11 @@ export function acceptBid(state: GameState, bidId: string, sellOn = 0): BidDecis
   const fee = Math.round((bid.fee * sellOnFeeFactor(pct)) / 1000) * 1000;
 
   const sellerId = player.clubId;
+  // O peso dele NO PLANTEL mede-se ANTES da venda — depois de sair já não conta
+  // para o cálculo e a bancada nunca reagiria a perder o melhor jogador.
+  const share = sellerId === state.meta.managedClubId
+    ? squadShare(state, naturalOverall(player)) : 0;
+  const playerName = `${player.firstName} ${player.lastName}`;
   const offer: TransferOffer = {
     playerId: bid.playerId,
     fromClubId: bid.fromClubId,
@@ -298,6 +307,7 @@ export function acceptBid(state: GameState, bidId: string, sellOn = 0): BidDecis
 
   // Remove esta proposta e quaisquer outras pelo mesmo jogador.
   state.inbox = state.inbox.filter((it) => it.kind !== 'BID' || it.playerId !== bid.playerId);
+  if (share > 0) fansOnSale(state, playerName, share);
   return { ok: true, fee, sellOn: pct };
 }
 
@@ -437,6 +447,7 @@ export function resolveCrisis(state: GameState, itemId: string, playerId: string
   if (!player || !club || !fin) return { ok: false, amount: 0, errorKey: 'crisis.err.invalid' };
 
   const amount = Math.round(player.marketValue * DISTRESS_SALE_RATE);
+  const share = squadShare(state, naturalOverall(player)); // antes de o tirar do plantel
   club.squad = club.squad.filter((id) => id !== playerId);
   player.clubId = null;
   player.contractUntil = null;
@@ -446,7 +457,10 @@ export function resolveCrisis(state: GameState, itemId: string, playerId: string
   ensureValidLineup(managedId, club.squad, state.players, state.tactics);
 
   state.inbox = state.inbox.filter((it) => it.id !== itemId);
-  return { ok: true, amount, playerName: `${player.firstName} ${player.lastName}` };
+  const playerName = `${player.firstName} ${player.lastName}`;
+  // Vender à força também conta — e a bancada não distingue "tive de" de "quis".
+  fansOnSale(state, playerName, share);
+  return { ok: true, amount, playerName };
 }
 
 /** Marca/desmarca um jogador na lista de transferências. */

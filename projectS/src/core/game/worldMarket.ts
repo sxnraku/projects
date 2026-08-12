@@ -18,6 +18,7 @@ import { Rng, deriveSeed } from '../engine/rng';
 import { WORLD_TEAMS } from '../data/world/worldTeams';
 import { loadCountryPlayers, COUNTRIES } from '../data/world/playerIndex';
 import { computeMarketValue, internationalPrestige, moveMoney } from '../economy';
+import { fansOnArrival } from './fans';
 import { reachability, availableBudget, Reach } from './offers';
 import { makePlayerFromBase, decodeTuple } from './newGame';
 
@@ -211,5 +212,6 @@ export function signWorldTarget(state: GameState, targetId: string): WorldSignRe
   state.players[player.id] = player;
   club.squad.push(player.id);
   state.career.signedWorld = [...(state.career.signedWorld ?? []), targetId];
+  fansOnArrival(state, player); // reforço vindo de fora conta como qualquer outro
   return { ok: true, reasonKey: 'world.sign.done', player };
 }

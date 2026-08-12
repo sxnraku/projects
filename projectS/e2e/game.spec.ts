@@ -167,6 +167,143 @@ test.describe('Football Legacy — app real', () => {
     await page.screenshot({ path: 'e2e/__screens__/manual-search.png', fullPage: true });
   });
 
+  test('o cartão dos adeptos mostra humor e faixa', async ({ page }) => {
+    await newCareer(page);
+    await skipTutorial(page);
+
+    // O cartão vive no Início, por baixo da caixa de entrada.
+    await expect(page.getByText('Adeptos', { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+    // A faixa é sempre uma das cinco — é o que se lê de relance.
+    await expect(
+      page.getByText(/Em revolta|Contestação|Expectantes|Contentes|Em delírio/).first(),
+    ).toBeVisible();
+    // E a explicação do que o humor faz, para não ser um número decorativo.
+    await expect(page.getByText(/enche ou esvazia o estádio/)).toBeVisible();
+    await page.screenshot({ path: 'e2e/__screens__/fans.png', fullPage: true });
+  });
+
+  test('a ficha do jogador mostra os amarelos acumulados', async ({ page }) => {
+    await newCareer(page);
+    await skipTutorial(page);
+
+    await page.getByText('Plantel', { exact: true }).first().click();
+    // Abre a ficha do guarda-redes (a primeira linha da lista, ordenada por posição).
+    await page.getByText('GK', { exact: true }).first().click();
+    // Confirma que estamos MESMO na ficha antes de procurar a disciplina —
+    // sem isto, um clique falhado passava despercebido.
+    await expect(page.getByText('Potencial')).toBeVisible({ timeout: 20_000 });
+    // A linha de disciplina tem de estar aqui: é onde se decide poupar (ou não)
+    // um titular que está no limite.
+    await expect(page.getByText('Amarelos').first()).toBeVisible();
+  });
+
+  test('o manual explica adeptos e imprensa, e diz onde estão', async ({ page }) => {
+    await newCareer(page);
+    await skipTutorial(page);
+
+    await page.getByText('Clube', { exact: true }).first().click();
+    await page.getByText(T.manual).first().click();
+    await expect(page.getByText('Como se joga')).toBeVisible({ timeout: 20_000 });
+
+    await page.getByPlaceholder('Procurar no manual…').fill('bravata');
+    await expect(page.getByText('Conferências de imprensa').first()).toBeVisible();
+    await expect(page.getByText(/Início › caixa de entrada/)).toBeVisible();
+
+    await page.getByPlaceholder('Procurar no manual…').fill('amarelos');
+    await expect(page.getByText('Amarelos acumulados').first()).toBeVisible();
+    await page.screenshot({ path: 'e2e/__screens__/manual-new.png', fullPage: true });
+  });
+
+  test('a imprensa acaba por aparecer e a resposta muda os adeptos', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await newCareer(page);
+    await skipTutorial(page);
+
+    /**
+     * ⚠ Depois de se ir ao ecrã de jogo e voltar, o Início fica montado DUAS
+     * vezes: a cópia antiga continua na árvore com caixa 0×0 (medida numa sonda
+     * ao DOM — `visibility` e `opacity` normais, só o tamanho a zero). Um
+     * `getByText(...).first()` apanha essa cópia morta e o clique falha com
+     * "Element is not visible", mesmo com `force`.
+     *
+     * Daí o `.filter({ visible: true })` em tudo o que se toca aqui, e o uso do
+     * `innerText` do body — que só devolve texto REALMENTE desenhado — para as
+     * verificações. Quem escrever testes novos que naveguem para fora e voltem
+     * tem de fazer o mesmo.
+     */
+    const live = (label: string | RegExp) => page.getByText(label).filter({ visible: true }).first();
+    const tap = async (label: string | RegExp) => {
+      const el = live(label);
+      await el.waitFor({ state: 'visible', timeout: 20_000 });
+      await el.scrollIntoViewIfNeeded().catch(() => {});
+      await el.click();
+    };
+    /**
+     * "Está no ecrã?" — contando ELEMENTOS visíveis, não o `innerText` do body.
+     * O `innerText` só devolve o que cabe na janela: tudo o que esteja abaixo da
+     * dobra, dentro do ScrollView, fica de fora. Foi por isso que uma versão
+     * anterior deste teste jogou 8 jornadas seguidas sem "ver" a conferência
+     * que estava lá, mais abaixo na página.
+     */
+    const has = async (needle: string) =>
+      (await page.getByText(needle).filter({ visible: true }).count()) > 0;
+
+    /** Joga uma jornada até ao fim e volta ao Início. */
+    async function playRound() {
+      // Propostas BLOQUEIAM o avanço (regra do jogo): dispensam-se todas, senão
+      // o botão fica em "⚠ Resolve a caixa de entrada" e a jornada não anda.
+      for (let i = 0; i < 10; i++) {
+        const xs = page.getByText('✕').filter({ visible: true });
+        if ((await xs.count()) === 0) break;
+        await xs.first().click();
+      }
+      await tap('Jogar ▶');
+      // Com o plantel cansado o jogo abre primeiro uma folha a avisar. Faz
+      // parte do jogo — o teste responde-lhe e segue.
+      if (await has('Tens titulares exaustos')) await tap('Jogar na mesma');
+      await expect.poll(has.bind(null, '⏩ Fim'), { timeout: 30_000 }).toBe(true);
+      await tap('⏩ Fim');
+      // O fecho pode encadear dois jogos (noite europeia + liga).
+      for (let i = 0; i < 3; i++) {
+        if (!(await has('PRÓXIMO JOGO ▶'))) break;
+        await tap('PRÓXIMO JOGO ▶');
+        await tap('⏩ Fim');
+      }
+      await tap('CONTINUAR ▶');
+      // O relatório da semana abre por cima. Fecha-se com "CONTINUAR ›" — o
+      // chevron distingue-o do "CONTINUAR ▶" do ecrã de jogo.
+      await expect.poll(has.bind(null, 'CONTINUAR ›'), { timeout: 30_000 }).toBe(true);
+      await tap('CONTINUAR ›');
+      await expect.poll(has.bind(null, 'CONTINUAR ›'), { timeout: 20_000 }).toBe(false);
+    }
+
+    // A conferência não chega à 1.ª jornada de propósito (seria ruído). Joga-se
+    // até ela aparecer — se em 8 jornadas não aparecer nenhuma, o sistema está
+    // morto e o teste tem de falhar, não passar em silêncio.
+    let found = false;
+    for (let round = 0; round < 8 && !found; round++) {
+      await playRound();
+      found = await has('Conferência de imprensa');
+    }
+    expect(found, 'nenhuma conferência de imprensa em 8 jornadas').toBe(true);
+
+    await page.screenshot({ path: 'e2e/__screens__/press.png', fullPage: true });
+
+    // A pergunta traz sempre TRÊS saídas — uma conferência com duas não é uma
+    // decisão. Quais são as três depende do assunto.
+    const tones: string[] = [];
+    for (const tone of ['Diplomático', 'Defender o plantel', 'Bravata', 'Apontar o dedo']) {
+      if (await has(tone)) tones.push(tone);
+    }
+    expect(tones.length, `tons encontrados: ${tones.join(', ')}`).toBeGreaterThanOrEqual(3);
+
+    // Responder fecha a conferência.
+    await tap('Diplomático');
+    await expect.poll(has.bind(null, 'Conferência de imprensa'), { timeout: 20_000 }).toBe(false);
+    expect(errors.join('\n')).toBe('');
+  });
+
   test('jogar uma jornada abre a partida e mostra o marcador', async ({ page }) => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));

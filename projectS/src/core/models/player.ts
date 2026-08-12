@@ -55,8 +55,14 @@ export interface PlayerCondition {
    * saldo — é isso que faz valer a pena pedi-la (e custa mais no ordenado).
    */
   loanBuyOption?: number;
-  // Suspensão: nº de jogos que ainda tem de falhar (vermelho → 1). 0/undefined = apto.
+  // Suspensão: nº de jogos que ainda tem de falhar. 0/undefined = apto.
   suspended?: number;
+  /**
+   * AMARELOS ACUMULADOS na época. Aos 5 o jogador falha um jogo e o contador
+   * desce 5 (ver `core/game/discipline.ts`). Reinicia no rollover, como os
+   * outros totalizadores. Opcional: saves antigos entram a 0 e nada se perde.
+   */
+  seasonYellows?: number;
   /**
    * Data (ISO) até à qual o jogador NÃO faz pedidos ao treinador (aumento/saída).
    * Arranca ao assinar e depois de cada pedido resolvido — sem isto o mesmo

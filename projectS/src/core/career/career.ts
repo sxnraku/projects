@@ -190,6 +190,21 @@ export interface CareerState {
   signingsMade?: number;
   signings?: SigningRecord[];
 
+  /**
+   * ADEPTOS do clube gerido: humor, motivos e semanas de contestação. Vive aqui
+   * (blob JSON gravado inteiro) para não precisar de migração do save, e muda
+   * de clube contigo — cada praça começa com o seu próprio nível de exigência.
+   * Ver `core/game/fans.ts`.
+   */
+  fans?: import('../game/fans').FanState;
+
+  /**
+   * IMPRENSA: a conferência já dada esta jornada e a bravata em aberto (uma
+   * resposta atrevida que o próximo jogo confirma ou desmente).
+   * Ver `core/game/press.ts`.
+   */
+  press?: import('../game/press').PressMemory;
+
   /** Melhoria de instalação GRÁTIS por vídeo disponível (fica até ser usada). */
   freeUpgradePending?: boolean;
   /** Jornadas jogadas desde a última melhoria grátis (nova a cada 5). */

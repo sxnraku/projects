@@ -19,6 +19,12 @@ export interface SeasonContext {
    * é o que os testes e as simulações isoladas querem.
    */
   isDerby?: (homeClubId: string, awayClubId: string) => boolean;
+  /**
+   * Apoio da bancada (0..100) do clube que joga em casa. Só o clube gerido tem
+   * massa adepta simulada; para todos os outros isto devolve undefined e o
+   * motor usa o valor neutro. Ver `core/game/fans.ts`.
+   */
+  homeSupport?: (homeClubId: string) => number | undefined;
 }
 
 /**
@@ -54,7 +60,10 @@ export function playRound(
       // Deriva por jornada+jogo para que cada partida seja única e reproduzível.
       ctx.baseSeed ^ (round * 1000003),
       undefined,
-      { derby: ctx.isDerby?.(fx.homeClubId, fx.awayClubId) === true },
+      {
+        derby: ctx.isDerby?.(fx.homeClubId, fx.awayClubId) === true,
+        homeSupport: ctx.homeSupport?.(fx.homeClubId),
+      },
     );
 
     fx.result = result;

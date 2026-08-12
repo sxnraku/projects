@@ -6,6 +6,7 @@ import { MaybeSpot, Spot } from '../../src/ui/tutorial/Spot';
 import { TutorialTargets } from '../../src/ui/tutorial/registry';
 import { isWonderkid, lineupWarnings, ROTATION_ALERT_FITNESS } from '../../src/core/game';
 import { individualFocus } from '../../src/core/training';
+import { isAtRisk } from '../../src/core/game';
 import { fullName, naturalOverall, naturalOverallFine, Player, POSITION_GROUP, PositionGroup } from '../../src/core/models';
 import { money, to100, wage } from '../../src/ui/format';
 import { useT } from '../../src/ui/i18n';
@@ -189,6 +190,8 @@ function PlayerRow({
   // Plano de treino individual — só se via na ficha do jogador; agora lê-se na lista.
   const focus = individualFocus(player);
   const retrain = player.condition.retraining;
+  const yellows = player.condition.seasonYellows ?? 0;
+  const atRisk = isAtRisk(yellows);
   // Quem não pode jogar não deve exigir leitura: a linha inteira apaga-se.
   const unavailable = injured || player.condition.fitness < 45;
 
@@ -222,6 +225,10 @@ function PlayerRow({
             {expiring ? <Text style={{ color: theme.colors.yellow }}> ⌛</Text> : null}
             {injured ? <Text style={{ color: theme.colors.red }}> 🚑</Text> : null}
             {player.condition.suspended ? <Text> 🟥</Text> : null}
+            {/* A UM AMARELO DO CASTIGO. É o aviso que faltava: sem ele, um
+                titular desaparecia do onze na jornada seguinte sem que nada,
+                em lado nenhum, tivesse dado sinal. */}
+            {!player.condition.suspended && atRisk ? <Text style={{ color: theme.colors.yellow }}> 🟨</Text> : null}
             {player.condition.loanOwnerId ? <Text style={{ color: theme.colors.blue }}> {t('loan.badge')}</Text> : null}
             {focus ? <Text style={{ color: theme.colors.green }}> 🎯</Text> : null}
             {retrain ? <Text style={{ color: theme.colors.blue }}> ⇄</Text> : null}
@@ -233,6 +240,11 @@ function PlayerRow({
             <Text style={[styles.subStat, { color: fitnessColor(player.condition.fitness) }]}>
               · {t('squad.sort.fit')} {player.condition.fitness}
             </Text>
+            {yellows > 0 ? (
+              <Text style={[styles.subStat, { color: atRisk ? theme.colors.yellow : theme.colors.textDim }]}>
+                · 🟨 {yellows}
+              </Text>
+            ) : null}
           </View>
           {/* Segunda linha só para quem tem trabalho à parte — o plantel normal
               não ganha ruído por causa de dois ou três jogadores. */}

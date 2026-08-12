@@ -66,4 +66,5 @@ Thumbs.db
 web-build/
 test-results/
 playwright-report/
+test-results/
 e2e/__screens__/

@@ -61,6 +61,7 @@ export const MANUAL: ManualChapter[] = [
       e('morale', 'w'),
       e('injury', 'w'),
       e('suspension', 'w'),
+      e('cards', 'w'),
       e('relations', 'w'),
     ],
   },
@@ -139,6 +140,8 @@ export const MANUAL: ManualChapter[] = [
     entries: [
       e('objective', 'w'),
       e('confidence', 'w'),
+      e('fans', 'w'),
+      e('press', 'w'),
       e('sack', 'w'),
       e('jobs', 'w'),
       e('history', 'w'),
