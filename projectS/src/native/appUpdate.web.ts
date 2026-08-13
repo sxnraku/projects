@@ -7,7 +7,7 @@
  */
 import Constants from 'expo-constants';
 
-const FALLBACK_VERSION_CODE = 40;
+const FALLBACK_VERSION_CODE = 42;
 
 export const APP_VERSION_CODE =
   Number(Constants.expoConfig?.android?.versionCode) || FALLBACK_VERSION_CODE;

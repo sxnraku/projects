@@ -2,12 +2,16 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useGameStore } from '../src/state/gameStore';
+import {
+  situationOf, TALK_TONES, talkLineKey, talkReactionKey,
+  type TalkOutcome, type TalkTone,
+} from '../src/core/game';
 import { GameState, Mentality, MatchEvent, MatchResult, shortName, Tactic, Tempo } from '../src/core/models';
 import { theme } from '../src/ui/theme';
 import { useT } from '../src/ui/i18n';
 import { Body, Button, Card, Crest, H1, Screen } from './components';
 import { GoalClip } from '../src/ui/goalClip/GoalClip';
-import { haptic, playSound, startAmbience, stopAmbience } from '../src/ui/sound';
+import { haptic, playCue, playSound, startAmbience, stopAmbience } from '../src/ui/sound';
 import { showRewarded } from '../src/native/ads';
 
 const MENTALITIES: Mentality[] = ['DEFENSIVE', 'BALANCED', 'ATTACKING'];
@@ -42,6 +46,7 @@ export default function Match() {
   const replayLastMatch = useGameStore((s) => s.replayLastMatch);
   const replayedFixtures = useGameStore((s) => s.replayedFixtures);
   const applyMatchChange = useGameStore((s) => s.applyMatchChange);
+  const teamTalk = useGameStore((s) => s.teamTalk);
   const applyEuroMatchChange = useGameStore((s) => s.applyEuroMatchChange);
   const clearMatchAdjustments = useGameStore((s) => s.clearMatchAdjustments);
   const [busyAd, setBusyAd] = useState(false);
@@ -49,6 +54,10 @@ export default function Match() {
   const [queueIdx, setQueueIdx] = useState(0);
   const [halftimeDone, setHalftimeDone] = useState(false); // o prompt de intervalo já apareceu?
   const [showSub, setShowSub] = useState(false);
+  // PALESTRA: abre ao intervalo ANTES das substituicoes (fala-se primeiro, mexe-se
+  // depois). O `boost` fica pendente ate ser aplicado com o ajuste seguinte.
+  const [showTalk, setShowTalk] = useState(false);
+  const [talkBoost, setTalkBoost] = useState<number | undefined>(undefined);
   // Onze ao vivo (persiste entre janelas de substituição) + nº de subs já feitas.
   const [liveTactic, setLiveTactic] = useState<Pick<Tactic, 'lineup' | 'mentality' | 'tempo'> | null>(null);
   const [subsUsed, setSubsUsed] = useState(0);
@@ -89,7 +98,7 @@ export default function Match() {
 
   /** Reação da bancada a um golo, do lado certo. */
   const roar = useCallback((side: 'HOME' | 'AWAY' | null) => {
-    if (side && ourSide && side === ourSide) { playSound('goal'); haptic('success'); }
+    if (side && ourSide && side === ourSide) { playCue('goal'); haptic('success'); }
     else { playSound('goalAgainst'); haptic('warning'); }
   }, [ourSide]);
 
@@ -186,7 +195,8 @@ export default function Match() {
   useEffect(() => {
     if (canAdjust && !halftimeDone && !finished && minute >= 45) {
       setPaused(true);
-      setShowSub(true);
+      // A palestra vem primeiro: e o intervalo, fala-se antes de mexer.
+      setShowTalk(true);
     }
   }, [minute, halftimeDone, finished, canAdjust]);
 
@@ -262,6 +272,10 @@ export default function Match() {
     (result.homeClubId === managedId && live.goalsHome > live.goalsAway) ||
     (result.awayClubId === managedId && live.goalsAway > live.goalsHome);
   const drew = live.goalsHome === live.goalsAway;
+  // Marcador do ponto de vista do clube gerido — e o que a palestra le.
+  const managedIsHome = result?.homeClubId === managedId;
+  const myGoals = managedIsHome ? live.goalsHome : live.goalsAway;
+  const oppGoals = managedIsHome ? live.goalsAway : live.goalsHome;
 
   const playerName = (id: string | null) => {
     const p = id ? state.players[id] : null;
@@ -461,6 +475,20 @@ export default function Match() {
         <View style={{ height: 24 }} />
       </ScrollView>
 
+      {/* PALESTRA DO INTERVALO — o que se diz vale pelo que o marcador diz */}
+      {showTalk && state && managedId ? (
+        <TalkSheet
+          goalsFor={myGoals}
+          goalsAgainst={oppGoals}
+          onPick={(tone) => teamTalk(tone, myGoals, oppGoals)}
+          onDone={(outcome) => {
+            setTalkBoost(outcome?.boost);
+            setShowTalk(false);
+            setShowSub(true); // agora sim, as substituicoes
+          }}
+        />
+      ) : null}
+
       {/* PAINEL DE SUBSTITUIÇÕES — intervalo ou ao vivo (re-simula a partir do minuto) */}
       {showSub && state && managedId && liveTactic ? (
         <SubSheet
@@ -473,15 +501,29 @@ export default function Match() {
             const at = Math.max(1, minute); // muda a partir deste minuto
             const prev = liveTactic.lineup;
             const changed = lineup.filter((s, i) => s.playerId !== prev[i]?.playerId).length;
-            if (isEuroLeaguePhase && fixture) applyEuroMatchChange(fixture.id, at, lineup, mentality, tempo);
-            else applyMatchChange(at, lineup, mentality, tempo);
+            if (isEuroLeaguePhase && fixture) applyEuroMatchChange(fixture.id, at, lineup, mentality, tempo, talkBoost);
+            else applyMatchChange(at, lineup, mentality, tempo, talkBoost);
+            setTalkBoost(undefined); // ja viajou no ajuste; nao se aplica duas vezes
             setLiveTactic({ lineup, mentality, tempo });
             setSubsUsed((n) => n + changed);
             setHalftimeDone(true);
             setShowSub(false);
             setPaused(false);
           }}
-          onSkip={() => { setHalftimeDone(true); setShowSub(false); setPaused(false); }}
+          onSkip={() => {
+            // Nao mexer no onze nao anula a palestra: sem isto, quem falasse e
+            // nao trocasse ninguem perdia o efeito do que tinha dito.
+            if (talkBoost != null && talkBoost !== 1 && liveTactic) {
+              const at = Math.max(1, minute);
+              if (isEuroLeaguePhase && fixture) {
+                applyEuroMatchChange(fixture.id, at, liveTactic.lineup, liveTactic.mentality, liveTactic.tempo, talkBoost);
+              } else {
+                applyMatchChange(at, liveTactic.lineup, liveTactic.mentality, liveTactic.tempo, talkBoost);
+              }
+              setTalkBoost(undefined);
+            }
+            setHalftimeDone(true); setShowSub(false); setPaused(false);
+          }}
         />
       ) : null}
 
@@ -612,6 +654,82 @@ function SubSheet({
           <Pressable style={styles.htSkip} onPress={onSkip}>
             <Text style={styles.htSkipText}>{t('match.ht.skip')}</Text>
           </Pressable>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/**
+ * PALESTRA DO INTERVALO.
+ *
+ * Duas fases na mesma folha: escolher o tom e depois ler a reacao do balneario.
+ * A reacao mostra-se SEMPRE antes de seguir — sem ela o jogador nunca aprendia
+ * que exigir a ganhar por dois e diferente de exigir a perder por dois, e a
+ * mecanica reduzia-se a carregar num botao ao acaso.
+ */
+function TalkSheet({
+  goalsFor, goalsAgainst, onPick, onDone,
+}: {
+  goalsFor: number;
+  goalsAgainst: number;
+  onPick: (tone: TalkTone) => TalkOutcome | null;
+  onDone: (outcome: TalkOutcome | null) => void;
+}) {
+  const t = useT();
+  const situation = situationOf(goalsFor, goalsAgainst);
+  const [outcome, setOutcome] = useState<TalkOutcome | null>(null);
+  const [picked, setPicked] = useState<TalkTone | null>(null);
+
+  return (
+    <View style={styles.overlayFill} pointerEvents="box-none">
+      <View style={styles.htBackdrop}>
+        <View style={styles.htSheet}>
+          <Text style={styles.htTitle}>{t('talk.title')}</Text>
+          <Text style={styles.talkSit}>
+            {t(`talk.sit.${situation}`)} · {goalsFor}-{goalsAgainst}
+          </Text>
+
+          {picked === null ? (
+            <>
+              <Text style={styles.talkSub}>{t('talk.sub')}</Text>
+              {TALK_TONES.map((tone) => (
+                <Pressable
+                  key={tone}
+                  style={styles.talkOption}
+                  onPress={() => { setPicked(tone); setOutcome(onPick(tone)); }}
+                >
+                  <Text style={styles.talkTone}>{t(`talk.tone.${tone}`)}</Text>
+                  <Text style={styles.talkLine}>{t(talkLineKey(tone, situation))}</Text>
+                </Pressable>
+              ))}
+              <Pressable style={styles.htSkip} onPress={() => onDone(null)}>
+                <Text style={styles.htSkipText}>{t('talk.skip')}</Text>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <Text style={styles.talkSaid}>{t(talkLineKey(picked, situation))}</Text>
+              <Text
+                style={[
+                  styles.talkReact,
+                  { color: outcome?.positive ? theme.colors.green : theme.colors.red },
+                ]}
+              >
+                {outcome ? t(talkReactionKey(outcome)) : t('talk.react.flat')}
+              </Text>
+              <Text style={styles.talkEffect}>
+                {!outcome || outcome.points === 0
+                  ? t('talk.effect.flat')
+                  : t(outcome.points > 0 ? 'talk.effect.up' : 'talk.effect.down', {
+                      m: outcome.morale > 0 ? `+${outcome.morale}` : String(outcome.morale),
+                    })}
+              </Text>
+              <Pressable style={styles.htApply} onPress={() => onDone(outcome)}>
+                <Text style={styles.htApplyText}>{t('match.ht.apply')}</Text>
+              </Pressable>
+            </>
+          )}
         </View>
       </View>
     </View>
@@ -869,6 +987,18 @@ const styles = StyleSheet.create({
   htApplyText: { color: '#fff', fontSize: theme.font.h3, fontWeight: '800' },
   htSkip: { alignItems: 'center', paddingVertical: theme.spacing(1) },
   htSkipText: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700' },
+  talkSit: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '800', textAlign: 'center', marginBottom: theme.spacing(1) },
+  talkSub: { color: theme.colors.textDim, fontSize: theme.font.small, textAlign: 'center', marginBottom: theme.spacing(1) },
+  talkOption: {
+    backgroundColor: theme.colors.surfaceAlt, borderRadius: theme.radius.sm,
+    paddingVertical: theme.spacing(1), paddingHorizontal: theme.spacing(1.25),
+    marginBottom: theme.spacing(0.75), gap: 3,
+  },
+  talkTone: { color: theme.colors.blue, fontSize: 11, fontWeight: '900', letterSpacing: 0.5, textTransform: 'uppercase' },
+  talkLine: { color: theme.colors.text, fontSize: theme.font.small },
+  talkSaid: { color: theme.colors.text, fontSize: theme.font.body, fontStyle: 'italic', textAlign: 'center', marginBottom: theme.spacing(1.25) },
+  talkReact: { fontSize: theme.font.body, fontWeight: '800', textAlign: 'center' },
+  talkEffect: { color: theme.colors.textDim, fontSize: theme.font.small, textAlign: 'center', marginTop: 4 },
 
   segment: { flexDirection: 'row', backgroundColor: theme.colors.bg, borderRadius: theme.radius.sm, borderWidth: 1, borderColor: theme.colors.border, padding: 3, gap: 3 },
   segItem: { flex: 1, paddingVertical: theme.spacing(0.9), alignItems: 'center', justifyContent: 'center', borderRadius: 4 },

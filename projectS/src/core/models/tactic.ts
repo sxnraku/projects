@@ -1,4 +1,5 @@
-import { Position } from './enums';
+import { POSITION_GROUP, Position } from './enums';
+import { effectiveOverallFine } from './player';
 import { PlayerRole } from './roles';
 
 /**
@@ -129,4 +130,99 @@ export function isValidLineup(t: Tactic): boolean {
   const ids = t.lineup.map((s) => s.playerId);
   const unique = new Set(ids);
   return t.lineup.length === 11 && unique.size === 11;
+}
+
+/**
+ * INSTRUÇÕES CONTRA O ADVERSÁRIO.
+ *
+ * Vivem aqui, na camada de modelos, e não em `core/game`, por uma razão
+ * concreta: o MOTOR precisa delas para simular, e o motor não pode importar de
+ * `core/game` (que já importa do motor) sem criar um ciclo. O relatório de
+ * olheiro e a interface de escolha ficam em `core/game/opponent.ts`.
+ *
+ * Cada instrução tem um custo próprio — sem isso seriam dois botões de "ganhar
+ * mais", e não uma decisão.
+ */
+export interface OppositionPlan {
+  /**
+   * Marcação individual ao MELHOR jogador deles. Guarda a INTENÇÃO, não um id:
+   * continua a valer na semana seguinte, contra outro clube e outro craque.
+   */
+  markStar?: boolean;
+  /** Fechar as alas: menos cantos e menos jogo aéreo deles. */
+  blockWings?: boolean;
+}
+
+/** Quanto a marcação individual apaga o melhor deles. */
+export const MARK_STAR_CUT = 0.45;
+/** …e o que custa ao nosso meio-campo (um homem ocupado a marcar). */
+export const MARK_STAR_COST = 0.97;
+/** Quanto fechar as alas corta nos cantos deles. */
+export const BLOCK_WINGS_CORNERS = 0.7;
+/** …e no perigo aéreo deles. */
+export const BLOCK_WINGS_AERIAL = 0.82;
+/**
+ * …e no ataque deles, que perde a largura por onde entrava.
+ *
+ * Medido: sem esta parte, fechar as alas cortava 32% dos cantos do adversário
+ * mas custava-nos mais golos do que os que evitava — era uma opção que NUNCA
+ * compensava, e uma opção que nunca compensa não é uma decisão, é uma armadilha.
+ */
+export const BLOCK_WINGS_FOE_ATTACK = 0.965;
+/** …e o que custa ao nosso ataque (também perdemos largura). */
+export const BLOCK_WINGS_COST = 0.98;
+
+export function hasPlan(plan: OppositionPlan | undefined): boolean {
+  return !!plan && (plan.markStar === true || plan.blockWings === true);
+}
+
+/**
+ * O melhor jogador de campo de um onze. É este que a marcação individual
+ * apaga; o motor precisa de o encontrar sem conhecer o relatório de olheiro.
+ */
+export function bestOf(
+  tactic: Tactic, players: Record<string, import('./player').Player>,
+): string | null {
+  let best: string | null = null;
+  let bestScore = -1;
+  for (const slot of tactic.lineup) {
+    const p = players[slot.playerId];
+    if (!p || POSITION_GROUP[slot.position] === 'GOALKEEPER') continue;
+    const score = effectiveOverallFine(p, slot.position);
+    if (score > bestScore) { bestScore = score; best = p.id; }
+  }
+  return best;
+}
+
+/**
+ * FORÇA POR SETOR, na mesma régua que o campo mostra por jogador (0-100).
+ *
+ * Existe porque o cartão "A minha equipa" mostrava `computeTeamStrength × 5`,
+ * que é OUTRA coisa: essa inclui os multiplicadores da tática (mentalidade,
+ * linha, ritmo), a forma, a moral e a frescura, e distribui cada jogador por
+ * várias zonas conforme o papel. O resultado era um meio-campo a "77" num onze
+ * onde o melhor médio tinha 68 — números que não batiam com nada do que o
+ * utilizador via no plantel.
+ *
+ * Isto é a média simples do overall EFETIVO dos jogadores de cada zona, que é
+ * exatamente o número desenhado em cima de cada camisola. O guarda-redes conta
+ * para a defesa, como conta na leitura de qualquer adepto.
+ */
+export function sectorRatings(
+  tactic: Tactic, players: Record<string, import('./player').Player>,
+): { def: number; mid: number; att: number } {
+  const sum = { DEFENCE: 0, MIDFIELD: 0, ATTACK: 0 };
+  const n = { DEFENCE: 0, MIDFIELD: 0, ATTACK: 0 };
+  for (const slot of tactic.lineup) {
+    const p = players[slot.playerId];
+    if (!p) continue;
+    const group = POSITION_GROUP[slot.position];
+    // O guarda-redes soma à defesa: é lá que ele defende.
+    const zone = group === 'GOALKEEPER' ? 'DEFENCE' : group;
+    sum[zone] += effectiveOverallFine(p, slot.position);
+    n[zone] += 1;
+  }
+  const avg = (z: 'DEFENCE' | 'MIDFIELD' | 'ATTACK') =>
+    (n[z] > 0 ? Math.round((sum[z] / n[z]) * 5) : 0);
+  return { def: avg('DEFENCE'), mid: avg('MIDFIELD'), att: avg('ATTACK') };
 }

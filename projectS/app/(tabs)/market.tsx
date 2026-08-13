@@ -28,6 +28,25 @@ function potText(min: number, max: number, exact: boolean): string {
   return exact ? String(min) : `${min}-${max}`;
 }
 
+/**
+ * Degraus de preço para os filtros do mercado.
+ *
+ * Escala por saltos e não linear: entre 0 e 20M uma escala linear obrigaria a
+ * dezenas de toques. Assim chega-se a qualquer ordem de grandeza em poucos.
+ */
+const PRICE_STEPS = [
+  0, 100_000, 250_000, 500_000, 750_000, 1_000_000, 1_500_000, 2_000_000,
+  3_000_000, 5_000_000, 7_500_000, 10_000_000, 15_000_000, 20_000_000,
+  30_000_000, 50_000_000, 75_000_000, 100_000_000,
+];
+
+function stepPrice(current: number, dir: 1 | -1): number {
+  const i = PRICE_STEPS.indexOf(current);
+  const from = i >= 0 ? i : PRICE_STEPS.findIndex((v) => v > current);
+  const next = Math.max(0, Math.min(PRICE_STEPS.length - 1, (from < 0 ? 0 : from) + dir));
+  return PRICE_STEPS[next]!;
+}
+
 export default function Market() {
   const t = useT();
   const router = useRouter();
@@ -68,6 +87,10 @@ export default function Market() {
   const [posFilter, setPosFilter] = useState<PositionGroup | 'ALL'>('ALL');
   const [minOvr, setMinOvr] = useState(0); // escala 0-100
   const [affordOnly, setAffordOnly] = useState(false);
+  // Intervalo de PREÇO, em euros. Independente do saldo: quem tem 20M e quer
+  // gastar 5M precisa de cortar a lista, e o "só acessíveis" não faz isso.
+  const [priceMin, setPriceMin] = useState(0);
+  const [priceMax, setPriceMax] = useState(0); // 0 = sem teto
 
   // PERF: a shortlist percorre ~800 jogadores. Só a calculamos quando a aba do
   // Mercado está FOCADA — senão recalculava em cada ação (aceitar proposta,
@@ -82,6 +105,8 @@ export default function Market() {
     if (posFilter !== 'ALL') list = list.filter((e) => POSITION_GROUP[e.player.positions[0]!] === posFilter);
     if (minOvr > 0) list = list.filter((e) => to100(naturalOverall(e.player)) >= minOvr);
     if (affordOnly) list = list.filter((e) => e.affordable);
+    if (priceMin > 0) list = list.filter((e) => e.player.marketValue >= priceMin);
+    if (priceMax > 0) list = list.filter((e) => e.player.marketValue <= priceMax);
     if (sortKey === 'default') return list;
     const metric = (e: typeof baseTargets[number]): number | string => {
       const p = e.player;
@@ -98,7 +123,7 @@ export default function Market() {
       const d = typeof ma === 'string' ? ma.localeCompare(mb as string) : (ma as number) - (mb as number);
       return sortDir === 'asc' ? d : -d;
     });
-  }, [baseTargets, posFilter, minOvr, affordOnly, sortKey, sortDir]);
+  }, [baseTargets, posFilter, minOvr, affordOnly, priceMin, priceMax, sortKey, sortDir]);
 
   const pending = state ? activeOffers(state) : [];
 
@@ -209,6 +234,26 @@ export default function Market() {
           <Text style={styles.minOvrVal}>{minOvr || '—'}</Text>
           <Pressable onPress={() => setMinOvr((v) => Math.min(99, v + 5))} hitSlop={6}><Text style={styles.stepBtn}>+</Text></Pressable>
         </View>
+        {/* INTERVALO DE PREÇO. Os degraus são os que se usam a pensar em
+            reforços (250k, 500k, 1M, 2M, 5M…), e não uma escala linear que
+            obrigaria a vinte toques para sair de 0. */}
+        <View style={styles.minOvrGroup}>
+          <Text style={styles.fChipText}>{t('mkt.priceFrom')}</Text>
+          <Pressable onPress={() => setPriceMin((v) => stepPrice(v, -1))} hitSlop={6}><Text style={styles.stepBtn}>−</Text></Pressable>
+          <Text style={styles.priceVal}>{priceMin > 0 ? money(priceMin) : '—'}</Text>
+          <Pressable onPress={() => setPriceMin((v) => stepPrice(v, 1))} hitSlop={6}><Text style={styles.stepBtn}>+</Text></Pressable>
+        </View>
+        <View style={styles.minOvrGroup}>
+          <Text style={styles.fChipText}>{t('mkt.priceTo')}</Text>
+          <Pressable onPress={() => setPriceMax((v) => stepPrice(v, -1))} hitSlop={6}><Text style={styles.stepBtn}>−</Text></Pressable>
+          <Text style={styles.priceVal}>{priceMax > 0 ? money(priceMax) : t('mkt.noCap')}</Text>
+          <Pressable onPress={() => setPriceMax((v) => stepPrice(v, 1))} hitSlop={6}><Text style={styles.stepBtn}>+</Text></Pressable>
+        </View>
+        {priceMin > 0 || priceMax > 0 ? (
+          <Pressable onPress={() => { setPriceMin(0); setPriceMax(0); }} style={styles.fChip}>
+            <Text style={styles.fChipText}>{t('mkt.clearPrice')}</Text>
+          </Pressable>
+        ) : null}
       </ScrollView>
       </Spot>
 
@@ -243,6 +288,9 @@ export default function Market() {
         <Pressable style={styles.cOvr} onPress={() => toggleSort('ovr')}>
           <Text style={[styles.h, styles.hCenter, sortKey === 'ovr' && styles.hOn]}>OVR{arrow('ovr')}</Text>
         </Pressable>
+        {/* Espaçador do avatar: sem ele o cabeçalho começava 39px à esquerda do
+            conteúdo e cada título ficava por cima da coluna errada. */}
+        <View style={styles.avatarGap} />
         <Pressable style={styles.cName} onPress={() => toggleSort('name')}>
           <Text style={[styles.h, sortKey === 'name' && styles.hOn]}>{t('mkt.col.name')}{arrow('name')}</Text>
         </Pressable>
@@ -385,12 +433,16 @@ function TargetRow({
         {to100(naturalOverallFine(player))}
       </Text>
       <Face seed={player.id} size={32} shirt={clubColor} />
+      {/* Coluna do NOME. `minWidth: 0` + `overflow: hidden` são o que impede a
+          linha de detalhe (posição · POT · clube) de crescer para lá da coluna
+          e desenhar por cima do valor e do salário — era esse o texto
+          sobreposto que se via nas linhas do mercado. */}
       <View style={styles.cName}>
         <Text style={[styles.cell, locked && styles.dim]} numberOfLines={1}>{shortName(player)}</Text>
-        <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+        <View style={styles.metaRow}>
           <PosText position={player.positions[0]!} style={{ fontSize: 9 }} />
           <Text style={styles.potTag}>{t('mkt.potShort', { pot })}</Text>
-          <Text style={styles.sub} numberOfLines={1}>{clubName}</Text>
+          <Text style={[styles.sub, styles.clubName]} numberOfLines={1}>{clubName}</Text>
           {needsBonus ? <Text style={styles.bonusTag}>{t('mkt.bonusTag')}</Text> : null}
         </View>
         {divLabel ? <Text style={styles.divLabel} numberOfLines={1}>{divLabel}</Text> : null}
@@ -401,9 +453,13 @@ function TargetRow({
         <Text style={styles.pendingTag}>{t('mkt.sent')}</Text>
       ) : (
         <>
-          <Text style={[styles.cell, styles.cNum, styles.dim]}>{player.age}</Text>
-          <Text style={[styles.cell, styles.cVal]}>{money(player.marketValue)}</Text>
-          <Text style={[styles.cell, styles.cVal, styles.dim]}>{wage(player.wage)}</Text>
+          <Text style={[styles.cell, styles.cNum, styles.dim]} numberOfLines={1}>{player.age}</Text>
+          <Text style={[styles.cell, styles.cVal]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+            {money(player.marketValue)}
+          </Text>
+          <Text style={[styles.cell, styles.cVal, styles.dim]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+            {wage(player.wage)}
+          </Text>
         </>
       )}
     </Pressable>
@@ -708,6 +764,10 @@ const styles = StyleSheet.create({
   fChipText: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700' },
   fChipTextOn: { color: theme.colors.blue },
   minOvrGroup: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 6 },
+  priceVal: {
+    color: theme.colors.text, fontSize: theme.font.body, fontWeight: '700',
+    minWidth: 58, textAlign: 'center', fontVariant: ['tabular-nums'],
+  },
   stepBtn: { color: theme.colors.blue, fontSize: 18, fontWeight: '800', width: 20, textAlign: 'center' },
   minOvrVal: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '700', minWidth: 22, textAlign: 'center', fontVariant: ['tabular-nums'] },
 
@@ -758,7 +818,7 @@ const styles = StyleSheet.create({
   withdraw: { color: theme.colors.textDim, fontSize: theme.font.body, fontWeight: '700', paddingHorizontal: 4 },
 
   headRow: {
-    flexDirection: 'row', alignItems: 'center', paddingVertical: theme.spacing(0.75), gap: 4,
+    flexDirection: 'row', alignItems: 'center', paddingVertical: theme.spacing(0.75), gap: 7,
     backgroundColor: theme.colors.bg, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border,
   },
   h: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700' },
@@ -774,9 +834,15 @@ const styles = StyleSheet.create({
   divLabel: { color: theme.colors.blue, fontSize: 10, fontWeight: '700', marginTop: 1 },
   dim: { color: theme.colors.textDim },
   cOvr: { width: 34, textAlign: 'center' },
-  cName: { flex: 1 },
-  cNum: { width: 24, textAlign: 'center' },
-  cVal: { width: 62, textAlign: 'right' },
+  avatarGap: { width: 32 },
+  // `minWidth: 0` deixa a coluna encolher abaixo do conteúdo (sem isto o flex
+  // respeita a largura natural do texto e a linha transborda); `overflow`
+  // garante que nada é desenhado fora dela.
+  cName: { flex: 1, minWidth: 0, overflow: 'hidden' },
+  metaRow: { flexDirection: 'row', gap: 6, alignItems: 'center', minWidth: 0 },
+  clubName: { flexShrink: 1 },
+  cNum: { width: 22, textAlign: 'center' },
+  cVal: { width: 68, textAlign: 'right' },
   sep: { height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.border },
 
   lockedTag: { color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '700' },

@@ -6,6 +6,7 @@ import {
   CupState,
   Fixture,
   GameState,
+  hasPlan,
 } from '../models';
 import { deriveSeed, Rng } from '../engine/rng';
 import { simulateMatch } from '../engine';
@@ -65,9 +66,16 @@ export function playCupRound(state: GameState): Fixture[] {
     const awayTactic = state.tactics[awayId];
     if (!homeTactic || !awayTactic) { winners.push(homeId); continue; }
 
+    // O PLANO contra o adversário vale em todas as provas — seria estranho a
+    // marcação individual existir na liga e desaparecer na Taça. Lê-se direto
+    // da carreira: importar `core/game` daqui criaria um ciclo.
+    const mId = state.meta.managedClubId;
+    const plan = hasPlan(state.career.gamePlan) ? state.career.gamePlan : undefined;
     const result = simulateMatch(
       homeId, awayId, homeTactic, awayTactic, state.players,
       deriveSeed(state.meta.rngSeed, 'cupmatch', cup.season, round, i),
+      undefined,
+      { homePlan: homeId === mId ? plan : undefined, awayPlan: awayId === mId ? plan : undefined },
     );
 
     // Empate → grandes penalidades (ligeiro favor a quem joga em casa).

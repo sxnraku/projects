@@ -117,6 +117,10 @@ export interface PressItem {
   kind: 'PRESS';
   id: string;
   topic: import('../game/press').PressTopic;
+  /** Qual das redações da pergunta/respostas usar. Ausente = a primeira. */
+  variant?: number;
+  /** Jogos da série (vitórias seguidas ou jogos sem ganhar), quando aplicável. */
+  streak?: number;
   createdDate: string;
   expiresDate: string;
   /** Adversário do próximo jogo, quando a pergunta é sobre ele. */

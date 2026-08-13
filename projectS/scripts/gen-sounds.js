@@ -225,21 +225,10 @@ const SOUNDS = {
   /** Apito curto de falta grave / vermelho. */
   'foul.wav': () => whistle(0.18, 4242),
 
-  /**
-   * GOLO nosso — a bancada a levantar-se. Sem picos: ataque suave e queda
-   * longa, para ser uma onda e não um estouro.
-   */
-  'goal.wav': () => {
-    const n = secs(2.1);
-    const out = new Float64Array(n);
-    const roar = crowd(2.1, 777, 560, 1400);
-    envelope(roar, 0.2, 0.45, 1.45, 0.6);
-    mix(out, roar, 1.0);
-    const rumble = crowd(2.1, 778, 130, 250); // graves do estádio
-    envelope(rumble, 0.26, 0.45, 1.35, 0.7);
-    mix(out, rumble, 0.55);
-    return lowpass(out, 2600);
-  },
+  // O GOLO deixou de ser sintetizado: usa `celebration.wav`, uma gravação real.
+  // A receita que aqui estava produzia 2,10 s de silêncio puro — o momento mais
+  // alto do jogo não fazia som nenhum, e ninguém deu por isso durante meses.
+  // Está guardada em `_backup/sons-originais/substituidos/goal.wav`.
 
   /** Golo SOFRIDO — o "ohhh" desiludido, mais grave e mais lento. */
   'goal_against.wav': () => {
@@ -326,22 +315,9 @@ const SOUNDS = {
     return lowpass(out, 4500);
   },
 
-  /**
-   * AMBIENTE DE ESTÁDIO — murmúrio de fundo para tocar em ciclo durante o jogo.
-   * Sem picos nem eventos: é a cama sonora que faz o jogo parecer um jogo. As
-   * pontas entram e saem suaves para o ciclo não dar "clique".
-   */
-  'ambience.wav': () => {
-    const c = crowd(4.0, 6161, 300, 900);
-    const n = c.length;
-    const ramp = secs(0.35);
-    for (let i = 0; i < n; i++) {
-      const inF = Math.min(1, i / ramp);
-      const outF = Math.min(1, (n - 1 - i) / ramp);
-      c[i] *= Math.min(inF, outF);
-    }
-    return lowpass(c, 1300);
-  },
+  // O AMBIENTE de estádio deixou de ser sintetizado: usa `stadium.mp3`, uma
+  // gravação real de 30 s em ciclo. A receita antiga está guardada em
+  // `_backup/sons-originais/substituidos/ambience.wav`.
 
   /** Troféu / conquista — arpejo em sinos suaves por cima da multidão. */
   'trophy.wav': () => {

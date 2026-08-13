@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { useMonetizationStore } from '../../src/state/monetizationStore';
+import { buyPremium, premiumPrice, purchasesAvailable } from '../../src/native/purchases';
+import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useGameStore } from '../../src/state/gameStore';
 import { Spot } from '../../src/ui/tutorial/Spot';
@@ -22,12 +24,84 @@ import { BalanceSplit, Bar, Body, contrastOn, CrestCircle, darken, RowKV, Screen
 import { reputationStars } from '../../src/ui/theme';
 import { Toast } from '../../src/ui/Toast';
 import { haptic, playSound } from '../../src/ui/sound';
-import { useMonetizationStore } from '../../src/state/monetizationStore';
 
 const FACILITY_TYPES: FacilityType[] = ['stadium', 'training', 'academy', 'medical', 'scouting'];
 
 /** Passos de volume oferecidos na UI (um slider seria exagero para 5 valores). */
 const VOLUME_STEPS = [0, 0.25, 0.5, 0.75, 1] as const;
+
+/**
+ * Política de privacidade publicada (GitHub Pages). Verificada viva antes de
+ * ser ligada — um link morto nas definições é pior do que não ter link.
+ */
+const PRIVACY_URL = 'https://sxnraku.github.io/projects/';
+
+/**
+ * PREMIUM — linha das Definições.
+ *
+ * Só aparece se a loja responder: num emulador sem Play Services, ou se o
+ * produto ainda não estiver ativo na Play Console, é preferível não haver linha
+ * nenhuma do que haver uma que não faz nada (era esse o problema do botão
+ * anterior, que ativava o Premium sem cobrar).
+ */
+function PremiumRow() {
+  const t = useT();
+  const premium = useMonetizationStore((s) => s.m.premium);
+  const setPremium = useMonetizationStore((s) => s.setPremium);
+  const [available, setAvailable] = useState(false);
+  const [price, setPrice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void purchasesAvailable().then((ok) => {
+      if (!alive) return;
+      setAvailable(ok);
+      if (ok) void premiumPrice().then((p) => { if (alive) setPrice(p); });
+    });
+    return () => { alive = false; };
+  }, []);
+
+  // Sem loja, sem linha. Com Premium já ativo, mostra-se sempre (é a prova de
+  // que a compra foi reconhecida).
+  if (!available && !premium) return null;
+
+  return (
+    <View style={styles.settingRow}>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.settingName}>{t('club.premiumName')}</Text>
+        <Text style={styles.settingSub}>
+          {msg ?? (premium
+            ? t('club.premiumActiveSub')
+            : price ? t('club.premiumPriceSub', { price }) : t('club.premiumSub'))}
+        </Text>
+      </View>
+      <Pressable
+        disabled={premium || busy}
+        onPress={() => {
+          setBusy(true);
+          setMsg(null);
+          void buyPremium().then((r) => {
+            setBusy(false);
+            if (r.ok) {
+              setPremium(true);
+              setMsg(t(r.restored ? 'club.premiumRestored' : 'club.premiumThanks'));
+              return;
+            }
+            if (r.reason === 'CANCELLED') return; // desistir não é erro
+            setMsg(t(r.reason === 'UNAVAILABLE' ? 'club.premiumUnavailable' : 'club.premiumFailed'));
+          });
+        }}
+        style={[styles.settingBtn, (premium || busy) && styles.settingBtnDone]}
+      >
+        <Text style={styles.settingBtnText}>
+          {premium ? t('club.premiumOn') : busy ? t('common.loading') : t('club.premiumActivate')}
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
 
 export default function ClubScreen() {
   const router = useRouter();
@@ -48,8 +122,6 @@ export default function ClubScreen() {
   const setLang = useGameStore((s) => s.setLang);
   const audio = useGameStore((s) => s.audio);
   const setAudio = useGameStore((s) => s.setAudio);
-  const premium = useMonetizationStore((s) => s.m.premium);
-  const setPremium = useMonetizationStore((s) => s.setPremium);
   const requestBudget = useGameStore((s) => s.requestBudget);
   const budgetRequestUsed = useGameStore((s) => s.budgetRequestUsed);
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
@@ -474,17 +546,24 @@ export default function ClubScreen() {
           </Pressable>
         </View>
 
+        {/* PREMIUM — compra a sério pela Play Store. O botão antigo chamava
+            `setPremium(true)` e mais nada: sem compra, sem pagamento, e perdia-se
+            ao fechar a app. Ver `src/native/purchases.ts` e `docs/PREMIUM.md`. */}
+        <PremiumRow />
+
+        {/* POLÍTICA DE PRIVACIDADE — a app mostra anúncios e pede consentimento
+            (UMP); ter o documento a um toque é o mínimo, e a Play Store espera
+            encontrá-lo também dentro da app, não só na ficha da loja. */}
         <View style={styles.settingRow}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.settingName}>{t('club.premiumName')}</Text>
-            <Text style={styles.settingSub}>{premium ? t('club.premiumActiveSub') : t('club.premiumSub')}</Text>
+            <Text style={styles.settingName}>{t('club.privacyName')}</Text>
+            <Text style={styles.settingSub}>{t('club.privacySub')}</Text>
           </View>
           <Pressable
-            disabled={premium}
-            onPress={() => setPremium(true)} // TODO lançamento: fluxo real Google Play Billing
-            style={[styles.settingBtn, premium && styles.settingBtnDone]}
+            onPress={() => { void Linking.openURL(PRIVACY_URL); }}
+            style={styles.settingBtn}
           >
-            <Text style={styles.settingBtnText}>{premium ? t('club.premiumOn') : t('club.premiumActivate')}</Text>
+            <Text style={styles.settingBtnText}>{t('club.privacyOpen')}</Text>
           </Pressable>
         </View>
 

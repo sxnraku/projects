@@ -237,8 +237,12 @@ export function deserialize(rows: SaveRows): GameState {
       pressing: r.pressing ?? 5, defensiveLine: r.defensive_line ?? 5, creativity: r.creativity ?? 5,
       lineup: JSON.parse(r.lineup), bench: JSON.parse(r.bench),
       captainId: r.captain_id, penaltyTakerId: r.penalty_taker_id,
-      freeKickTakerId: sp?.fk ?? null,
-      cornerTakerId: sp?.ck ?? null,
+      // `undefined` (nunca escolhido) e `null` (escolhido e depois limpo) são
+      // equivalentes para o motor, mas trocá-los quebrava a igualdade exata do
+      // save: gravar e recarregar devolvia uma tática "diferente" da original.
+      // Manter o que lá estava deixa o percurso ser fielmente reversível.
+      freeKickTakerId: sp?.fk ?? undefined,
+      cornerTakerId: sp?.ck ?? undefined,
       cornerFocus: sp?.focus,
     };
   }

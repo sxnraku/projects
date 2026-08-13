@@ -49,6 +49,12 @@ export interface SeasonHistoryEntry {
   champions: SeasonChampion[];
   topScorers: SeasonTopScorer[];
   cups: SeasonCupWinner[];
+  /**
+   * PRÉMIOS INDIVIDUAIS (melhor jogador, melhor jovem, melhor marcador, melhor
+   * treinador), um conjunto por divisão. Opcional: as épocas arquivadas por
+   * versões anteriores não os têm e continuam a ler-se sem problema.
+   */
+  awards?: import('../game/awards').SeasonAward[];
 }
 
 /** O arquivo completo. */

@@ -23,7 +23,7 @@ import {
 } from '../fans';
 import {
   answerPress, ensurePress, expirePress, generatePressConference, pickTopic,
-  PRESS_OPTIONS, PressTopic, resolveClaim,
+  PRESS_OPTIONS, PressTopic, questionKey, resolveClaim, winlessStreak, winStreak,
 } from '../press';
 import { simulateMatch } from '../../engine';
 import { matchdayGate } from '../../economy';
@@ -281,10 +281,51 @@ console.log('\nImprensa — perguntas com preço:');
   assert(pickTopic({ ...base, nextIsDerby: true }) === 'DERBY', 'o dérbi vem antes da rotina');
   assert(pickTopic(base) === 'GOOD_RUN', 'três vitórias dão pergunta própria');
   assert(pickTopic({ ...base, form: ['L', 'D', 'L'] }) === 'BAD_RUN', 'três sem ganhar também');
+  assert(pickTopic({ ...base, position: 1, seasonProgress: 0.7 }) === 'TITLE_RACE',
+    'liderar no fim da época dá a pergunta do título, não a da série');
   assert(pickTopic({ ...base, form: ['W', 'D', 'L'], position: 17 }) === 'RELEGATION',
     'na zona de descida com a época a meio, a pergunta é essa');
   assert(pickTopic({ ...base, form: ['W', 'D', 'L'], nextOpponent: '' }) === null,
     'sem próximo adversário e sem drama não há conferência');
+}
+
+{
+  // A SÉRIE tem de ser a real, não "três" fixo: era isso que fazia a pergunta
+  // dizer "três vitórias seguidas" a quem levava cinco.
+  assert(winStreak(['W', 'W', 'W', 'W', 'W', 'D']) === 5, 'conta 5 vitórias seguidas');
+  assert(winStreak(['D', 'W', 'W']) === 0, 'a série parte no primeiro não-triunfo');
+  assert(winlessStreak(['L', 'D', 'L', 'W']) === 3, 'conta 3 jogos sem ganhar');
+  assert(winlessStreak([]) === 0, 'sem jogos não há série');
+
+  s.career.press = undefined;
+  s.inbox = s.inbox.filter((it) => it.kind !== 'PRESS');
+  const item = generatePressConference(s, {
+    form: ['W', 'W', 'W', 'W', 'W'], nextIsDerby: false, nextOpponent: 'X', lastMargin: 2,
+    fanMood: 70, unrest: false, position: 8, clubCount: 18, seasonProgress: 0.3,
+  }, 8);
+  assert(item?.topic === 'GOOD_RUN' && item.streak === 5,
+    `a conferência guarda a série real (${item?.streak})`);
+  if (item) answerPress(s, item.id, 'CALM');
+}
+
+{
+  // VARIEDADE: a mesma conferência tem de dar sempre a mesma redação, e
+  // conferências diferentes têm de dar redações diferentes — senão a variante
+  // ou é instável (muda ao recarregar) ou é decorativa.
+  const seen = new Set<string>();
+  for (let round = 1; round <= 12; round++) {
+    s.career.press = undefined;
+    s.inbox = s.inbox.filter((it) => it.kind !== 'PRESS');
+    const it = generatePressConference(s, {
+      form: ['L', 'L', 'L'], nextIsDerby: false, nextOpponent: 'X', lastMargin: -1,
+      fanMood: 45, unrest: false, position: 10, clubCount: 18, seasonProgress: 0.3,
+    }, round);
+    if (it) {
+      seen.add(questionKey(it.topic, it.variant ?? 0));
+      answerPress(s, it.id, 'CALM');
+    }
+  }
+  assert(seen.size > 1, `ao longo de 12 jornadas saem redações diferentes (${seen.size})`);
 }
 
 {

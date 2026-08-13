@@ -2,8 +2,9 @@ import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useGameStore } from '../../src/state/gameStore';
-import { computeTeamStrength } from '../../src/core/engine';
-import { naturalOverallFine, Player, POSITION_GROUP, PositionGroup, shortName } from '../../src/core/models';
+import {
+  naturalOverallFine, Player, POSITION_GROUP, PositionGroup, sectorRatings, shortName,
+} from '../../src/core/models';
 import { money, to100 } from '../../src/ui/format';
 import { useT } from '../../src/ui/i18n';
 import { attrColor, reputationStars, theme } from '../../src/ui/theme';
@@ -40,7 +41,7 @@ export default function ClubDetail() {
 
   const league = state.leagues[club.leagueId];
   const tactic = state.tactics[club.id];
-  const strength = tactic ? computeTeamStrength(tactic, state.players) : null;
+  const sectors = tactic ? sectorRatings(tactic, state.players) : null;
   const squad = club.squad
     .map((pid) => state.players[pid])
     .filter((p): p is Player => !!p);
@@ -58,12 +59,10 @@ export default function ClubDetail() {
           </View>
         </View>
 
-        {strength ? (
-          <StrengthTriplet
-            def={Math.min(100, to100(strength.defence))}
-            mid={Math.min(100, to100(strength.midfield))}
-            att={Math.min(100, to100(strength.attack))}
-          />
+        {/* Mesma régua do campo e do cartão "A minha equipa": média do overall
+            efetivo por zona. Ver `sectorRatings`. */}
+        {sectors ? (
+          <StrengthTriplet def={sectors.def} mid={sectors.mid} att={sectors.att} />
         ) : null}
 
         <Section title={t('club.info')} />

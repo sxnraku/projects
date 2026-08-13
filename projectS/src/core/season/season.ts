@@ -25,6 +25,11 @@ export interface SeasonContext {
    * motor usa o valor neutro. Ver `core/game/fans.ts`.
    */
   homeSupport?: (homeClubId: string) => number | undefined;
+  /**
+   * Instruções contra o adversário, por clube. Só o clube gerido tem plano; a
+   * IA joga sempre sem instruções especiais. Ver `core/game/opponent.ts`.
+   */
+  plan?: (clubId: string) => import('../models').OppositionPlan | undefined;
 }
 
 /**
@@ -63,6 +68,8 @@ export function playRound(
       {
         derby: ctx.isDerby?.(fx.homeClubId, fx.awayClubId) === true,
         homeSupport: ctx.homeSupport?.(fx.homeClubId),
+        homePlan: ctx.plan?.(fx.homeClubId),
+        awayPlan: ctx.plan?.(fx.awayClubId),
       },
     );
 

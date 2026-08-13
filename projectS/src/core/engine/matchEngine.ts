@@ -9,9 +9,18 @@ import {
   effectiveRole,
   Side,
   Tactic,
+  bestOf,
+  BLOCK_WINGS_AERIAL,
+  BLOCK_WINGS_CORNERS,
+  BLOCK_WINGS_COST,
+  BLOCK_WINGS_FOE_ATTACK,
+  MARK_STAR_COST,
+  MARK_STAR_CUT,
+  type OppositionPlan,
 } from '../models';
 import { deriveSeed, Rng } from './rng';
 import { computeTeamStrength, TeamStrength } from './teamStrength';
+
 
 /** Parâmetros afináveis do motor. Isolados para tuning fácil. */
 const CFG = {
@@ -78,6 +87,8 @@ interface SideCtx {
   onTarget: number;
   xg: number;
   reds: number;
+  /** O adversário fechou-nos as alas? Corta os cantos que conseguimos ganhar. */
+  wingsBlocked?: boolean;
 }
 
 /** Estado interno completo de uma simulação (permite pausar/retomar ao intervalo). */
@@ -97,7 +108,29 @@ interface Sim {
   homeSetPieceRate: SetPieceRate;
   awaySetPieceRate: SetPieceRate;
   derby: boolean;
+  /**
+   * Vantagem de casa JÁ COMPOSTA (base + dérbi + apoio da bancada), guardada
+   * porque `applyTacticChange` recalcula a força de raiz e precisa de a repor.
+   * Antes só repunha `CFG.homeAdvantage`: fazer uma substituição num dérbi
+   * apagava, a meio do jogo e em silêncio, o bónus que o dérbi tinha dado.
+   */
+  homeAdv: number;
+  /** Multiplicador de força por lado, vindo da palestra do treinador (1 = nada). */
+  talkHome: number;
+  talkAway: number;
+  /**
+   * CUSTO das próprias instruções, por lado. Guardado pela mesma razão que a
+   * vantagem de casa e a palestra: `applyTacticChange` recalcula a força de raiz
+   * e apagava-o. O efeito no ADVERSÁRIO não precisa disto — vive no outro lado,
+   * que não é reconstruído — e por isso substituir tornava as instruções
+   * GRÁTIS a partir daí: ficava o benefício e desaparecia o preço.
+   */
+  planCostHome: PlanCost;
+  planCostAway: PlanCost;
 }
+
+/** Multiplicadores que uma instrução cobra a quem a dá. 1 = não cobra nada. */
+interface PlanCost { attack: number; midfield: number; }
 
 /** Probabilidade POR MINUTO de haver um livre perigoso / um canto. */
 interface SetPieceRate { fk: number; corner: number; }
@@ -111,6 +144,13 @@ export interface TacticChange {
   side: Side;
   tactic: Tactic;
   minute: number;
+  /**
+   * PALESTRA: multiplicador de força a partir deste minuto (1 = sem efeito).
+   * O motor só sabe multiplicar — quem decide quanto vale um sermão é
+   * `core/game/teamTalk.ts`. Fica pegado ao lado até ao fim do jogo, por isso
+   * `applyTacticChange` volta a aplicá-lo depois de recalcular a força.
+   */
+  talkBoost?: number;
 }
 
 /** Contexto do jogo que não vem da tática de nenhuma das equipas. */
@@ -125,6 +165,56 @@ export interface MatchContext {
    * de quem não tem massa adepta simulada). Ver `core/game/fans.ts`.
    */
   homeSupport?: number;
+  /**
+   * PLANO contra o adversário, por lado. Só o clube gerido define um; a IA joga
+   * sempre sem instruções especiais. Ver `core/game/opponent.ts`.
+   */
+  homePlan?: OppositionPlan;
+  awayPlan?: OppositionPlan;
+}
+
+/**
+ * Aplica o plano de um lado CONTRA o outro. Corre depois de os dois lados
+ * estarem construídos, porque cada instrução mexe no adversário (e cobra ao
+ * próprio) — não é algo que `computeTeamStrength` possa saber sozinho.
+ */
+function applyPlan(
+  plan: OppositionPlan | undefined, own: SideCtx, foe: SideCtx, foeTactic: Tactic,
+  players: Record<string, Player>,
+): PlanCost {
+  const cost: PlanCost = { attack: 1, midfield: 1 };
+  if (!plan) return cost;
+
+  if (plan.markStar) {
+    // Marcação individual: o melhor deles quase desaparece do jogo — deixa de
+    // rematar e de assistir como rematava. Custa um homem ao nosso meio-campo.
+    const star = bestOf(foeTactic, players);
+    if (star) {
+      for (const pool of [foe.scorers, foe.assisters, foe.headers]) {
+        for (const e of pool) if (e.id === star) e.weight *= MARK_STAR_CUT;
+      }
+      foe.strength.attack *= 1 - (1 - MARK_STAR_CUT) * 0.12;
+      cost.midfield *= MARK_STAR_COST;
+    }
+  }
+
+  if (plan.blockWings) {
+    // Fechar as alas: menos bola na área, menos perigo no ar. E menos largura
+    // no nosso próprio ataque.
+    foe.strength.setPiece.aerialAttack *= BLOCK_WINGS_AERIAL;
+    foe.strength.attack *= BLOCK_WINGS_FOE_ATTACK;
+    foe.wingsBlocked = true;
+    cost.attack *= BLOCK_WINGS_COST;
+  }
+
+  applyPlanCost(own, cost);
+  return cost;
+}
+
+/** Cobra a um lado o preço das instruções que ele deu. */
+function applyPlanCost(side: SideCtx, cost: PlanCost): void {
+  side.strength.attack *= cost.attack;
+  side.strength.midfield *= cost.midfield;
 }
 
 function buildSide(
@@ -170,9 +260,10 @@ const shotRatePerMin = (atk: SideCtx, def: SideCtx) => {
 const setPieceRatePerMin = (atk: SideCtx, def: SideCtx): SetPieceRate => {
   const pressure = Math.max(0.4, Math.min(2.2, atk.strength.attack / def.strength.defence));
   const fouls = 1 + (def.strength.pressing - 5) * 0.05;
+  const wings = atk.wingsBlocked ? BLOCK_WINGS_CORNERS : 1;
   return {
     fk: (CFG.freeKicksPer90 * pressure * fouls) / CFG.matchMinutes,
-    corner: (CFG.cornersPer90 * pressure) / CFG.matchMinutes,
+    corner: (CFG.cornersPer90 * pressure * wings) / CFG.matchMinutes,
   };
 };
 
@@ -194,10 +285,20 @@ function pickWeighted(rng: Rng, pool: { id: string; weight: number }[]): string 
  * cartões acumulados. Jogadores expulsos ficam de fora; os que entram ganham
  * ficha de estatística. Não consome RNG → os minutos já jogados permanecem iguais.
  */
-function applyTacticChange(sim: Sim, side: SideCtx, tactic: Tactic, players: Record<string, Player>): void {
+function applyTacticChange(
+  sim: Sim, side: SideCtx, tactic: Tactic, players: Record<string, Player>,
+): void {
   const fresh = buildSide(side.clubId, side.side, computeTeamStrength(tactic, players), tactic, players);
-  // Aplica vantagem de casa (a força é recalculada de raiz).
-  if (side.side === 'HOME') { fresh.strength.attack *= CFG.homeAdvantage; fresh.strength.defence *= CFG.homeAdvantage; }
+  // Repõe a vantagem de casa COMPLETA (base + dérbi + bancada) — a força foi
+  // recalculada de raiz e sem isto uma substituição anulava-a.
+  if (side.side === 'HOME') { fresh.strength.attack *= sim.homeAdv; fresh.strength.defence *= sim.homeAdv; }
+  // Repõe também o efeito da palestra, pela mesma razão.
+  const talk = side.side === 'HOME' ? sim.talkHome : sim.talkAway;
+  if (talk !== 1) { fresh.strength.attack *= talk; fresh.strength.defence *= talk; }
+  // …e o preço das instruções contra o adversário. Sem isto, substituir tornava
+  // a marcação individual e o fechar das alas GRATUITOS a partir daí: o efeito
+  // no adversário mantinha-se (vive no outro lado) e o custo evaporava-se.
+  applyPlanCost(fresh, side.side === 'HOME' ? sim.planCostHome : sim.planCostAway);
   // Enfraquece pelo nº de expulsos já sofridos.
   for (let r = 0; r < side.reds; r++) { fresh.strength.attack *= CFG.redWeaken; fresh.strength.defence *= CFG.redWeaken; }
   // Retira dos conjuntos quem foi expulso (não pode voltar).
@@ -376,6 +477,7 @@ function simulateMinutes(sim: Sim, from: number, to: number): void {
 function buildSim(
   homeClubId: string, awayClubId: string, homeTactic: Tactic, awayTactic: Tactic,
   players: Record<string, Player>, seed: number, derby: boolean, support = 55,
+  plan?: { home?: OppositionPlan; away?: OppositionPlan },
 ): Sim {
   const rng = new Rng(seed);
   const homeStr = computeTeamStrength(homeTactic, players);
@@ -388,6 +490,9 @@ function buildSim(
   homeStr.defence *= homeAdv;
   const home = buildSide(homeClubId, 'HOME', homeStr, homeTactic, players);
   const away = buildSide(awayClubId, 'AWAY', awayStr, awayTactic, players);
+  // Planos: cada lado aplica o seu CONTRA o outro (a IA nunca traz plano).
+  const planCostHome = applyPlan(plan?.home, home, away, awayTactic, players);
+  const planCostAway = applyPlan(plan?.away, away, home, homeTactic, players);
 
   const stat: Record<string, PlayerMatchStat> = {};
   const statSide: Record<string, Side> = {};
@@ -411,14 +516,16 @@ function buildSim(
     rng, home, away, events: [], stat, statSide, statGroup, yellowCount, orderedIds, homePossession,
     homeRate: 0, awayRate: 0,
     homeSetPieceRate: { fk: 0, corner: 0 }, awaySetPieceRate: { fk: 0, corner: 0 },
-    derby,
+    derby, homeAdv, talkHome: 1, talkAway: 1, planCostHome, planCostAway,
   };
   recomputeRates(sim);
   sim.events.push({ minute: 0, type: 'KICKOFF', side: null, playerId: null, text: 'Arranque da partida.' });
   return sim;
 }
 
-function finalize(homeClubId: string, awayClubId: string, seed: number, sim: Sim): MatchResult {
+function finalize(
+  homeClubId: string, awayClubId: string, seed: number, sim: Sim, context?: MatchContext,
+): MatchResult {
   sim.events.push({ minute: 90, type: 'FULL_TIME', side: null, playerId: null, text: `Fim: ${sim.home.goals}-${sim.away.goals}` });
   // Lesões — uma vez por equipa (mesmo comportamento de antes).
   for (const s of [sim.home, sim.away]) {
@@ -451,6 +558,17 @@ function finalize(homeClubId: string, awayClubId: string, seed: number, sim: Sim
     events: sim.events,
     playerStats: sim.stat,
     motm,
+    // Guarda o contexto EXATO usado, para as re-simulações o reproduzirem em
+    // vez de o irem buscar a um estado que entretanto mudou.
+    ctx: context?.derby === true || context?.homeSupport != null
+      || context?.homePlan || context?.awayPlan
+      ? {
+        derby: context.derby,
+        homeSupport: context.homeSupport,
+        homePlan: context.homePlan,
+        awayPlan: context.awayPlan,
+      }
+      : undefined,
   };
 }
 
@@ -472,6 +590,7 @@ export function simulateMatch(
   const sim = buildSim(
     homeClubId, awayClubId, homeTactic, awayTactic, players, seed,
     context?.derby === true, context?.homeSupport,
+    { home: context?.homePlan, away: context?.awayPlan },
   );
   const ordered = (changes ?? [])
     .filter((c) => c.minute >= 1 && c.minute < CFG.matchMinutes)
@@ -479,10 +598,13 @@ export function simulateMatch(
   let cursor = 0;
   for (const ch of ordered) {
     simulateMinutes(sim, cursor + 1, ch.minute); // [cursor+1, minute] — no-op se já passámos
+    if (ch.talkBoost != null && ch.talkBoost !== 1) {
+      if (ch.side === 'HOME') sim.talkHome = ch.talkBoost; else sim.talkAway = ch.talkBoost;
+    }
     applyTacticChange(sim, ch.side === 'HOME' ? sim.home : sim.away, ch.tactic, players);
     recomputeRates(sim);
     cursor = Math.max(cursor, ch.minute);
   }
   simulateMinutes(sim, cursor + 1, CFG.matchMinutes);
-  return finalize(homeClubId, awayClubId, seed, sim);
+  return finalize(homeClubId, awayClubId, seed, sim, context);
 }

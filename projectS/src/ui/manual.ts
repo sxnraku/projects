@@ -77,6 +77,7 @@ export const MANUAL: ManualChapter[] = [
       e('setpieces', 'w'),
       e('load', 'w'),
       e('subs', 'w'),
+      e('opponent', 'w'),
     ],
   },
   {
@@ -145,6 +146,7 @@ export const MANUAL: ManualChapter[] = [
       e('sack', 'w'),
       e('jobs', 'w'),
       e('history', 'w'),
+      e('awards', 'w'),
     ],
   },
   {
@@ -154,6 +156,7 @@ export const MANUAL: ManualChapter[] = [
     entries: [
       e('engine', 'w'),
       e('live', 'w'),
+      e('talk', 'w'),
       e('goalclip', 'w'),
       e('ratings', 'w'),
     ],

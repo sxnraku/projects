@@ -19,7 +19,7 @@ import { useRouter } from 'expo-router';
 import { useT } from '../src/ui/i18n';
 import { theme } from '../src/ui/theme';
 import {
-  clearTargets, getTargetRect, subscribeTargets, TutorialTargets,
+  clearTargets, getTargetRect, remeasure, subscribeTargets, TutorialTargets,
 } from '../src/ui/tutorial/registry';
 
 /** Um passo: onde vive, o que aponta e o que diz. */
@@ -43,6 +43,7 @@ const STEPS: Step[] = [
   { route: '/(tabs)', target: TutorialTargets.nextMatch, titleKey: 'tut.next.t', bodyKey: 'tut.next.b' },
   { route: '/(tabs)', target: TutorialTargets.advance, titleKey: 'tut.advance.t', bodyKey: 'tut.advance.b' },
   { route: '/(tabs)', target: TutorialTargets.inbox, titleKey: 'tut.inbox.t', bodyKey: 'tut.inbox.b' },
+  { route: '/(tabs)', target: TutorialTargets.fansCard, titleKey: 'tut.fans.t', bodyKey: 'tut.fans.b' },
 
   // ------------------------------------------------------------- plantel
   { titleKey: 'tut.ch.squad.t', bodyKey: 'tut.ch.squad.b', chapter: true },
@@ -101,6 +102,22 @@ export default function Tutorial({ onDone }: { onDone: () => void }) {
   // `navigate` e não `push`: com `push`, os 21 passos empilhavam 21 ecrãs no
   // histórico e, no fim, o botão de voltar do telemóvel obrigava a 21 toques
   // para sair do jogo. `navigate` reutiliza o ecrã que já lá está.
+  // A CADA PASSO, pede uma medição fresca do alvo.
+  //
+  // As coordenadas dos alvos são de janela, e mudam sem que o `onLayout` deles
+  // dispare: basta o ecrã fazer scroll, ou um cartão acima aparecer mais tarde
+  // (dados que só chegam depois do primeiro render) e empurrar tudo para baixo.
+  // Era isso que fazia o buraco cair no cartão de cima em vez do certo.
+  //
+  // Mede várias vezes de propósito: logo a seguir a navegar o ecrã de destino
+  // ainda pode nem estar montado, e a última medição é a que fica.
+  useEffect(() => {
+    const id = step.target;
+    if (!id) return undefined;
+    const timers = [0, 120, 320, 700].map((ms) => setTimeout(() => remeasure(id), ms));
+    return () => { for (const t of timers) clearTimeout(t); };
+  }, [i, step.target]);
+
   useEffect(() => {
     if (step.route) router.navigate(step.route as never);
   }, [i, step.route, router]);

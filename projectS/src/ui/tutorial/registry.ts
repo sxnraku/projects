@@ -18,6 +18,15 @@ export interface TargetRect { x: number; y: number; width: number; height: numbe
 
 const rects = new Map<string, TargetRect>();
 const listeners = new Set<() => void>();
+/**
+ * Funções de medição dos `Spot` MONTADOS, por id.
+ *
+ * O `onLayout` não chega: as coordenadas são de janela e mudam quando o ecrã
+ * faz scroll ou quando um cartão acima aparece mais tarde e empurra o resto —
+ * em nenhum desses casos o `onLayout` do alvo volta a disparar. Guardar aqui a
+ * função permite ao tutorial pedir uma medição fresca a cada passo.
+ */
+const measurers = new Map<string, () => void>();
 
 /** Ids usados pelos passos do tutorial. Centralizados para não haver typos. */
 export const TutorialTargets = {
@@ -25,6 +34,7 @@ export const TutorialTargets = {
   nextMatch: 'nextMatch',
   advance: 'advance',
   inbox: 'inbox',
+  fansCard: 'fansCard',
   squadRow: 'squadRow',
   squadFilters: 'squadFilters',
   pitch: 'pitch',
@@ -52,6 +62,24 @@ export function getTargetRect(id: string | undefined): TargetRect | undefined {
 export function subscribeTargets(fn: () => void): () => void {
   listeners.add(fn);
   return () => { listeners.delete(fn); };
+}
+
+/** Um `Spot` montado anuncia-se, para poder ser re-medido a pedido. */
+export function registerMeasurer(id: string, fn: () => void): () => void {
+  measurers.set(id, fn);
+  return () => {
+    if (measurers.get(id) === fn) measurers.delete(id);
+  };
+}
+
+/**
+ * Pede uma medição fresca de um alvo (ou de todos). Chamado pelo tutorial a
+ * cada passo: é o que garante que o buraco cai onde o elemento está AGORA e
+ * não onde estava quando o ecrã montou.
+ */
+export function remeasure(id?: string): void {
+  if (id) { measurers.get(id)?.(); return; }
+  for (const fn of measurers.values()) fn();
 }
 
 /** Limpa tudo — usado ao sair do tutorial para não guardar medidas velhas. */

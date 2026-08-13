@@ -279,14 +279,18 @@ test.describe('Football Legacy — app real', () => {
     }
 
     // A conferência não chega à 1.ª jornada de propósito (seria ruído). Joga-se
-    // até ela aparecer — se em 8 jornadas não aparecer nenhuma, o sistema está
+    // até ela aparecer — se em 12 jornadas não aparecer nenhuma, o sistema está
     // morto e o teste tem de falhar, não passar em silêncio.
+    //
+    // 12 e não 8: a antevisão banal só sai de 4 em 4 jornadas, e os assuntos
+    // quentes dependem do que o mundo fizer. Com 8 o teste passava quase sempre
+    // e falhava de vez em quando — que é a pior espécie de teste.
     let found = false;
-    for (let round = 0; round < 8 && !found; round++) {
+    for (let round = 0; round < 12 && !found; round++) {
       await playRound();
       found = await has('Conferência de imprensa');
     }
-    expect(found, 'nenhuma conferência de imprensa em 8 jornadas').toBe(true);
+    expect(found, 'nenhuma conferência de imprensa em 12 jornadas').toBe(true);
 
     await page.screenshot({ path: 'e2e/__screens__/press.png', fullPage: true });
 
@@ -301,6 +305,72 @@ test.describe('Football Legacy — app real', () => {
     // Responder fecha a conferência.
     await tap('Diplomático');
     await expect.poll(has.bind(null, 'Conferência de imprensa'), { timeout: 20_000 }).toBe(false);
+    expect(errors.join('\n')).toBe('');
+  });
+
+  test('a tatica mostra o adversario e deixa ligar instrucoes', async ({ page }) => {
+    await newCareer(page);
+    await skipTutorial(page);
+
+    await page.getByText('Tática', { exact: true }).first().click();
+    await expect(page.getByText('Formação').first()).toBeVisible({ timeout: 20_000 });
+
+    // A secção do adversário vive no fundo do ecrã, a seguir às bolas paradas.
+    const opp = page.getByText(/^Adversário: /).first();
+    await opp.scrollIntoViewIfNeeded();
+    await expect(opp).toBeVisible();
+
+    // Com a rede de olheiros no nível inicial mostram-se BANDAS, não números:
+    // é o que faz a instalação de olheiros valer alguma coisa fora do mercado.
+    await expect(page.getByText(/Comparado com a tua equipa/)).toBeVisible();
+    // As bandas sao RELATIVAS a nossa equipa — sem isso 82% dos setores liam
+    // "forte" e o relatorio dizia sempre o mesmo.
+    await expect(page.getByText(/Mais fraco|Idêntico|Mais forte/).first()).toBeVisible();
+
+    // Ligar uma instrução tem de ficar ligada.
+    const mark = page.getByText('Marcação individual').first();
+    await mark.scrollIntoViewIfNeeded();
+    await expect(page.getByText(/joga-se igual contra toda a gente/)).toBeVisible();
+    await mark.click();
+    await expect(page.getByText(/O plano vale em todas as provas/)).toBeVisible();
+
+    // E desligar tem de a desligar (senão era um botão de sentido único).
+    await mark.click();
+    await expect(page.getByText(/joga-se igual contra toda a gente/)).toBeVisible();
+    await page.screenshot({ path: 'e2e/__screens__/opponent.png', fullPage: true });
+  });
+
+  test('a palestra do intervalo abre aos 45 e o balneario responde', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await newCareer(page);
+    await skipTutorial(page);
+
+    await page.getByText('Jogar ▶').first().click();
+    await expect(page.getByText(/^\d+'$/).first()).toBeVisible({ timeout: 30_000 });
+
+    // A 4x cada minuto de jogo dura 100ms: o intervalo chega em segundos.
+    // Saltar com "⏩ Fim" NÃO serve — aí o jogo acaba e não há intervalo.
+    await page.getByText('4x').first().click();
+    await expect(page.getByText('Palestra do intervalo')).toBeVisible({ timeout: 30_000 });
+
+    // Os quatro tons, e a frase que o treinador diria em cada um.
+    for (const tone of ['Elogiar', 'Acalmar', 'Exigir mais', 'Explodir']) {
+      await expect(page.getByText(tone, { exact: true })).toBeVisible();
+    }
+
+    // Escolher um tom mostra a REACAO do balneario antes de seguir — sem isso o
+    // jogador nunca aprendia a ler o momento e isto era um botao ao acaso.
+    await page.getByText('Exigir mais', { exact: true }).click();
+    await expect(
+      page.getByText(/O balneário levantou-se|Boa leitura|Ouviram, acenaram|Não caiu bem|Leste mal o balneário/),
+    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Segunda parte mais|Sem efeito de maior/)).toBeVisible();
+    await page.screenshot({ path: 'e2e/__screens__/team-talk.png', fullPage: true });
+
+    // A seguir a palestra vem o painel de substituicoes, como sempre.
+    await page.getByText('Aplicar e continuar ▶').first().click();
+    await expect(page.getByText('Palestra do intervalo')).toBeHidden({ timeout: 10_000 });
     expect(errors.join('\n')).toBe('');
   });
 

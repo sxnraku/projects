@@ -87,6 +87,12 @@ import {
   applyMatchChanges as coreApplyMatchChanges,
   MatchAdjustment,
   talkTo as coreTalkTo,
+  evaluateTalk,
+  situationOf,
+  recordTalkMorale,
+  opponentReport as coreOpponentReport,
+  gamePlan as coreGamePlan,
+  setGamePlan as coreSetGamePlan,
   promiseTo as corePromiseTo,
   TalkKind,
   TalkResult,
@@ -238,7 +244,17 @@ export interface GameStore {
     lineup: Tactic['lineup'],
     mentality: Tactic['mentality'],
     tempo: Tactic['tempo'],
+    /** Efeito da palestra ao intervalo, se tiver havido uma. */
+    talkBoost?: number,
   ) => MatchResult | null;
+  /**
+   * PALESTRA AO INTERVALO: avalia o que o treinador disse face ao marcador,
+   * aplica a moral ao onze e devolve o veredicto (a UI mostra a reação e passa
+   * o `boost` ao ajuste seguinte).
+   */
+  teamTalk: (
+    tone: import('../core/game').TalkTone, goalsFor: number, goalsAgainst: number,
+  ) => import('../core/game').TalkOutcome | null;
   /** Substituição ao vivo num jogo da FASE DE LIGA europeia (por id do jogo). */
   applyEuroMatchChange: (
     fixtureId: string,
@@ -246,6 +262,7 @@ export interface GameStore {
     lineup: Tactic['lineup'],
     mentality: Tactic['mentality'],
     tempo: Tactic['tempo'],
+    talkBoost?: number,
   ) => MatchResult | null;
   /** Limpa os ajustes acumulados (ao trocar de jogo na fila da semana). */
   clearMatchAdjustments: () => void;
@@ -420,6 +437,14 @@ export interface GameStore {
   };
   /** Estado da janela de mercado na jornada atual. */
   marketWindow: () => WindowState;
+  /** Clube que o clube gerido defronta a seguir (liga ou Europa). Null se acabou. */
+  nextOpponentId: () => string | null;
+  /** Relatório de olheiro sobre um adversário (detalhe conforme a rede). */
+  opponentReport: (clubId: string) => import('../core/game').OpponentReport | null;
+  /** Instruções contra o adversário, do clube gerido. */
+  gamePlan: () => import('../core/models').OppositionPlan;
+  /** Liga/desliga uma instrução contra o adversário. */
+  setGamePlan: (patch: Partial<import('../core/models').OppositionPlan>) => void;
 }
 
 /** Substitui a referência de topo para forçar re-render mantendo as entidades. */
@@ -701,7 +726,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return result;
   },
 
-  applyMatchChange: (minute, lineup, mentality, tempo) => {
+  applyMatchChange: (minute, lineup, mentality, tempo, talkBoost) => {
     const { state, lastWeek, matchAdjustments } = get();
     if (!state || !lastWeek) return null;
     const managedId = state.meta.managedClubId;
@@ -710,7 +735,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     // Substitui o ajuste do MESMO minuto (re-aplicar o intervalo, p.ex.) e acumula.
     const next: MatchAdjustment[] = [
       ...matchAdjustments.filter((a) => a.minute !== minute),
-      { minute, lineup, mentality, tempo },
+      { minute, lineup, mentality, tempo, talkBoost },
     ];
     const result = coreApplyMatchChanges(state, fx.id, next);
     if (!result) return null;
@@ -724,12 +749,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return result;
   },
 
-  applyEuroMatchChange: (fixtureId, minute, lineup, mentality, tempo) => {
+  applyEuroMatchChange: (fixtureId, minute, lineup, mentality, tempo, talkBoost) => {
     const { state, lastWeek, matchAdjustments } = get();
     if (!state || !lastWeek) return null;
     const next: MatchAdjustment[] = [
       ...matchAdjustments.filter((a) => a.minute !== minute),
-      { minute, lineup, mentality, tempo },
+      { minute, lineup, mentality, tempo, talkBoost },
     ];
     const result = coreApplyEuroMatchChanges(state, fixtureId, next);
     if (!result) return null;
@@ -745,6 +770,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
       matchAdjustments: next,
     });
     return result;
+  },
+
+  teamTalk: (tone, goalsFor, goalsAgainst) => {
+    const { state } = get();
+    if (!state) return null;
+    const tactic = state.tactics[state.meta.managedClubId];
+    if (!tactic) return null;
+    const situation = situationOf(goalsFor, goalsAgainst);
+    const outcome = evaluateTalk(tone, situation, tactic, state.players);
+    recordTalkMorale(state, outcome.morale);
+    set({ state: bump(state) });
+    return outcome;
   },
 
   clearMatchAdjustments: () => set({ matchAdjustments: [] }),
@@ -1304,6 +1341,45 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (it.kind === 'CRISIS' || it.kind === 'PRESS') return true;
       return !!state.players[it.playerId];
     });
+  },
+
+  nextOpponentId: () => {
+    const { state } = get();
+    if (!state) return null;
+    const managedId = state.meta.managedClubId;
+    // Numa semana EUROPEIA o próximo jogo é o europeu — o relatório tem de
+    // falar de quem se vai mesmo defrontar, não do próximo da liga. Fora dessa
+    // semana, `nextManagedEuroMatch` continua a devolver o jogo europeu
+    // seguinte, que ainda não é o próximo: daí o `isEuroWeek`.
+    if (isEuroWeek(state)) {
+      const euro = nextManagedEuroMatch(state);
+      if (euro) return euro.opponentId;
+    }
+    const leagueId = managedLeagueId(state);
+    const round = nextRound(state, leagueId);
+    if (round === null) return null;
+    const fx = state.schedules[leagueId]?.fixtures.find(
+      (f) => f.round === round && (f.homeClubId === managedId || f.awayClubId === managedId),
+    );
+    if (!fx) return null;
+    return fx.homeClubId === managedId ? fx.awayClubId : fx.homeClubId;
+  },
+
+  opponentReport: (clubId) => {
+    const { state } = get();
+    return state ? coreOpponentReport(state, clubId) : null;
+  },
+
+  gamePlan: () => {
+    const { state } = get();
+    return state ? coreGamePlan(state) : {};
+  },
+
+  setGamePlan: (patch) => {
+    const { state } = get();
+    if (!state) return;
+    coreSetGamePlan(state, patch);
+    set({ state: bump(state) });
   },
 
   fans: () => {

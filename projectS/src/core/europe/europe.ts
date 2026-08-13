@@ -5,7 +5,7 @@
  * demanda) e um placar barato tipo `bgScore` para os outros 34 jogos de cada
  * jornada. Determinístico via `deriveSeed`.
  */
-import { GameState, MatchResult, Player, Tactic, Club, Side, defaultFacilities } from '../models';
+import { GameState, hasPlan, MatchResult, Player, Tactic, Club, Side, defaultFacilities } from '../models';
 import { Rng, deriveSeed } from '../engine/rng';
 import { simulateMatch, TacticChange } from '../engine';
 import { WORLD_TEAMS } from '../data/world/worldTeams';
@@ -203,7 +203,11 @@ export function playEuroFixture(state: GameState, f: EuroFixture): void {
   const hT = state.tactics[f.homeId];
   const aT = state.tactics[f.awayId];
   if (involvesManaged && hT && aT) {
-    f.result = simulateMatch(f.homeId, f.awayId, hT, aT, state.players, seed);
+    const plan = hasPlan(state.career.gamePlan) ? state.career.gamePlan : undefined;
+    f.result = simulateMatch(f.homeId, f.awayId, hT, aT, state.players, seed, undefined, {
+      homePlan: f.homeId === managedId ? plan : undefined,
+      awayPlan: f.awayId === managedId ? plan : undefined,
+    });
     return;
   }
   const rng = new Rng(seed);

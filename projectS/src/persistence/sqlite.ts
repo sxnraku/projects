@@ -40,6 +40,38 @@ export async function saveGame(db: SqliteDb, state: GameState): Promise<void> {
   });
 }
 
+/**
+ * Limite de variáveis por statement no SQLite (`SQLITE_MAX_VARIABLE_NUMBER`).
+ * O valor por omissão é 999; fica-se por 900 para haver folga.
+ */
+const MAX_VARS = 900;
+
+/**
+ * Insere linhas em LOTES, em vez de uma chamada por linha.
+ *
+ * Era aqui que o jogo pesava: 1232 jogadores davam 1232 `runAsync` awaited em
+ * série, e cada um atravessa a ponte nativa. Com lotes, os mesmos 1232 passam a
+ * caber em ~9 chamadas. O SQL gerado é `INSERT INTO t (cols) VALUES (?,?),(?,?)…`,
+ * que o SQLite executa como uma só operação.
+ */
+async function insertRows<T>(
+  db: SqliteDb, table: string, cols: string[], rows: T[], toParams: (r: T) => unknown[],
+): Promise<void> {
+  if (rows.length === 0) return;
+  const perRow = cols.length;
+  const chunk = Math.max(1, Math.floor(MAX_VARS / perRow));
+  const placeholder = `(${cols.map(() => '?').join(',')})`;
+  for (let i = 0; i < rows.length; i += chunk) {
+    const slice = rows.slice(i, i + chunk);
+    const params: unknown[] = [];
+    for (const r of slice) params.push(...toParams(r));
+    await db.runAsync(
+      `INSERT INTO ${table} (${cols.join(',')}) VALUES ${slice.map(() => placeholder).join(',')}`,
+      params,
+    );
+  }
+}
+
 async function insertAll(db: SqliteDb, rows: SaveRows): Promise<void> {
   const ins = (sql: string, params: unknown[]) => db.runAsync(sql, params);
 
@@ -49,35 +81,42 @@ async function insertAll(db: SqliteDb, rows: SaveRows): Promise<void> {
      VALUES (?,?,?,?,?,?,?,?,?,?)`,
     [m.id, m.save_id, m.manager_name, m.managed_club_id, m.season, m.current_date, m.rng_seed, m.created_at, m.updated_at, m.schema_version],
   );
-  for (const r of rows.leagues) {
-    await ins(`INSERT INTO leagues (id,name,country,tier,club_ids) VALUES (?,?,?,?,?)`,
-      [r.id, r.name, r.country, r.tier, r.club_ids]);
-  }
-  for (const r of rows.clubs) {
-    await ins(`INSERT INTO clubs (id,name,short_name,country,league_id,primary_color,secondary_color,stadium_name,stadium_capacity,reputation,facilities,squad)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [r.id, r.name, r.short_name, r.country, r.league_id, r.primary_color, r.secondary_color, r.stadium_name, r.stadium_capacity, r.reputation, r.facilities, r.squad]);
-  }
-  for (const r of rows.players) {
-    await ins(`INSERT INTO players (id,club_id,first_name,last_name,age,nationality,foot,positions,attributes,potential,condition,contract_until,wage,market_value,transfer_listed)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [r.id, r.club_id, r.first_name, r.last_name, r.age, r.nationality, r.foot, r.positions, r.attributes, r.potential, r.condition, r.contract_until, r.wage, r.market_value, r.transfer_listed]);
-  }
-  for (const r of rows.finances) {
-    await ins(`INSERT INTO finances (club_id,balance,transfer_budget,wage_budget,income,expenses) VALUES (?,?,?,?,?,?)`,
-      [r.club_id, r.balance, r.transfer_budget, r.wage_budget, r.income, r.expenses]);
-  }
-  for (const r of rows.tactics) {
-    await ins(`INSERT INTO tactics (club_id,formation,mentality,tempo,pressing,defensive_line,creativity,lineup,bench,captain_id,penalty_taker_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-      [r.club_id, r.formation, r.mentality, r.tempo, r.pressing, r.defensive_line, r.creativity, r.lineup, r.bench, r.captain_id, r.penalty_taker_id]);
-  }
-  for (const r of rows.standings) {
-    await ins(`INSERT INTO standings (league_id,club_id,played,won,drawn,lost,goals_for,goals_against,points) VALUES (?,?,?,?,?,?,?,?,?)`,
-      [r.league_id, r.club_id, r.played, r.won, r.drawn, r.lost, r.goals_for, r.goals_against, r.points]);
-  }
-  for (const r of rows.schedules) {
-    await ins(`INSERT INTO schedules (league_id,data) VALUES (?,?)`, [r.league_id, r.data]);
-  }
+
+  await insertRows(db, 'leagues', ['id', 'name', 'country', 'tier', 'club_ids'],
+    rows.leagues, (r) => [r.id, r.name, r.country, r.tier, r.club_ids]);
+
+  await insertRows(db, 'clubs',
+    ['id', 'name', 'short_name', 'country', 'league_id', 'primary_color', 'secondary_color',
+      'stadium_name', 'stadium_capacity', 'reputation', 'facilities', 'squad'],
+    rows.clubs, (r) => [r.id, r.name, r.short_name, r.country, r.league_id, r.primary_color,
+      r.secondary_color, r.stadium_name, r.stadium_capacity, r.reputation, r.facilities, r.squad]);
+
+  await insertRows(db, 'players',
+    ['id', 'club_id', 'first_name', 'last_name', 'age', 'nationality', 'foot', 'positions',
+      'attributes', 'potential', 'condition', 'contract_until', 'wage', 'market_value', 'transfer_listed'],
+    rows.players, (r) => [r.id, r.club_id, r.first_name, r.last_name, r.age, r.nationality, r.foot,
+      r.positions, r.attributes, r.potential, r.condition, r.contract_until, r.wage, r.market_value,
+      r.transfer_listed]);
+
+  await insertRows(db, 'finances',
+    ['club_id', 'balance', 'transfer_budget', 'wage_budget', 'income', 'expenses'],
+    rows.finances, (r) => [r.club_id, r.balance, r.transfer_budget, r.wage_budget, r.income, r.expenses]);
+
+  await insertRows(db, 'tactics',
+    ['club_id', 'formation', 'mentality', 'tempo', 'pressing', 'defensive_line', 'creativity',
+      'lineup', 'bench', 'captain_id', 'penalty_taker_id'],
+    rows.tactics, (r) => [r.club_id, r.formation, r.mentality, r.tempo, r.pressing,
+      r.defensive_line, r.creativity, r.lineup, r.bench, r.captain_id, r.penalty_taker_id]);
+
+  await insertRows(db, 'standings',
+    ['league_id', 'club_id', 'played', 'won', 'drawn', 'lost', 'goals_for', 'goals_against', 'points'],
+    rows.standings, (r) => [r.league_id, r.club_id, r.played, r.won, r.drawn, r.lost,
+      r.goals_for, r.goals_against, r.points]);
+
+  await insertRows(db, 'schedules', ['league_id', 'data'],
+    rows.schedules, (r) => [r.league_id, r.data]);
+
+  // Blobs de linha única — um `runAsync` cada, que já é o mínimo.
   await ins(`INSERT INTO career (id,data) VALUES (?,?)`, [rows.career.id, rows.career.data]);
   await ins(`INSERT INTO news (id,data) VALUES (?,?)`, [rows.news.id, rows.news.data]);
   await ins(`INSERT INTO cup (id,data) VALUES (?,?)`, [rows.cup.id, rows.cup.data]);

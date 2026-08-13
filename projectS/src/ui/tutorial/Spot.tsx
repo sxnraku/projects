@@ -12,9 +12,9 @@
  * Fora do tutorial isto é um `View` normal — não custa nada e não muda o
  * desenho do ecrã.
  */
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { StyleProp, View, ViewStyle } from 'react-native';
-import { setTargetRect } from './registry';
+import { registerMeasurer, setTargetRect } from './registry';
 
 export function Spot({
   id, children, style,
@@ -28,6 +28,11 @@ export function Spot({
       });
     });
   }, [id]);
+
+  // Enquanto estiver montado, o tutorial pode pedir-lhe uma medição nova.
+  // Sem isto, o retângulo guardado é o do momento em que o ecrã montou — e um
+  // scroll ou um cartão que apareça acima tornam-no errado sem aviso.
+  useEffect(() => registerMeasurer(id, measure), [id, measure]);
 
   return (
     <View ref={ref} style={style} onLayout={measure} collapsable={false}>

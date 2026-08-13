@@ -7,6 +7,7 @@ import { GameState } from '../src/core/models';
 import { useGameStore } from '../src/state/gameStore';
 import { useMonetizationStore } from '../src/state/monetizationStore';
 import { loadPrefs, persist, restore, savePrefs } from './db';
+import { restore as restorePurchases } from '../src/native/purchases';
 import { initAds } from '../src/native/ads';
 import { detectDeviceLang } from '../src/ui/deviceLang';
 import { ForcedUpdateGate } from '../src/ui/ForcedUpdateGate';
@@ -37,6 +38,8 @@ export default function RootLayout() {
     (async () => {
       try {
         const [saved, prefs] = await Promise.all([restore(), loadPrefs()]);
+        // O que está gravado no dispositivo é só CACHE, para o jogo abrir
+        // depressa sem esperar pela loja.
         useMonetizationStore.getState().setPremium(prefs.premium);
         if (saved) {
           useGameStore.getState().loadState(saved);
@@ -56,6 +59,23 @@ export default function RootLayout() {
     // A porta de atualização obrigatória corre dentro de <ForcedUpdateGate/>.
   }, []);
 
+  // PREMIUM: pergunta à LOJA se já foi comprado, sempre, em cada arranque.
+  //
+  // É isto que faz quem pagou e reinstalou recuperar o Premium sem pagar outra
+  // vez — a queixa nº1 deste tipo de produto e motivo de reembolso automático.
+  // Corre em segundo plano: se a Play Store demorar ou não responder, o jogo já
+  // abriu há muito e fica apenas com o que estava em cache.
+  useEffect(() => {
+    let alive = true;
+    restorePurchases()
+      .then((owned) => {
+        if (!alive || !owned) return;
+        useMonetizationStore.getState().setPremium(true);
+      })
+      .catch(() => { /* a loja é opcional; o jogo nunca depende dela */ });
+    return () => { alive = false; };
+  }, []);
+
   // Auto-save com THROTTLE: gravar o estado inteiro (900+ jogadores) a cada
   // alteração era pesado e deixava o jogo lento. Agora grava no máximo a cada 2s
   // (o último estado) e imediatamente ao ir para segundo plano — nada se perde.
@@ -69,7 +89,11 @@ export default function RootLayout() {
     const unsubGame = useGameStore.subscribe((s) => {
       if (!s.state) return;
       latest = s.state;
-      if (!timer) timer = setTimeout(flush, 2000); // primeira alteração agenda; as seguintes só atualizam `latest`
+      // 4s, não 2s: gravar custa serializar ~2,4 MB e escrever tudo, e a cada
+      // toque na interface a store faz `bump()`. A 2s isso dava uma pausa a
+      // cada dois segundos enquanto se navega. Nada se perde por esperar mais:
+      // o flush ao minimizar continua imediato.
+      if (!timer) timer = setTimeout(flush, 4000);
     });
     const unsubMon = useMonetizationStore.subscribe((s) => {
       savePrefs({ premium: s.m.premium }).catch(() => {});

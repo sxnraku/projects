@@ -2,7 +2,7 @@
   "expo": {
     "name": "Football Legacy",
     "slug": "football-legacy",
-    "version": "1.0.34",
+    "version": "1.0.36",
     "orientation": "portrait",
     "scheme": "footballlegacy",
     "userInterfaceStyle": "dark",
@@ -22,7 +22,7 @@
     },
     "android": {
       "package": "com.rakulabs.footballlegacy",
-      "versionCode": 40,
+      "versionCode": 42,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#20242A"

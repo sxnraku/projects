@@ -130,6 +130,8 @@ function SeasonCard({ entry }: { entry: SeasonHistoryEntry }) {
   const champions = [...entry.champions].sort((a, b) => a.tier - b.tier);
   const main = champions[0];
   const topScorer = main ? entry.topScorers.find((s) => s.leagueId === main.leagueId) : undefined;
+  // Prémios da divisão mais alta que teve campeão (o `main`).
+  const mainAwards = main ? (entry.awards ?? []).filter((a) => a.leagueId === main.leagueId) : [];
 
   return (
     <View style={styles.card}>
@@ -147,6 +149,22 @@ function SeasonCard({ entry }: { entry: SeasonHistoryEntry }) {
         <Text style={styles.detail}>
           ⚽ {t('history.topScorer')}: <Text style={styles.detailStrong}>{topScorer.playerName}</Text> ({topScorer.goals})
         </Text>
+      ) : null}
+
+      {/* PRÉMIOS INDIVIDUAIS da divisão principal — o palmarés deixou de ser só
+          de equipas. Só se mostram os da 1.ª divisão para o cartão não crescer
+          com quatro prémios × cinco escalões. */}
+      {mainAwards.length > 0 ? (
+        <View style={styles.awards}>
+          {mainAwards.map((a) => (
+            <Text key={a.kind} style={styles.detail} numberOfLines={1}>
+              🏆 {t(`award.${a.kind}`)}: <Text style={styles.detailStrong}>{a.playerName}</Text>
+              {a.kind === 'TOP_SCORER' ? ` (${t('award.goals', { value: a.value })})`
+                : a.kind === 'BEST_MANAGER' ? ''
+                : ` (${t('award.rating', { value: (a.value / 10).toFixed(1) })})`}
+            </Text>
+          ))}
+        </View>
       ) : null}
 
       {entry.cups.length > 0 ? (
@@ -186,6 +204,7 @@ const styles = StyleSheet.create({
   detail: { color: theme.colors.textDim, fontSize: 12, marginTop: 8 },
   detailStrong: { color: theme.colors.text, fontWeight: '700' },
   cups: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 8 },
+  awards: { marginTop: 6, gap: 2 },
   cupChip: {
     paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
     backgroundColor: theme.colors.bg, borderWidth: 1, borderColor: theme.colors.border,

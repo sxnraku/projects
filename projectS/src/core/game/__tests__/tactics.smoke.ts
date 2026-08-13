@@ -256,8 +256,14 @@ console.log('\nGravar e ler:');
   const rows = serialize(g);
   const legacy = deserialize({ ...rows, setpieces: { id: 1, data: '' } });
   const t2 = legacy.tactics[legacy.meta.managedClubId]!;
-  assert(t2.freeKickTakerId === null && t2.cornerFocus === undefined,
+  // "Por definir" é `undefined`, venha de um save antigo ou de um jogo novo.
+  // Antes a leitura devolvia `null` aqui e `undefined` num jogo acabado de
+  // criar: duas representações para o mesmo nada, que faziam gravar-e-recarregar
+  // devolver uma tática "diferente" da original (ver `smoke:sqlite`).
+  assert(t2.freeKickTakerId === undefined && t2.cornerFocus === undefined,
     'um save anterior às bolas paradas abre com os marcadores por definir');
+  assert(!t2.freeKickTakerId && !t2.cornerTakerId,
+    'e o motor lê-os como "sem escolha", que é o que interessa');
   assert(t2.lineup.every((s, i) => s.role === t0.lineup[i]!.role),
     'e mantém os papéis, que viajam noutro sítio');
 }

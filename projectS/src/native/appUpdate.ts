@@ -28,7 +28,7 @@ import { Linking, Platform } from 'react-native';
  * Tem de ser igual ao versionCode de app.json/build.gradle (garantido por
  * `npm run check:version`).
  */
-const FALLBACK_VERSION_CODE = 40;
+const FALLBACK_VERSION_CODE = 42;
 
 /**
  * Código da versão DESTE build, lido do manifest embutido (app.json) para não

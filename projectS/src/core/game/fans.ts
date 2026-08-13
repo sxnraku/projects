@@ -206,6 +206,32 @@ export function matchMoodDelta(input: FanMatchInput): { delta: number; key: stri
   return { delta: Math.round(delta), key };
 }
 
+/**
+ * SEGUNDA HIPÓTESE: troca a reação da bancada a um jogo que foi repetido.
+ *
+ * Desfaz o que o resultado antigo provocou e aplica o do novo. A subtração usa
+ * o delta REGISTADO no motivo (e não o recalculado), porque o original pode ter
+ * sido cortado pelos limites 0-100 — sem isso o humor derivava a cada repetição.
+ *
+ * Devolve a variação líquida.
+ */
+export function replaceMatchReaction(
+  state: GameState, before: FanMatchInput, after: FanMatchInput,
+): number {
+  const f = ensureFans(state);
+  const old = matchMoodDelta(before);
+
+  // Encontra o motivo daquele jogo (o mais recente que bata certo) e desfá-lo.
+  const idx = f.reasons.findIndex((r) => r.key === old.key);
+  if (idx >= 0) {
+    f.mood = clampMood(f.mood - f.reasons[idx]!.delta);
+    f.reasons.splice(idx, 1);
+  }
+
+  const now = matchMoodDelta(after);
+  return nudgeFans(state, now.key, now.delta, { opp: after.oppName });
+}
+
 /** Contexto da semana para `updateFansWeek`. */
 export interface FanWeekInput {
   /** Jogo do clube gerido, se houve. */

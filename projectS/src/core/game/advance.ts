@@ -77,12 +77,15 @@ import { pruneOffers, resolveDueOffers } from './offers';
 import { tickPromises } from './relations';
 import { isDerby } from './rivals';
 import { applyCards } from './discipline';
+import { gamePlan } from './opponent';
+import { hasPlan } from '../models';
 import {
   attendanceFactor, ensureFans, fanMood, FanMatchInput, fansOnDeparture, fansOnPromotion,
   fansOnRelegation, fansOnTrophy, homeSupport, moraleFromFans, resetSupport, squadShare,
   updateFansWeek, UNREST_CONFIDENCE_HIT,
 } from './fans';
 import { expirePress, generatePressConference, resolveClaim } from './press';
+import { flushTalkMorale } from './teamTalk';
 import { archivePlayerSeasons, archiveSeason } from './history';
 import { applyStaffCost, ensureStaff } from './staffOps';
 import { aiSignFreeAgents, freeAgentRng, resolvePreContracts } from './freeAgents';
@@ -205,6 +208,9 @@ export function advanceWeek(
   // novo) e repõe a despesa semanal antes de as finanças correrem.
   ensureStaff(state);
   applyStaffCost(state);
+  // Palestras do intervalo: a moral entra agora, que é quando o jogo anterior
+  // já não pode ser re-simulado (ver `teamTalk.recordTalkMorale`).
+  flushTalkMorale(state);
   let managedFixtures: Fixture[] = [];
   let managedRound = 0;
   /** Jornada de liga a MOSTRAR: numa semana europeia a liga não avança, mas o
@@ -293,6 +299,10 @@ export function advanceWeek(
       // Só o clube gerido tem bancada simulada — os outros jogam com o apoio
       // neutro de sempre, que é exatamente o comportamento anterior.
       homeSupport: (h) => (h === managedId ? homeSupport(fanMood(state)) : undefined),
+      // Instruções contra o adversário: só o clube gerido as define.
+      // `undefined` quando não há plano nenhum: assim o contexto só se grava no
+      // resultado quando há mesmo alguma coisa para reproduzir.
+      plan: (clubId) => (clubId === managedId && hasPlan(gamePlan(state)) ? gamePlan(state) : undefined),
     });
 
     for (const fx of played) {
@@ -741,11 +751,18 @@ export function advanceWeek(
 
     // BRAVATA: se prometeste alguma coisa à imprensa, o jogo desta jornada
     // cobra-a. Ganhar paga com juros; empatar já é não cumprir.
-    if (myMatches.length > 0) {
-      const decisive = myMatches[myMatches.length - 1]!;
+    //
+    // ⚠ O jogo que decide é o DA LIGA (ou o europeu, nas semanas de Europa) —
+    // o mesmo que a pergunta do jornalista nomeou e o mesmo que o balanço da
+    // semana mostra. Antes usava-se o ÚLTIMO jogo da semana, e como a Taça é
+    // empilhada depois da liga, uma vitória de 3-0 no campeonato aparecia como
+    // "promessa falhada" por causa de uma eliminatória que ninguém associou à
+    // promessa.
+    const decisive = (myFx?.result ? myFx : myMatches[0]) ?? null;
+    if (decisive?.result) {
       const isHome = decisive.homeClubId === managedId;
-      const mine = isHome ? decisive.result!.home.goals : decisive.result!.away.goals;
-      const theirs = isHome ? decisive.result!.away.goals : decisive.result!.home.goals;
+      const mine = isHome ? decisive.result.home.goals : decisive.result.away.goals;
+      const theirs = isHome ? decisive.result.away.goals : decisive.result.home.goals;
       const outcome = resolveClaim(state, mine > theirs);
       if (outcome) {
         confidence = state.career.confidence;
@@ -892,7 +909,9 @@ export function advanceWeek(
     const totalRounds = mSchedule?.totalRounds ?? 34;
 
     const conf = generatePressConference(state, {
-      form: recentFormOf(state, managedId, 3),
+      // 8 jogos, não 3: é o que permite dizer "seis vitórias seguidas" em vez
+      // de "três" a quem leva seis.
+      form: recentFormOf(state, managedId, 8),
       nextIsDerby: !!nextFx && isDerby(state, nextFx.homeClubId, nextFx.awayClubId),
       nextOpponent: state.clubs[nextOppId]?.shortName ?? '',
       lastMargin,

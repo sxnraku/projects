@@ -205,6 +205,19 @@ export interface CareerState {
    */
   press?: import('../game/press').PressMemory;
 
+  /**
+   * PLANO contra o adversário (marcação individual, fechar as alas). Vive aqui
+   * porque só o clube gerido o tem e a tabela `tactics` não aceita colunas
+   * novas sem migração. Ver `core/game/opponent.ts`.
+   */
+  gamePlan?: import('../models').OppositionPlan;
+
+  /**
+   * Moral por aplicar, vinda das palestras do intervalo. Entra no arranque da
+   * jornada seguinte — ver `core/game/teamTalk.ts` para o porquê.
+   */
+  pendingTalkMorale?: number;
+
   /** Melhoria de instalação GRÁTIS por vídeo disponível (fica até ser usada). */
   freeUpgradePending?: boolean;
   /** Jornadas jogadas desde a última melhoria grátis (nova a cada 5). */

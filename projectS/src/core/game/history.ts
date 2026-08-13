@@ -24,6 +24,7 @@ import {
   SeasonHistoryEntry,
   SeasonTopScorer,
 } from '../models';
+import { creditAwards, SeasonAward, seasonAwards } from './awards';
 
 /** Nome legível de um clube que pode já não estar no estado (adversário europeu). */
 function clubNameOf(state: GameState, clubId: string | null | undefined): string | null {
@@ -43,6 +44,7 @@ export function archiveSeason(state: GameState, finishedEurope?: EuropeState | n
 
   const champions: SeasonChampion[] = [];
   const topScorers: SeasonTopScorer[] = [];
+  const awards: SeasonAward[] = [];
 
   for (const league of Object.values(state.leagues)) {
     const table = state.standings[league.id];
@@ -89,6 +91,11 @@ export function archiveSeason(state: GameState, finishedEurope?: EuropeState | n
         goals: best.condition.seasonGoals ?? 0,
       });
     }
+
+    // PRÉMIOS INDIVIDUAIS desta divisão. Corre aqui, e não no rollover, porque
+    // é aqui que os totalizadores da época ainda estão inteiros — a seguir são
+    // zerados e não há maneira de os recuperar.
+    awards.push(...seasonAwards(state, league.id, top && top.played > 0 ? top.clubId : null));
   }
 
   // Provas a eliminar: taça nacional + as três europeias + supertaça.
@@ -105,7 +112,10 @@ export function archiveSeason(state: GameState, finishedEurope?: EuropeState | n
     pushCup('trophy.superCup', finishedEurope.superCup?.winnerId);
   }
 
-  const entry: SeasonHistoryEntry = { season, champions, topScorers, cups };
+  const entry: SeasonHistoryEntry = { season, champions, topScorers, cups, awards };
+  // Os prémios do clube gerido entram também no palmarés pessoal, que é onde
+  // se vão procurar — o arquivo do mundo é para consultar, não para exibir.
+  creditAwards(state, awards);
   const existing = history.seasons.findIndex((s) => s.season === season);
   if (existing >= 0) history.seasons[existing] = entry;
   else history.seasons.push(entry);

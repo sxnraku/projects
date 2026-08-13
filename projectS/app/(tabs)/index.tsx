@@ -7,9 +7,8 @@ import { TutorialTargets } from '../../src/ui/tutorial/registry';
 import { useMonetizationStore } from '../../src/state/monetizationStore';
 import { AdReward } from '../../src/monetization';
 import { OBJECTIVE_KEYS, dailyBonusAmount } from '../../src/core/career';
-import { computeTeamStrength } from '../../src/core/engine';
 import { TrainingFocus } from '../../src/core/training';
-import { Club, GameState, goalDifference, naturalOverallFine, Player } from '../../src/core/models';
+import { Club, GameState, goalDifference, naturalOverallFine, Player, sectorRatings } from '../../src/core/models';
 import { PRESS_OPTIONS, answerKey, questionKey, type ReturnedLoan } from '../../src/core/game';
 import { money, to100, wage } from '../../src/ui/format';
 import { cashWarning, isInsolvent, RUNWAY_WARNING_WEEKS, suggestedWage } from '../../src/core/economy';
@@ -206,15 +205,14 @@ export default function Dashboard() {
   const isHome = next?.homeClubId === club.id;
   const fired = career.pendingOffers.length > 0;
 
-  // Força por zona (escala ~0..100 para ler como nos jogos de referência).
+  // Força por zona, na MESMA régua que o campo mostra por jogador.
+  //
+  // Antes vinha de `computeTeamStrength × 5`, que inclui os multiplicadores da
+  // tática, a forma e a moral: dava "MED 77" num onze cujo melhor médio tinha
+  // 68. O número não batia com nada do que se via no plantel.
   const strengthOf = (clubId: string) => {
     const t = state.tactics[clubId];
-    if (!t) return null;
-    const s = computeTeamStrength(t, state.players);
-    // Teto de 100: mentalidade + linha alta multiplicam a força e um plantel de
-    // topo chegava a mostrar "MED 101", o que lê como bug na escala 0-100.
-    const cap = (v: number) => Math.min(100, Math.round(v * 5));
-    return { def: cap(s.defence), mid: cap(s.midfield), att: cap(s.attack) };
+    return t ? sectorRatings(t, state.players) : null;
   };
   const myStrength = strengthOf(club.id);
   const oppStrength = nextOppId ? strengthOf(nextOppId) : null;
@@ -297,9 +295,10 @@ export default function Dashboard() {
                       <View key={item.id} style={styles.pressBox}>
                         <Text style={styles.pressTitle}>🎙 {t('press.title')}</Text>
                         <Text style={styles.pressQuestion}>
-                          {t(questionKey(item.topic), {
+                          {t(questionKey(item.topic, item.variant ?? 0), {
                             opp: item.opponentName ?? '',
                             player: item.playerName ?? '',
+                            n: item.streak ?? 3,
                           })}
                         </Text>
                         {PRESS_OPTIONS[item.topic].map((opt) => (
@@ -315,9 +314,10 @@ export default function Dashboard() {
                           >
                             <Text style={styles.pressTone}>{t(`press.tone.${opt.tone}`)}</Text>
                             <Text style={styles.pressLine}>
-                              {t(answerKey(item.topic, opt.tone), {
+                              {t(answerKey(item.topic, opt.tone, item.variant ?? 0), {
                                 opp: item.opponentName ?? '',
                                 player: item.playerName ?? '',
+                                n: item.streak ?? 3,
                               })}
                             </Text>
                           </Pressable>
@@ -480,6 +480,7 @@ export default function Dashboard() {
             {/* ADEPTOS — a segunda avaliação do treinador. A direção olha para
                 a tabela; a bancada olha para o que viu no sábado, e o que ela
                 sente enche o estádio, pesa no jogo em casa e chega ao balneário. */}
+            <Spot id={TutorialTargets.fansCard}>
             <DashCard title={t('fans.title')} accent={fansColor}>
               <View style={styles.fansRow}>
                 <View style={{ flex: 1 }}>
@@ -505,6 +506,7 @@ export default function Dashboard() {
               )}
               <Text style={styles.sub}>{t('fans.hint')}</Text>
             </DashCard>
+            </Spot>
 
             {/* PRÓXIMO JOGO — cartão-herói com os dois escudos */}
             <Spot id={TutorialTargets.nextMatch} style={styles.matchCard}>

@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { useGameStore } from '../../src/state/gameStore';
+import { hasPlan } from '../../src/core/models';
 import { Spot } from '../../src/ui/tutorial/Spot';
 import { TutorialTargets } from '../../src/ui/tutorial/registry';
 import {
@@ -142,6 +143,10 @@ export default function Tactics() {
   const state = useGameStore((s) => s.state);
   const setTactic = useGameStore((s) => s.setTactic);
   const rotate = useGameStore((s) => s.rotate);
+  const nextOpponentId = useGameStore((s) => s.nextOpponentId);
+  const opponentReport = useGameStore((s) => s.opponentReport);
+  const gamePlan = useGameStore((s) => s.gamePlan);
+  const setPlan = useGameStore((s) => s.setGamePlan);
   const managedId = state?.meta.managedClubId;
 
   const [pitchW, setPitchW] = useState(0);
@@ -154,6 +159,11 @@ export default function Tactics() {
 
   const tactic = state.tactics[managedId]!;
   const club = state.clubs[managedId]!;
+  // ADVERSÁRIO da próxima jornada: relatório + plano. `nextOpponentId` devolve
+  // null quando a época já acabou — nesse caso a secção não aparece.
+  const oppId = nextOpponentId();
+  const report = oppId ? opponentReport(oppId) : null;
+  const plan = gamePlan();
   const layout = LAYOUTS[tactic.formation];
   const pitchH = pitchW * 1.35;
 
@@ -397,6 +407,71 @@ export default function Tactics() {
         <Text style={styles.hint}>{t(`corner.${tactic.cornerFocus ?? 'MIXED'}.hint`)}</Text>
         </Spot>
 
+        {/* ADVERSÁRIO — o que se sabe dele e o que se faz contra ele.
+            O detalhe do relatório depende da REDE DE OLHEIROS: com nível baixo
+            veem-se bandas ("meio-campo forte"), com nível alto veem-se números
+            e o nome do melhor deles. É a primeira vez que essa instalação paga
+            alguma coisa fora do mercado. */}
+        {report ? (
+          <>
+            <Section title={t('opp.title', { club: report.clubName })} />
+            <View style={styles.oppBox}>
+              <View style={styles.oppHead}>
+                <Text style={styles.oppFormation}>{report.formation}</Text>
+                <Text style={styles.oppThreat}>{t(`opp.threat.${report.threat}`)}</Text>
+              </View>
+              <View style={styles.oppLines}>
+                {([['opp.attack', report.attack], ['opp.midfield', report.midfield],
+                   ['opp.defence', report.defence], ['opp.setPiece', report.setPiece]] as const).map(
+                  ([label, ln]) => (
+                    <View key={label} style={styles.oppLine}>
+                      <Text style={styles.oppLineLabel}>{t(label)}</Text>
+                      <Text style={[styles.oppLineValue, { color: bandColor(ln.band) }]}>
+                        {ln.value != null ? ln.value : t(`opp.band.${ln.band}`)}
+                      </Text>
+                    </View>
+                  ),
+                )}
+              </View>
+              {report.keyPlayer ? (
+                <Text style={styles.oppKey}>
+                  {t('opp.keyPlayer', {
+                    name: report.keyPlayer.name,
+                    pos: report.keyPlayer.position,
+                    ovr: report.keyPlayer.overall,
+                  })}
+                </Text>
+              ) : (
+                <Text style={styles.oppLocked}>{t('opp.needScouts', { level: report.scoutLevel })}</Text>
+              )}
+            </View>
+
+            <Pressable
+              style={[styles.oppInstr, plan.markStar && styles.oppInstrOn]}
+              onPress={() => setPlan({ markStar: !plan.markStar })}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.oppInstrLabel}>{t('opp.markStar')}</Text>
+                <Text style={styles.oppInstrHint}>{t('opp.markStar.hint')}</Text>
+              </View>
+              <Text style={styles.oppCheck}>{plan.markStar ? '\u2713' : '\u2013'}</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.oppInstr, plan.blockWings && styles.oppInstrOn]}
+              onPress={() => setPlan({ blockWings: !plan.blockWings })}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.oppInstrLabel}>{t('opp.blockWings')}</Text>
+                <Text style={styles.oppInstrHint}>{t('opp.blockWings.hint')}</Text>
+              </View>
+              <Text style={styles.oppCheck}>{plan.blockWings ? '\u2713' : '\u2013'}</Text>
+            </Pressable>
+            <Text style={styles.hint}>
+              {hasPlan(plan) ? t('opp.planOn') : t('opp.planOff')}
+            </Text>
+          </>
+        ) : null}
+
         <View style={[styles.loadBox, { borderColor: loadColor }]}>
           <Text style={[styles.loadTitle, { color: loadColor }]}>
             {t('load.title', {
@@ -602,6 +677,12 @@ function Slider({
   );
 }
 
+/** Cor da banda de força do adversário — vermelho é perigo PARA NÓS. */
+function bandColor(band: 'WEAK' | 'AVERAGE' | 'STRONG'): string {
+  return band === 'STRONG' ? theme.colors.red
+    : band === 'WEAK' ? theme.colors.green : theme.colors.yellow;
+}
+
 function Chip({ label, active, onPress, radio }: { label: string; active: boolean; onPress: () => void; radio?: boolean }) {
   return (
     <Pressable onPress={onPress} style={[styles.chip, active && styles.chipActive]}>
@@ -672,6 +753,31 @@ function FieldMarkings() {
 }
 
 const styles = StyleSheet.create({
+  oppBox: {
+    backgroundColor: theme.colors.surfaceAlt, borderRadius: theme.radius.sm,
+    padding: theme.spacing(1), gap: theme.spacing(0.75), marginBottom: theme.spacing(0.75),
+  },
+  oppHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  oppFormation: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '900' },
+  oppThreat: { color: theme.colors.accent, fontSize: 10, fontWeight: '900', letterSpacing: 0.5, textTransform: 'uppercase' },
+  oppLines: { flexDirection: 'row', justifyContent: 'space-between', gap: theme.spacing(0.5) },
+  oppLine: { flex: 1, alignItems: 'center', gap: 2 },
+  oppLineLabel: { color: theme.colors.textDim, fontSize: 9, fontWeight: '800', letterSpacing: 0.3, textTransform: 'uppercase' },
+  oppLineValue: { fontSize: theme.font.small, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  oppKey: { color: theme.colors.text, fontSize: theme.font.small },
+  oppLocked: { color: theme.colors.textDim, fontSize: theme.font.small, fontStyle: 'italic' },
+  oppInstr: {
+    flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1),
+    backgroundColor: theme.colors.surfaceAlt, borderRadius: theme.radius.sm,
+    borderLeftWidth: 3, borderLeftColor: theme.colors.border,
+    paddingVertical: theme.spacing(0.9), paddingHorizontal: theme.spacing(1),
+    marginBottom: theme.spacing(0.5),
+  },
+  oppInstrOn: { borderLeftColor: theme.colors.green },
+  oppInstrLabel: { color: theme.colors.text, fontSize: theme.font.small, fontWeight: '800' },
+  oppInstrHint: { color: theme.colors.textDim, fontSize: 10 },
+  oppCheck: { color: theme.colors.green, fontSize: 18, fontWeight: '900' },
+
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing(0.75) },
 
   drawerHead: {

@@ -77,6 +77,22 @@ export interface MatchResult {
   playerStats?: Record<string, PlayerMatchStat>;
   /** Homem do jogo (playerId da melhor nota). Opcional em saves antigos. */
   motm?: string | null;
+  /**
+   * CONTEXTO com que este jogo foi simulado (dérbi, apoio da bancada).
+   *
+   * Guarda-se porque as re-simulações — a "segunda hipótese" e cada
+   * substituição ao vivo — têm de reproduzir os minutos JÁ VISTOS exatamente
+   * como foram. O apoio dos adeptos muda no fecho da semana; se o replay o
+   * fosse buscar ao estado ATUAL, o primeiro tempo que o utilizador acabou de
+   * ver mudava por baixo dele. Opcional: saves antigos entram sem contexto e
+   * comportam-se como sempre se comportaram.
+   */
+  ctx?: {
+    derby?: boolean;
+    homeSupport?: number;
+    homePlan?: import('./tactic').OppositionPlan;
+    awayPlan?: import('./tactic').OppositionPlan;
+  };
 }
 
 /** Vencedor, ou null em empate. */

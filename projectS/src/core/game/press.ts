@@ -42,6 +42,8 @@ export const PressTopic = {
   TRANSFER: 'TRANSFER',
   /** Zona de despromoção com a época a meio ou mais. */
   RELEGATION: 'RELEGATION',
+  /** Na frente do campeonato com a época adiantada — a pergunta inevitável. */
+  TITLE_RACE: 'TITLE_RACE',
 } as const;
 export type PressTopic = (typeof PressTopic)[keyof typeof PressTopic];
 
@@ -119,7 +121,24 @@ export const PRESS_OPTIONS: Record<PressTopic, PressOption[]> = {
     { tone: 'BACK_SQUAD', morale: 5, confidence: -2, fans: -3 },
     { tone: 'BOLD', morale: 3, confidence: -1, fans: 9, claim: true },
   ],
+  TITLE_RACE: [
+    { tone: 'CALM', morale: 1, confidence: 2, fans: 0 },
+    { tone: 'BACK_SQUAD', morale: 4, confidence: 0, fans: 4 },
+    { tone: 'BOLD', morale: 2, confidence: -2, fans: 11, claim: true },
+  ],
 };
+
+/**
+ * Quantas maneiras diferentes existem de fazer a mesma pergunta.
+ *
+ * Sem isto, a mesma frase repetia-se de conferência em conferência e a
+ * mecânica lia-se como um menu fixo. A variante é escolhida pela jornada, não
+ * ao acaso: fica estável para uma dada conferência (sobrevive a gravar e
+ * carregar) mas muda de uma para a seguinte.
+ */
+export const PRESS_VARIANTS = 3;
+/** Variantes por RESPOSTA (menos, porque o tom já as distingue). */
+export const ANSWER_VARIANTS = 2;
 
 /** Bravata em aberto: paga-se ou cobra-se no próximo jogo do clube gerido. */
 export interface PressClaim {
@@ -157,14 +176,17 @@ export function pressOption(topic: PressTopic, tone: PressTone): PressOption | n
   return PRESS_OPTIONS[topic]?.find((o) => o.tone === tone) ?? null;
 }
 
-/** Chave i18n da pergunta do jornalista. */
-export function questionKey(topic: PressTopic): string {
-  return `press.q.${topic}`;
+/** Sufixo de variante: a primeira não leva nenhum (mantém as chaves antigas). */
+const suffix = (v: number) => (v > 0 ? `.${'bc'[v - 1]}` : '');
+
+/** Chave i18n da pergunta do jornalista, na variante pedida. */
+export function questionKey(topic: PressTopic, variant = 0): string {
+  return `press.q.${topic}${suffix(variant % PRESS_VARIANTS)}`;
 }
 
-/** Chave i18n de uma resposta possível. */
-export function answerKey(topic: PressTopic, tone: PressTone): string {
-  return `press.a.${topic}.${tone}`;
+/** Chave i18n de uma resposta possível, na variante pedida. */
+export function answerKey(topic: PressTopic, tone: PressTone, variant = 0): string {
+  return `press.a.${topic}.${tone}${suffix(variant % ANSWER_VARIANTS)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +195,11 @@ export function answerKey(topic: PressTopic, tone: PressTone): string {
 
 /** O que a semana traz, para escolher o assunto da conferência. */
 export interface PressContext {
-  /** Forma recente do clube gerido, mais recente primeiro. */
+  /**
+   * Forma recente do clube gerido, mais recente primeiro. Convém dar-lhe MAIS
+   * do que 3 jogos: era isso que fazia a pergunta dizer sempre "três vitórias"
+   * a quem levava cinco ou seis seguidas.
+   */
   form: ('W' | 'D' | 'L')[];
   /** O próximo jogo é um dérbi? */
   nextIsDerby: boolean;
@@ -194,6 +220,20 @@ export interface PressContext {
   bidTarget?: { playerId: string; playerName: string };
 }
 
+/** Vitórias seguidas, do jogo mais recente para trás. */
+export function winStreak(form: ('W' | 'D' | 'L')[]): number {
+  let n = 0;
+  for (const r of form) { if (r !== 'W') break; n++; }
+  return n;
+}
+
+/** Jogos seguidos sem ganhar. */
+export function winlessStreak(form: ('W' | 'D' | 'L')[]): number {
+  let n = 0;
+  for (const r of form) { if (r === 'W') break; n++; }
+  return n;
+}
+
 /**
  * Escolhe o assunto. Ordem de prioridade: o que um jornalista perguntaria
  * primeiro. Sem próximo jogo e sem drama, não há conferência (devolve null) —
@@ -206,9 +246,12 @@ export function pickTopic(ctx: PressContext): PressTopic | null {
   if (ctx.nextIsDerby) return 'DERBY';
   if (ctx.bidTarget) return 'TRANSFER';
 
-  const last3 = ctx.form.slice(0, 3);
-  if (last3.length === 3 && last3.every((r) => r === 'W')) return 'GOOD_RUN';
-  if (last3.length === 3 && last3.every((r) => r !== 'W')) return 'BAD_RUN';
+  // A CORRIDA AO TÍTULO passa à frente da simples série de vitórias: quem lidera
+  // em abril não quer ouvir falar dos últimos três jogos.
+  if (ctx.seasonProgress >= 0.55 && ctx.position <= 2) return 'TITLE_RACE';
+
+  if (winStreak(ctx.form) >= 3) return 'GOOD_RUN';
+  if (winlessStreak(ctx.form) >= 3) return 'BAD_RUN';
 
   // Zona de descida com a época a meio ou mais: a pergunta inevitável.
   const dropZone = ctx.clubCount - 2;
@@ -239,10 +282,20 @@ export function generatePressConference(
   if (!topic) return null;
   if (topic === 'PRE_MATCH' && (round <= 0 || round % preMatchEvery !== 0)) return null;
 
+  // A variante sai da época + jornada: estável para esta conferência, diferente
+  // na próxima. Nada de acaso — o mesmo save relê sempre a mesma pergunta.
+  //
+  // ⚠ Os coeficientes têm de ser COPRIMOS de `PRESS_VARIANTS`. Com `round * 3`
+  // e 3 variantes, `round` desaparecia no resto e saía sempre a mesma redação —
+  // exatamente o problema que isto existe para resolver.
+  const variant = (state.meta.season * 5 + round * 7 + topic.length * 11) % PRESS_VARIANTS;
   const item: PressItem = {
     kind: 'PRESS',
     id: `press_${state.meta.season}_${round}_${topic}`,
     topic,
+    variant,
+    streak: topic === 'GOOD_RUN' ? winStreak(ctx.form)
+      : topic === 'BAD_RUN' ? winlessStreak(ctx.form) : undefined,
     createdDate: state.meta.currentDate,
     expiresDate: addDays(state.meta.currentDate, PRESS_TTL_DAYS),
     opponentName: ctx.nextOpponent || undefined,
