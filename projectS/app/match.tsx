@@ -12,7 +12,8 @@ import { useT } from '../src/ui/i18n';
 import { Body, Button, Card, Crest, H1, Screen } from './components';
 import { GoalClip } from '../src/ui/goalClip/GoalClip';
 import { haptic, playCue, playSound, startAmbience, stopAmbience } from '../src/ui/sound';
-import { showRewarded } from '../src/native/ads';
+import AdBanner from '../src/native/AdBanner';
+import { useMonetizationStore } from '../src/state/monetizationStore';
 
 const MENTALITIES: Mentality[] = ['DEFENSIVE', 'BALANCED', 'ATTACKING'];
 const TEMPOS: Tempo[] = ['SLOW', 'NORMAL', 'FAST'];
@@ -23,13 +24,13 @@ const CLIP_W = Math.min(340, Dimensions.get('window').width - 24);
 interface ClipGoal { scorer: string; minute: number; side: 'HOME' | 'AWAY'; seed: number }
 
 const EVENT_ICON: Record<string, string> = {
-  GOAL: '⚽', ASSIST: '🅰', SAVE: '🧤', CHANCE: '💨', YELLOW_CARD: '🟨', RED_CARD: '🟥',
-  INJURY: '🚑', HALF_TIME: '⏸', FULL_TIME: '🏁', KICKOFF: '▶',
+  GOAL: '[GOLO]', ASSIST: '[ASSIST]', SAVE: '[DEFESA]', CHANCE: '[LANCE]', YELLOW_CARD: '[AMAR]', RED_CARD: '[VERM]',
+  INJURY: '[LESÃO]', HALF_TIME: '[INT]', FULL_TIME: '[FIM]', KICKOFF: '[INÍCIO]',
 };
 
 /** Origem do lance — um golo de livre não se lê como um golo de jogada corrida. */
 const DETAIL_ICON: Record<string, string> = {
-  FREE_KICK: '🎯', CORNER: '🚩', HEADER: '🗣',
+  FREE_KICK: '[L.LIVRE]', CORNER: '[CANTO]', HEADER: '[CABEÇA]',
 };
 
 /** Duração de um minuto de jogo em ms, por velocidade. */
@@ -84,6 +85,9 @@ export default function Match() {
   const [speed, setSpeed] = useState(1);
   const [paused, setPaused] = useState(false);
   const finished = minute >= FULL_TIME_MIN;
+  const claimAdSlot = useMonetizationStore((s) => s.claimAdSlot);
+  const adSlotAvailable = useMonetizationStore((s) => s.adSlotAvailable);
+  const premium = useMonetizationStore((s) => s.m.premium);
 
   // ---- Lance de golo animado (dispara quando o relógio chega ao minuto do golo) ----
   const [clipGoal, setClipGoal] = useState<ClipGoal | null>(null);
@@ -251,7 +255,7 @@ export default function Match() {
       <Screen edges={['left', 'right', 'bottom']}>
         <View style={styles.emptyWrap}>
           <View style={styles.emptyBadge}>
-            <Text style={styles.emptyIcon}>⚽</Text>
+            <Text style={styles.emptyIcon}>JOGO</Text>
           </View>
           <Text style={styles.emptyTitle}>{t('match.noRecent')}</Text>
           <Text style={styles.emptyHint}>{t('match.advanceHint')}</Text>
@@ -298,7 +302,7 @@ export default function Match() {
       <ScrollView showsVerticalScrollIndicator={false}>
         {isEuroMatch && euroComp ? (
           <View style={styles.euroBadge}>
-            <Text style={styles.euroBadgeText}>🏆 {t('euro.night')} · {t(`euro.name.${euroComp}`)}</Text>
+            <Text style={styles.euroBadgeText}>[EUROPA] {t('euro.night')} · {t(`euro.name.${euroComp}`)}</Text>
           </View>
         ) : null}
         {/* SCOREBOARD AO VIVO */}
@@ -324,7 +328,7 @@ export default function Match() {
             <View style={styles.teamCol}>
               <Crest club={home} size={54} />
               <View style={styles.teamNameRow}>
-                {home.id === managedId ? <Text style={styles.ourStar}>★</Text> : null}
+                {home.id === managedId ? <Text style={styles.ourStar}>• </Text> : null}
                 <Text
                   style={[styles.teamName, home.id === managedId && styles.ourTeamName]}
                   numberOfLines={1}
@@ -339,7 +343,7 @@ export default function Match() {
             <View style={styles.teamCol}>
               <Crest club={away} size={54} />
               <View style={styles.teamNameRow}>
-                {away.id === managedId ? <Text style={styles.ourStar}>★</Text> : null}
+                {away.id === managedId ? <Text style={styles.ourStar}>• </Text> : null}
                 <Text
                   style={[styles.teamName, away.id === managedId && styles.ourTeamName]}
                   numberOfLines={1}
@@ -362,7 +366,7 @@ export default function Match() {
         {/* CONTROLOS DE VELOCIDADE + SUBSTITUIÇÃO AO VIVO */}
         {!finished ? (
           <View style={styles.controls}>
-            <ControlBtn label={paused ? '▶' : '⏸'} active={paused} onPress={() => setPaused((p) => !p)} />
+            <ControlBtn label={paused ? 'RETOMAR' : 'PAUSAR'} active={paused} onPress={() => setPaused((p) => !p)} />
             {[1, 2, 4].map((s) => (
               <ControlBtn key={s} label={`${s}x`} active={speed === s && !paused}
                 onPress={() => { setSpeed(s); setPaused(false); }} />
@@ -409,13 +413,13 @@ export default function Match() {
             ) : null}
             {scorers.length > 0 ? (
               <View style={styles.psRow}>
-                <Text style={styles.psLabel}>⚽ {t('match.scorers')}</Text>
+                <Text style={styles.psLabel}>[GOLOS] {t('match.scorers')}</Text>
                 <Text style={styles.psVal}>{scorers.map((id) => withCount(id, ps[id]!.goals)).join(', ')}</Text>
               </View>
             ) : null}
             {assisters.length > 0 ? (
               <View style={styles.psRow}>
-                <Text style={styles.psLabel}>🅰 {t('match.assists')}</Text>
+                <Text style={styles.psLabel}>[ASSIST] {t('match.assists')}</Text>
                 <Text style={styles.psVal}>{assisters.map((id) => withCount(id, ps[id]!.assists)).join(', ')}</Text>
               </View>
             ) : null}
@@ -427,11 +431,11 @@ export default function Match() {
           <Card>
             <View style={styles.tlHeader}>
               <Text style={[styles.tlTeam, home.id === managedId && styles.ourTeamName]}>
-                {home.id === managedId ? '★ ' : ''}{home.shortName}
+                {home.id === managedId ? '[CLUBE] ' : ''}{home.shortName}
               </Text>
               <Text style={styles.tlMinuteHead}>MIN</Text>
               <Text style={[styles.tlTeam, away.id === managedId && styles.ourTeamName]}>
-                {away.id === managedId ? '★ ' : ''}{away.shortName}
+                {away.id === managedId ? '[CLUBE] ' : ''}{away.shortName}
               </Text>
             </View>
             {live.timeline.map((e, i) => (
@@ -440,13 +444,14 @@ export default function Match() {
           </Card>
         ) : null}
 
-        {/* SEGUNDA HIPÓTESE — só na LIGA doméstica, após derrota, 1× por jogo, por anúncio */}
-        {finished && isLeagueMatch && !won && !drew && fixture && !replayedFixtures.includes(fixture.id) ? (
+        {/* SEGUNDA HIPÓTESE — só na LIGA doméstica, após derrota, 1× por jogo.
+            Por anúncio; com Premium gasta o bónus do dia e joga logo. */}
+        {finished && isLeagueMatch && !won && !drew && fixture && !replayedFixtures.includes(fixture.id) && adSlotAvailable() ? (
           <Pressable
             disabled={busyAd}
             onPress={async () => {
               setBusyAd(true);
-              const earned = await showRewarded();
+              const earned = await claimAdSlot();
               if (earned) {
                 const newResult = replayLastMatch(fixture.id);
                 if (newResult) {
@@ -458,7 +463,7 @@ export default function Match() {
             }}
             style={[styles.replayBtn, busyAd && { opacity: 0.5 }]}
           >
-            <Text style={styles.replayText}>{t('match.replay')}</Text>
+            <Text style={styles.replayText}>{t(premium ? 'match.replayPremium' : 'match.replay')}</Text>
             <Text style={styles.replaySub}>{t('match.replaySub')}</Text>
           </Pressable>
         ) : null}
@@ -474,6 +479,12 @@ export default function Match() {
         ) : null}
         <View style={{ height: 24 }} />
       </ScrollView>
+
+      {/* BANNER — só enquanto o jogo CORRE, colado ao fundo. Sai sozinho ao
+          apito final, para não ficar publicidade por cima do pós-jogo (xG,
+          marcadores, homem do jogo) nem ao lado do botão de continuar.
+          O próprio AdBanner devolve null a quem tem Premium. */}
+      {!finished ? <AdBanner /> : null}
 
       {/* PALESTRA DO INTERVALO — o que se diz vale pelo que o marcador diz */}
       {showTalk && state && managedId ? (

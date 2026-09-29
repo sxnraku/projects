@@ -68,8 +68,8 @@ test.describe('Football Legacy — app real', () => {
 
     await newCareer(page);
 
-    // Chegou ao jogo: a barra de topo mostra energia, lesões e dinheiro.
-    await expect(page.getByText('⚡').first()).toBeVisible({ timeout: 30_000 });
+    // Chegou ao jogo: a barra de topo mostra energia (FIT), lesões e dinheiro.
+    await expect(page.getByText(/FIT|⚡/).first()).toBeVisible({ timeout: 30_000 });
     expect(errors.filter((e) => !e.includes('favicon')).join('\n')).toBe('');
   });
 
@@ -85,10 +85,42 @@ test.describe('Football Legacy — app real', () => {
     const total = Number((await counter.textContent())!.split(' de ')[1]);
     expect(total).toBeGreaterThan(15);
 
+    // O ANEL TEM DE CAIR EM CIMA DO ELEMENTO.
+    //
+    // Percorrer os 24 passos sem verificar isto deixava passar o bug que mais
+    // vezes voltou: o destaque desenhado ao lado do que estava a explicar.
+    // Em cada passo com alvo, compara-se a caixa do anel com a do `Spot`.
+    let verificados = 0;
     for (let step = 1; step <= total; step++) {
       await expect(page.getByText(`${step} de ${total}`)).toBeVisible();
+
+      const ring = page.getByTestId('tutorial-ring');
+      if (await ring.count()) {
+        const rb = await ring.first().boundingBox();
+        // De todos os Spots montados, o destacado é o que o anel envolve.
+        const spots = page.locator('[data-testid^="spot-"]');
+        const n = await spots.count();
+        let melhor = Infinity;
+        for (let k = 0; k < n; k++) {
+          const sb = await spots.nth(k).boundingBox();
+          if (!rb || !sb || sb.width === 0) continue;
+          // Centro contra centro: o anel tem uma folga (PAD) de cada lado.
+          const d = Math.hypot(
+            (rb.x + rb.width / 2) - (sb.x + sb.width / 2),
+            (rb.y + rb.height / 2) - (sb.y + sb.height / 2),
+          );
+          melhor = Math.min(melhor, d);
+        }
+        if (melhor !== Infinity) {
+          expect(melhor, `passo ${step}: o anel está a ${melhor.toFixed(0)}px do elemento mais próximo`)
+            .toBeLessThan(12);
+          verificados++;
+        }
+      }
+
       if (step < total) await page.getByText(T.tutorialNext, { exact: true }).click();
     }
+    expect(verificados, 'houve passos com anel para verificar').toBeGreaterThan(3);
     // O último passo fecha o tutorial e não volta a aparecer.
     await page.getByText(T.tutorialDone).first().click();
     await expect(page.getByText(`${total} de ${total}`)).toBeHidden();
@@ -384,6 +416,117 @@ test.describe('Football Legacy — app real', () => {
     // O ecrã de jogo mostra o relógio da partida.
     await expect(page.getByText(/^\d+'$/).first()).toBeVisible({ timeout: 30_000 });
     await page.screenshot({ path: 'e2e/__screens__/match.png' });
+    expect(errors.join('\n')).toBe('');
+  });
+
+  test('a tatica permite escolher Capitao e Sub-Capitao com base na lideranca', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await newCareer(page);
+    await skipTutorial(page);
+
+    await page.getByText('Tática', { exact: true }).first().click();
+    await expect(page.getByText('Formação').first()).toBeVisible({ timeout: 20_000 });
+
+    // Secção de Liderança
+    const leadSection = page.getByText('LIDERANÇA DA EQUIPA').first();
+    await leadSection.scrollIntoViewIfNeeded();
+    await expect(leadSection).toBeVisible();
+
+    // Linhas do Capitão e Sub-Capitão
+    await expect(page.getByText('© Capitão principal')).toBeVisible();
+    await expect(page.getByText('Ⓥ Sub-capitão')).toBeVisible();
+
+    // Abrir modal do Capitão
+    await page.getByText('© Capitão principal').click();
+    await expect(page.getByText('Capitão principal').first()).toBeVisible();
+    await expect(page.getByText('Automático').first()).toBeVisible();
+    await page.screenshot({ path: 'e2e/__screens__/captains.png', fullPage: true });
+    await page.getByText('Automático').first().click();
+
+    // Abrir modal do Sub-Capitão
+    await page.getByText('Ⓥ Sub-capitão').click();
+    await expect(page.getByText('Sub-capitão').first()).toBeVisible();
+    await expect(page.getByText('Automático').first()).toBeVisible();
+    await page.getByText('Automático').first().click();
+
+    expect(errors.join('\n')).toBe('');
+  });
+
+  test('o plantel mostra os badges de Capitao e Sub-Capitao', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await newCareer(page);
+    await skipTutorial(page);
+
+    // Garante que há capitães definidos
+    await page.evaluate(() => {
+      const store = (window as any).__gameStore;
+      if (!store) return;
+      const s = store.getState().state;
+      if (!s) return;
+      const club = s.clubs[s.meta.managedClubId];
+      if (!club || club.squad.length < 2) return;
+      const tac = s.tactics[s.meta.managedClubId];
+      if (tac) {
+        tac.captainId = club.squad[0];
+        tac.viceCaptainId = club.squad[1];
+        store.setState({ state: { ...s } });
+      }
+    });
+
+    await page.getByText('Plantel', { exact: true }).first().click();
+    await expect(page.getByText('OVR').first()).toBeVisible({ timeout: 20_000 });
+
+    // Os badges © e Ⓥ aparecem no plantel
+    await expect(page.getByText('©').first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('Ⓥ').first()).toBeVisible({ timeout: 10_000 });
+    await page.screenshot({ path: 'e2e/__screens__/squad-captains.png', fullPage: true });
+    expect(errors.join('\n')).toBe('');
+  });
+
+  test('o gabinete do treinador abre audiencias com jogadores e permite escolher opcoes de dialogo', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await newCareer(page);
+    await skipTutorial(page);
+
+    // Injeta um pedido de audiência no estado do jogo
+    await page.evaluate(() => {
+      const store = (window as any).__gameStore;
+      if (!store) return;
+      const s = store.getState().state;
+      if (!s) return;
+      const club = s.clubs[s.meta.managedClubId];
+      if (!club || club.squad.length === 0) return;
+      const pId = club.squad[0];
+      s.inbox.unshift({
+        kind: 'REQUEST',
+        id: 'req_e2e_test',
+        playerId: pId,
+        request: 'WANTS_MINUTES',
+        createdDate: s.meta.currentDate,
+        expiresDate: s.meta.currentDate,
+      });
+      store.setState({ state: { ...s } });
+    });
+
+    // O cartão do Gabinete do Treinador aparece na Caixa de Entrada
+    await expect(page.getByText(/GABINETE DO TREINADOR/).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Mister, tenho trabalhado/).first()).toBeVisible({ timeout: 10_000 });
+
+    // Verifica as 3 opções de diálogo
+    await expect(page.getByText(/Prometer titularidade/).first()).toBeVisible();
+    await expect(page.getByText(/Pedir paciência/).first()).toBeVisible();
+    await expect(page.getByText(/Recusar o pedido/).first()).toBeVisible();
+
+    await page.screenshot({ path: 'e2e/__screens__/manager-office.png', fullPage: true });
+
+    // Clica na Opção A (Prometer titularidade)
+    await page.getByText(/Prometer titularidade/).first().click();
+
+    // A audiência fecha-se após a escolha
+    await expect(page.getByText(/GABINETE DO TREINADOR/)).toBeHidden({ timeout: 10_000 });
     expect(errors.join('\n')).toBe('');
   });
 });

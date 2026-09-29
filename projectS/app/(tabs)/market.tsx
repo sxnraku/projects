@@ -19,7 +19,7 @@ import { attrColor, theme } from '../../src/ui/theme';
 import { Face } from '../../src/ui/Face';
 import { Toast } from '../../src/ui/Toast';
 import { Body, Button, PosText, RowKV, Screen, Section, Stepper } from '../components';
-import { showRewarded } from '../../src/native/ads';
+import { useMonetizationStore } from '../../src/state/monetizationStore';
 
 type Feedback = { kind: 'ok' | 'counter' | 'error'; text: string } | null;
 
@@ -512,7 +512,7 @@ function ScoutsPanel({ onSign }: { onSign: (p: Player) => void }) {
         return (
           <View key={m.id} style={styles.missionRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.missionName}>{m.kind === 'PLAYER' ? '🔍 ' : '🌍 '}{label}</Text>
+              <Text style={styles.missionName}>{m.kind === 'PLAYER' ? '[JOGADOR] ' : '[LIGA] '}{label}</Text>
               <Text style={styles.sub}>{t('scout.roundsLeft', { n: m.roundsLeft })}</Text>
               <View style={styles.progTrack}><View style={[styles.progFill, { width: `${pct * 100}%` }]} /></View>
             </View>
@@ -592,6 +592,8 @@ function LoansPanel() {
   const isFocused = useIsFocused();
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [adBusy, setAdBusy] = useState(false);
+  const claimAdSlot = useMonetizationStore((s) => s.claimAdSlot);
+  const premium = useMonetizationStore((s) => s.m.premium);
   // Negociar opção de compra em TODOS os empréstimos que se receberem a seguir.
   const [withOption, setWithOption] = useState(false);
   if (!state) return null;
@@ -604,13 +606,14 @@ function LoansPanel() {
     .map((id) => state.players[id])
     .filter((p): p is Player => !!p && !!p.condition.loanOwnerId);
 
-  // Receber por empréstimo: ver anúncio primeiro; só com a recompensa é que assina.
+  // Receber por empréstimo: ver anúncio primeiro; só com a recompensa é que
+  // assina. Com Premium não há vídeo — gasta o bónus do dia e assina logo.
   const loanInWithAd = async (p: Player) => {
     if (adBusy) return;
     setAdBusy(true);
-    const watched = await showRewarded();
+    const watched = await claimAdSlot();
     setAdBusy(false);
-    if (!watched) { setFeedback({ kind: 'error', text: t('loan.in.adFailed') }); return; }
+    if (!watched) { setFeedback({ kind: 'error', text: t(premium ? 'bonus.premiumSpent' : 'loan.in.adFailed') }); return; }
     const r = doLoanIn(p.id, withOption);
     setFeedback(r.ok
       ? {
@@ -660,7 +663,7 @@ function LoansPanel() {
 
         <Section title={t('loan.in.title')} />
         <Text style={styles.emptyNote}>
-          {t('loan.in.count', { n: active.length, max: MAX_LOANS_IN })} {t('loan.in.adHint')}
+          {t('loan.in.count', { n: active.length, max: MAX_LOANS_IN })} {t(premium ? 'loan.in.adHintPremium' : 'loan.in.adHint')}
         </Text>
 
         {/* OPÇÃO DE COMPRA — paga-se já uma taxa e o preço fica travado no valor
@@ -669,7 +672,7 @@ function LoansPanel() {
         <Pressable style={[styles.optionToggle, withOption && styles.optionToggleOn]}
           onPress={() => setWithOption((v) => !v)}>
           <Text style={[styles.optionToggleText, withOption && styles.optionToggleTextOn]}>
-            {withOption ? '☑' : '☐'} {t('loan.option.toggle')}
+            {withOption ? '[X]' : '[ ]'} {t('loan.option.toggle')}
           </Text>
         </Pressable>
         <Text style={styles.emptyNote}>{t('loan.option.hint')}</Text>
@@ -1020,7 +1023,7 @@ function FreeAgentsPanel() {
                 }}
                 style={[styles.freeBtn, already && styles.freeBtnOff]}>
                 <Text style={[styles.freeBtnText, already && { color: theme.colors.textDim }]}>
-                  {already ? '✓' : t('free.sign')}
+                  {already ? 'OK' : t('free.sign')}
                 </Text>
               </Pressable>
             </View>

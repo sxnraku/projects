@@ -13,6 +13,7 @@
     "check:world-ratings": "node scripts/import-world-ratings.js",
     "import:world-ratings": "node scripts/import-world-ratings.js --write",
     "check:version": "node scripts/check-version.js",
+    "diagnostics": "tsx scripts/career-diagnostics.ts",
     "smoke:data": "tsx src/core/data/world/__tests__/data.smoke.ts",
     "smoke": "tsx src/core/models/__tests__/model.smoke.ts",
     "smoke:engine": "tsx src/core/engine/__tests__/engine.smoke.ts",
@@ -22,7 +23,7 @@
     "smoke:persist": "tsx src/persistence/__tests__/persistence.smoke.ts",
     "smoke:ads": "tsx src/monetization/__tests__/monetization.smoke.ts",
     "smoke:career": "tsx src/core/career/__tests__/career.smoke.ts",
-    "smoke:all": "npm run check:version && npm run smoke:data && npm run smoke && npm run smoke:engine && npm run smoke:season && npm run smoke:economy && npm run smoke:game && npm run smoke:persist && npm run smoke:sqlite && npm run smoke:ads && npm run smoke:career && npm run smoke:world && npm run smoke:inbox && npm run smoke:finance && npm run smoke:divisions && npm run smoke:matchday && npm run smoke:scouting && npm run smoke:academy && npm run smoke:contracts && npm run smoke:flow && npm run smoke:legacy && npm run smoke:tactics && npm run smoke:europe && npm run smoke:morale && npm run smoke:plan && npm run smoke:play",
+    "smoke:all": "npm run check:version && npm run smoke:data && npm run smoke && npm run smoke:engine && npm run smoke:season && npm run smoke:economy && npm run smoke:game && npm run smoke:persist && npm run smoke:sqlite && npm run smoke:ads && npm run smoke:career && npm run smoke:world && npm run smoke:inbox && npm run smoke:finance && npm run smoke:divisions && npm run smoke:matchday && npm run smoke:scouting && npm run smoke:academy && npm run smoke:contracts && npm run smoke:flow && npm run smoke:legacy && npm run smoke:tactics && npm run smoke:europe && npm run smoke:morale && npm run smoke:plan && npm run smoke:injuries && npm run smoke:emigrate && npm run smoke:play",
     "smoke:europe": "tsx src/core/europe/__tests__/europe.smoke.ts",
     "smoke:world": "tsx src/core/cup/__tests__/world.smoke.ts",
     "smoke:inbox": "tsx src/core/game/__tests__/inbox.smoke.ts",
@@ -43,7 +44,9 @@
     "smoke:plan": "tsx src/core/game/__tests__/gameplan.smoke.ts",
     "e2e:headed": "playwright test -c e2e/playwright.config.ts --headed",
     "e2e:ui": "playwright test -c e2e/playwright.config.ts --ui",
-    "smoke:sqlite": "tsx src/persistence/__tests__/sqlite.smoke.ts"
+    "smoke:sqlite": "tsx src/persistence/__tests__/sqlite.smoke.ts",
+    "smoke:injuries": "tsx src/core/game/__tests__/injuries.smoke.ts",
+    "smoke:emigrate": "tsx src/core/game/__tests__/emigrate.smoke.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

@@ -1,4 +1,5 @@
 import {
+  BidItem,
   CUP_EVERY_LEAGUE_ROUNDS,
   displayOverall,
   effectiveOverallFine,
@@ -7,6 +8,7 @@ import {
   isRoundComplete,
   LineupSlot,
   naturalOverall,
+  Player,
   weeklyNet,
 } from '../models';
 import { generateCup, playCupRound } from '../cup';
@@ -77,6 +79,10 @@ import { pruneOffers, resolveDueOffers } from './offers';
 import { tickPromises } from './relations';
 import { isDerby } from './rivals';
 import { applyCards } from './discipline';
+import { applyInjury, isFragile, tickInjury } from './injuries';
+import { countryNameOf, emigrate, isAbroad, worldTeamOfClubId } from './emigrate';
+import { activeCountrySlug } from './activeCountry';
+import { WORLD_TEAMS } from '../data/world/worldTeams';
 import { gamePlan } from './opponent';
 import { hasPlan } from '../models';
 import {
@@ -374,8 +380,8 @@ export function advanceWeek(
       const p = state.players[ev.playerId];
       if (!p || p.condition.status === 'INJURED') continue;
       const rng = new Rng(deriveSeed(state.meta.rngSeed, 'injury', fx.id, ev.playerId));
-      p.condition.status = 'INJURED';
-      p.condition.injuryDaysRemaining = rng.int(7, 28);
+      // Sair magoado estando FRÁGIL é recaída: agrava um escalão.
+      const severity = applyInjury(p, rng, isFragile(p));
       if (p.clubId === managedId) {
         // Em DIAS a informação era inútil: "17 dias" com um departamento médico
         // bom são 2 jornadas, com um mau são 3 — e o utilizador só conta jogos.
@@ -383,15 +389,30 @@ export function advanceWeek(
         const club = state.clubs[managedId];
         const perWeek = 7 + ((club?.facilities.medical ?? 1) - 1) * 2;
         const rounds = Math.max(1, Math.ceil(p.condition.injuryDaysRemaining / perWeek));
-        const params = { player: `${p.firstName} ${p.lastName}`, days: p.condition.injuryDaysRemaining, rounds };
-        addNews(state, 'INJURY', 'news.injury', params);
+        const params = {
+          player: `${p.firstName} ${p.lastName}`,
+          days: p.condition.injuryDaysRemaining,
+          rounds,
+          sev: severity,
+        };
+        // Uma lesão de época não pode chegar com a mesma frase de uma mazelada.
+        addNews(state, 'INJURY', severity === 'SEVERE' ? 'news.injury.severe' : 'news.injury', params);
         notes.push({
           kind: 'INJURY',
           key: 'note.injury',
-          params: { player: p.lastName, days: p.condition.injuryDaysRemaining, rounds },
+          params: { player: p.lastName, days: p.condition.injuryDaysRemaining, rounds, sev: severity },
         });
       }
     }
+  }
+
+  // Quem ENTROU em campo esta jornada. Serve à fragilidade (secção 5): jogar
+  // estando frágil arrisca recaída, ficar de fora é o que a cura.
+  const playedPlayers = new Set<string>();
+  for (const fx of allPlayed) {
+    const ps = fx.result?.playerStats;
+    if (!ps) continue;
+    for (const pid in ps) playedPlayers.add(pid);
   }
 
   // 1c-bis. Totalizadores da época: golos e assistências por jogador (todas as
@@ -668,6 +689,10 @@ export function advanceWeek(
 
   // 5. Recuperação de lesões — o departamento médico encurta o tempo, e o
   // fisioterapeuta do clube gerido encurta-o outra vez por cima disso.
+  //
+  // Aqui trata-se também da FRAGILIDADE: quem voltou há pouco e foi a jogo pode
+  // recair (pior do que da primeira vez); quem ficou de fora gasta uma jornada
+  // de fragilidade. Poupá-lo quatro jornadas é o que o cura de vez.
   const physioSpeedup = 1 / Math.max(0.5, injuryDurationFactor(staff));
   for (const club of Object.values(state.clubs)) {
     if (club.european) continue;
@@ -675,10 +700,23 @@ export function advanceWeek(
     const recoveryPerWeek = club.id === managedId ? Math.round(base * physioSpeedup) : base;
     for (const id of club.squad) {
       const p = state.players[id];
-      if (!p || p.condition.injuryDaysRemaining <= 0) continue;
-      p.condition.injuryDaysRemaining = Math.max(0, p.condition.injuryDaysRemaining - recoveryPerWeek);
-      if (p.condition.injuryDaysRemaining === 0 && p.condition.status === 'INJURED') {
-        p.condition.status = 'AVAILABLE';
+      if (!p) continue;
+      const rng = new Rng(deriveSeed(state.meta.rngSeed, 'relapse', state.meta.season, managedRound, id));
+      const relapse = tickInjury(p, recoveryPerWeek, playedPlayers.has(id), rng);
+      if (relapse && club.id === managedId) {
+        const rounds = Math.max(1, Math.ceil(p.condition.injuryDaysRemaining / (base * physioSpeedup)));
+        const params = {
+          player: `${p.firstName} ${p.lastName}`,
+          days: p.condition.injuryDaysRemaining,
+          rounds,
+          sev: relapse.severity,
+        };
+        addNews(state, 'INJURY', 'news.injury.relapse', params);
+        notes.push({
+          kind: 'INJURY',
+          key: 'note.injury.relapse',
+          params: { player: p.lastName, days: p.condition.injuryDaysRemaining, rounds, sev: relapse.severity },
+        });
       }
     }
   }
@@ -801,6 +839,19 @@ export function advanceWeek(
     }
   }
 
+  // 7.1. Rumores de mercado no feed de notícias durante a janela de transferências
+  if (windowOpen && (managedRound % 2 === 0)) {
+    const rumor = findTransferRumorTarget(state, managedId, managedRound);
+    if (rumor && rumor.profile !== 'BID') {
+      const clubName = state.clubs[managedId]?.name ?? '';
+      const key = rumor.profile === 'WONDERKID' ? 'news.rumor.wonderkid'
+        : rumor.profile === 'STAR' ? 'news.rumor.star'
+        : rumor.profile === 'EXPIRING' ? 'news.rumor.expiring'
+        : 'news.rumor.listed';
+      addNews(state, 'TRANSFER', key, { player: rumor.playerName, club: clubName });
+    }
+  }
+
   // 7a. Olheiros: avança as missões; relatórios prontos geram notícia.
   const reports = tickScouting(state);
   for (const r of reports) {
@@ -892,6 +943,7 @@ export function advanceWeek(
   // uma semana. Calar-se custa: os adeptos leem o silêncio como fuga.
   {
     expirePress(state);
+    const displayRound = managedRound;
     const nextLeagueRound = nextRound(state, mLeagueId);
     const nextFx = nextLeagueRound === null ? undefined : state.schedules[mLeagueId]?.fixtures.find(
       (f) => f.round === nextLeagueRound && (f.homeClubId === managedId || f.awayClubId === managedId),
@@ -899,30 +951,44 @@ export function advanceWeek(
     const nextOppId = nextFx ? (nextFx.homeClubId === managedId ? nextFx.awayClubId : nextFx.homeClubId) : '';
     const myLast = allPlayed.find((f) => f.result && (f.homeClubId === managedId || f.awayClubId === managedId));
     let lastMargin = 0;
+    let lastResultGoals: { scored: number; conceded: number } | undefined = undefined;
     if (myLast?.result) {
       const isHome = myLast.homeClubId === managedId;
-      lastMargin = (isHome ? myLast.result.home.goals : myLast.result.away.goals)
-        - (isHome ? myLast.result.away.goals : myLast.result.home.goals);
+      const scored = isHome ? myLast.result.home.goals : myLast.result.away.goals;
+      const conceded = isHome ? myLast.result.away.goals : myLast.result.home.goals;
+      lastMargin = scored - conceded;
+      lastResultGoals = { scored, conceded };
     }
-    const topBid = state.inbox.find((it) => it.kind === 'BID');
-    const bidPlayer = topBid?.kind === 'BID' ? state.players[topBid.playerId] : undefined;
+    const managedClub = state.clubs[managedId];
+    const suspendedId = managedClub?.squad.find((id) => (state.players[id]?.condition.suspended ?? 0) > 0);
+    const suspendedPlayer = suspendedId ? state.players[suspendedId] : undefined;
+
+    const nextIsCup = !!state.cup && !state.cup.winnerClubId && Array.isArray(state.cup.alive) && state.cup.alive.includes(managedId) && (displayRound + 1) % cupInterval === 0;
+    const nextIsEurope = !!state.europe?.managedComp;
+
     const totalRounds = mSchedule?.totalRounds ?? 34;
 
+    const bidTarget = (windowOpen || state.inbox.some((it) => it.kind === 'BID'))
+      ? findTransferRumorTarget(state, managedId, displayRound)
+      : undefined;
+
     const conf = generatePressConference(state, {
-      // 8 jogos, não 3: é o que permite dizer "seis vitórias seguidas" em vez
-      // de "três" a quem leva seis.
       form: recentFormOf(state, managedId, 8),
       nextIsDerby: !!nextFx && isDerby(state, nextFx.homeClubId, nextFx.awayClubId),
       nextOpponent: state.clubs[nextOppId]?.shortName ?? '',
       lastMargin,
+      lastResultGoals,
+      nextIsCup,
+      nextIsEurope,
+      disciplinedPlayer: suspendedPlayer
+        ? { playerId: suspendedPlayer.id, playerName: `${suspendedPlayer.firstName} ${suspendedPlayer.lastName}` }
+        : undefined,
       fanMood: fanMood(state),
       unrest: fanWeek?.unrest === true,
       position,
       clubCount: mLeague.clubIds.length,
       seasonProgress: totalRounds > 0 ? displayRound / totalRounds : 0,
-      bidTarget: bidPlayer
-        ? { playerId: bidPlayer.id, playerName: `${bidPlayer.firstName} ${bidPlayer.lastName}` }
-        : undefined,
+      bidTarget,
     }, displayRound);
     if (conf) notes.push({ kind: 'INFO', key: 'note.press.open' });
   }
@@ -1019,9 +1085,59 @@ function buildWeekReport(args: {
   };
 }
 
+/** Identifica um jogador relevante do plantel gerido para rumor de transferência ou proposta formal. */
+export function findTransferRumorTarget(
+  state: GameState,
+  managedId: string,
+  round: number,
+): { playerId: string; playerName: string; profile: 'STAR' | 'WONDERKID' | 'UNHAPPY' | 'EXPIRING' | 'BID'; suitorName?: string } | undefined {
+  // 1. Proposta formal pendente no inbox tem prioridade máxima
+  const topBid = state.inbox.find((it): it is BidItem => it.kind === 'BID');
+  if (topBid) {
+    const p = state.players[topBid.playerId];
+    const buyer = state.clubs[topBid.fromClubId];
+    if (p) {
+      return {
+        playerId: p.id,
+        playerName: `${p.firstName} ${p.lastName}`,
+        profile: 'BID',
+        suitorName: buyer?.name,
+      };
+    }
+  }
+
+  // 2. Se não há proposta formal, procurar candidatos a rumor no plantel gerido
+  const club = state.clubs[managedId];
+  if (!club || club.squad.length === 0) return undefined;
+
+  const squadPlayers = club.squad.map((id) => state.players[id]).filter(Boolean) as Player[];
+  if (squadPlayers.length === 0) return undefined;
+
+  const unhappy = squadPlayers.find((p) => p.transferListed || p.condition.morale <= 35 || state.inbox.some((it) => it.kind === 'REQUEST' && it.playerId === p.id && it.request === 'WANTS_LEAVE'));
+  const wonderkid = squadPlayers.find((p) => p.age <= 21 && p.potential >= 78);
+  const expiring = squadPlayers.find((p) => p.contractUntil === state.meta.season);
+  const star = [...squadPlayers].sort((a, b) => (b.attributes.pace + b.attributes.stamina) - (a.attributes.pace + a.attributes.stamina))[0];
+
+  const pool: { p: Player; profile: 'STAR' | 'WONDERKID' | 'UNHAPPY' | 'EXPIRING' }[] = [];
+  if (unhappy) pool.push({ p: unhappy, profile: 'UNHAPPY' });
+  if (wonderkid) pool.push({ p: wonderkid, profile: 'WONDERKID' });
+  if (expiring) pool.push({ p: expiring, profile: 'EXPIRING' });
+  if (star) pool.push({ p: star, profile: 'STAR' });
+
+  if (pool.length === 0) return undefined;
+
+  const chosen = pool[Math.abs(state.meta.season * 7 + round) % pool.length]!;
+  return {
+    playerId: chosen.p.id,
+    playerName: `${chosen.p.firstName} ${chosen.p.lastName}`,
+    profile: chosen.profile,
+  };
+}
+
 /**
  * Últimos N resultados de um clube na sua liga ('W' | 'D' | 'L').
- * Usado pela bilheteira: uma boa série enche o estádio, uma má esvazia-o.
+ * Devolve os resultados mais recentes PRIMEIRO (índice 0 = último jogo disputado).
+ * Usado pela bilheteira e pela imprensa para apurar séries reais.
  */
 export function recentFormOf(
   state: GameState,
@@ -1035,6 +1151,7 @@ export function recentFormOf(
   return schedule.fixtures
     .filter((f) => f.result && (f.homeClubId === clubId || f.awayClubId === clubId))
     .slice(-count)
+    .reverse()
     .map((f) => {
       const r = f.result!;
       const home = f.homeClubId === clubId;
@@ -1384,12 +1501,63 @@ export function generateMeritOffers(state: GameState): string[] {
     .filter((c) => c.reputation > myRep + 4)   // um degrau acima
     .filter((c) => c.reputation <= rep + 8)    // ao alcance do prestígio do treinador
     .sort((a, b) => b.reputation - a.reputation);
-  return candidates.slice(0, 2).map((c) => c.id);
+  const local = candidates.slice(0, 2).map((c) => c.id);
+
+  // ---- E DO ESTRANGEIRO --------------------------------------------------
+  //
+  // Sem isto a carreira tinha um teto: o maior clube do país. O resto do mundo
+  // corria no ecrã Mundo sem que lá se pudesse trabalhar.
+  //
+  // Só aparece a quem já chegou lá acima (`FOREIGN_OFFER_REP`), e a oferta é
+  // uma só — mudar de país é a maior decisão da carreira, não uma escolha de
+  // menu entre cinco. Os ids são globais (`club_<id do dataset>`), por isso o
+  // mesmo formato serve para um clube que ainda não existe no estado.
+  const foreign = rep >= FOREIGN_OFFER_REP ? foreignMeritOffer(state, rep) : null;
+  return foreign ? [...local, foreign] : local;
+}
+
+/** Reputação de treinador a partir da qual o estrangeiro repara nele. */
+export const FOREIGN_OFFER_REP = 62;
+
+/**
+ * Um clube de FORA ao alcance do treinador, ou null.
+ *
+ * Mede-se pela `forca` do dataset em vez da reputação, porque os clubes de fundo
+ * não têm reputação calculada — é a mesma grandeza que alimenta a simulação
+ * barata e o sorteio europeu.
+ */
+function foreignMeritOffer(state: GameState, rep: number): string | null {
+  const mine = activeCountrySlug(state);
+  const myForca = worldTeamOfClubId(state.meta.managedClubId)?.forca ?? 50;
+  const pool = WORLD_TEAMS
+    .filter((t) => t.slug !== mine)
+    .filter((t) => t.tier === 1)            // ninguém emigra para a 2ª divisão
+    .filter((t) => t.forca > myForca)       // tem de ser um passo em frente
+    .filter((t) => t.forca <= rep + 22)     // e estar ao alcance do prestígio
+    .sort((a, b) => b.forca - a.forca);
+  if (pool.length === 0) return null;
+  // Determinístico: a mesma carreira na mesma época recebe a mesma proposta.
+  const pick = pool[deriveSeed(state.meta.rngSeed, 'foreignOffer', state.meta.season) % Math.min(pool.length, 6)]!;
+  return `club_${pick.id}`;
 }
 
 /** Aceita uma oferta por mérito (muda de clube sem ter sido despedido). */
 export function acceptMeritOffer(state: GameState, clubId: string): boolean {
   if (!state.career.meritOffers?.includes(clubId)) return false;
+
+  // OFERTA DE FORA: o mundo inteiro tem de ser reconstruído no país novo. O
+  // `emigrate` já limpa ofertas, adeptos e o que era do campeonato anterior.
+  if (isAbroad(state, clubId)) {
+    const moved = emigrate(state, clubId);
+    if (!moved.ok) return false;
+    setManagedObjective(state);
+    addNews(state, 'BOARD', 'news.emigrated', {
+      club: moved.clubName ?? '',
+      country: countryNameOf(moved.country ?? ''),
+    });
+    return true;
+  }
+
   state.meta.managedClubId = clubId;
   state.career.meritOffers = [];
   state.career.confidence = 55;

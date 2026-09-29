@@ -142,14 +142,14 @@ function MineView({ state, cs, managedId }: { state: GameState; cs: EuroCompetit
                 <Text style={[styles.tieTeam, mine && styles.mineText]} numberOfLines={1}>{a.name}</Text>
                 <Text style={styles.tieVs}>{t('euro.vs')}</Text>
                 <Text style={[styles.tieTeam, { textAlign: 'right' }, mine && styles.mineText]} numberOfLines={1}>{b.name}</Text>
-                {wName ? <Text style={styles.tieWin} numberOfLines={1}>✓ {wName}</Text> : null}
+                {wName ? <Text style={styles.tieWin} numberOfLines={1}>OK {wName}</Text> : null}
               </View>
             );
           })}
         </View>
       ) : null}
       {cs.winnerClubId ? (
-        <Text style={styles.champLine}>🏆 {t('euro.champion')}: {metaOf(state, cs.winnerClubId).name}</Text>
+        <Text style={styles.champLine}>[CAMPEÃO] {t('euro.champion')}: {metaOf(state, cs.winnerClubId).name}</Text>
       ) : null}
       <View style={{ height: 24 }} />
     </ScrollView>
@@ -167,7 +167,7 @@ function CompCard({ state, cs, managedId }: { state: GameState; cs: EuroCompetit
         <Text style={styles.compStage}>{t(`euro.stage.${cs.stage}`)}</Text>
       </View>
       {cs.winnerClubId ? (
-        <Text style={styles.champLine}>🏆 {metaOf(state, cs.winnerClubId).name}</Text>
+        <Text style={styles.champLine}>[CAMPEÃO] {metaOf(state, cs.winnerClubId).name}</Text>
       ) : null}
       {sorted.slice(0, 8).map((r, i) => {
         const m = metaOf(state, r.clubId);
@@ -205,7 +205,7 @@ function SuperView({ state, managedId }: { state: GameState; managedId: string }
         <Text style={[styles.superName, { textAlign: 'right' }, mine && styles.mineText]} numberOfLines={1}>{away.name}</Text>
         <View style={[styles.superDot, { backgroundColor: away.color }]} />
       </View>
-      <Text style={styles.superStatus}>{winName ? `🏆 ${winName}` : t('euro.superCup.pending')}</Text>
+      <Text style={styles.superStatus}>{winName ? `[VENCEDOR] ${winName}` : t('euro.superCup.pending')}</Text>
     </View>
   );
 }

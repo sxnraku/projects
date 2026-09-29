@@ -112,6 +112,7 @@ export interface Tactic {
   lineup: LineupSlot[]; // 11 slots
   bench: string[]; // ids dos suplentes
   captainId: string | null;
+  viceCaptainId?: string | null;
   penaltyTakerId: string | null;
 
   /**

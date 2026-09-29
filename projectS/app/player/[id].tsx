@@ -114,7 +114,7 @@ export default function PlayerDetail() {
         <View style={{ flex: 1 }}>
           <Text style={styles.name}>
             {player.firstName} {player.lastName}
-            {isWonderkid(player) ? <Text style={{ color: theme.colors.yellow }}> ★</Text> : null}
+            {isWonderkid(player) ? <Text style={{ color: theme.colors.yellow, fontWeight: '700' }}> [PRODÍGIO]</Text> : null}
           </Text>
           <View style={styles.metaRow}>
             <PosText position={player.positions[0]!} />

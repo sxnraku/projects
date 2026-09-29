@@ -11,6 +11,11 @@ export async function initAds(): Promise<void> {
   // Sem SDK em web — nada a inicializar.
 }
 
+/** Sem anúncios em web, mas a API tem de existir (a store chama isto sempre). */
+export function setAdsPremium(_value: boolean): void {
+  // no-op
+}
+
 /** Interstitial simulado: resolve imediatamente, sem bloquear o jogo. */
 export async function showInterstitial(): Promise<void> {
   return;

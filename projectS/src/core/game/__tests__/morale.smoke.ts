@@ -22,9 +22,16 @@ import {
   moraleFromFans, nudgeFans, resetSupport, squadShare, updateFansWeek, FAN_NEUTRAL,
 } from '../fans';
 import {
-  answerPress, ensurePress, expirePress, generatePressConference, pickTopic,
+  answerKey, answerPress, ensurePress, expirePress, generatePressConference, pickTopic,
   PRESS_OPTIONS, PressTopic, questionKey, resolveClaim, winlessStreak, winStreak,
 } from '../press';
+import {
+  leadershipOf, onPitchCaptain, pickDefaultCaptains, setClubCaptains,
+} from '../leadership';
+import {
+  resolveAudienceChoice, tickPromises,
+} from '../relations';
+import { generatePlayerRequests } from '../inbox';
 import { simulateMatch } from '../../engine';
 import { matchdayGate } from '../../economy';
 import { Fixture, MatchResult, naturalOverall } from '../../models';
@@ -294,6 +301,7 @@ console.log('\nImprensa — perguntas com preço:');
   // dizer "três vitórias seguidas" a quem levava cinco.
   assert(winStreak(['W', 'W', 'W', 'W', 'W', 'D']) === 5, 'conta 5 vitórias seguidas');
   assert(winStreak(['D', 'W', 'W']) === 0, 'a série parte no primeiro não-triunfo');
+  assert(winStreak(['W', 'L', 'W', 'W', 'W']) === 1, 'vitória recente após derrota conta como 1 vitória seguida');
   assert(winlessStreak(['L', 'D', 'L', 'W']) === 3, 'conta 3 jogos sem ganhar');
   assert(winlessStreak([]) === 0, 'sem jogos não há série');
 
@@ -428,6 +436,147 @@ console.log('\nImprensa — perguntas com preço:');
     'trocar de clube recomeça adeptos e imprensa do zero');
   assert(!s.inbox.some((it) => it.kind === 'PRESS'),
     'e não sobra nenhuma conferência do cargo anterior');
+}
+
+{
+  // MORAL INDIVIDUAL: defender ou culpar jogador específico move o moral dele.
+  s.career.press = undefined;
+  s.inbox = s.inbox.filter((it) => it.kind !== 'PRESS');
+  const targetId = club.squad[0]!;
+  const targetPlayer = s.players[targetId]!;
+  targetPlayer.condition.morale = 60;
+
+  const item = generatePressConference(s, {
+    form: ['W', 'D', 'W'], nextIsDerby: false, nextOpponent: 'Y', lastMargin: 0,
+    fanMood: 60, unrest: false, position: 5, clubCount: 18, seasonProgress: 0.4,
+    bidTarget: { playerId: targetId, playerName: `${targetPlayer.firstName} ${targetPlayer.lastName}` },
+  }, 6);
+  assert(item !== null && item.topic === 'TRANSFER' && item.playerId === targetId,
+    'a conferência de transferência aponta ao jogador');
+  assert(item?.outletKey !== undefined && item?.journalistName !== undefined,
+    'o órgão de imprensa e repórter foram atribuídos');
+
+  const beforeNewsCount = s.news.length;
+  answerPress(s, item!.id, 'BACK_SQUAD');
+  assert(targetPlayer.condition.morale > 60, 'defender o jogador aumenta o moral individual dele');
+
+  // Testar perfis de rumores de transferência e suas chaves i18n
+  const profiles = ['WONDERKID', 'STAR', 'UNHAPPY', 'EXPIRING', 'BID'] as const;
+  for (const prof of profiles) {
+    const qKey = questionKey('TRANSFER', 0, prof);
+    const aKey = answerKey('TRANSFER', 'BACK_SQUAD', 0, prof);
+    assert(qKey === `press.q.TRANSFER.${prof}`, `chave de pergunta ${qKey} gerada`);
+    assert(aKey === `press.a.TRANSFER.${prof}.BACK_SQUAD`, `chave de resposta ${aKey} gerada`);
+  }
+
+  // Testar geração de conferência com novo tópico (BIG_WIN) e manchete com BOLD
+  s.career.press = undefined;
+  const bigWinItem = generatePressConference(s, {
+    form: ['W', 'W'], nextIsDerby: false, nextOpponent: 'Z', lastMargin: 4,
+    fanMood: 75, unrest: false, position: 2, clubCount: 18, seasonProgress: 0.5,
+  }, 7);
+  assert(bigWinItem?.topic === 'BIG_WIN', 'goleada na jornada gera tópico BIG_WIN');
+  answerPress(s, bigWinItem!.id, 'BOLD');
+  assert(s.news.length > beforeNewsCount, 'bravata na conferência gera manchete no feed de notícias');
+}
+
+// ====================================================================
+console.log('\nLiderança & Capitães — braçadeira e dinâmica de balneário:');
+
+{
+  const squadPlayers = club.squad.map((id) => s.players[id]!).filter(Boolean);
+  const pLeader = squadPlayers[0]!;
+  const score = leadershipOf(pLeader);
+  assert(score >= 1 && score <= 100, `leadershipOf devolve score 1..100 (${score})`);
+
+  // Default captains
+  const [capDef, vcDef] = pickDefaultCaptains(squadPlayers);
+  assert(!!capDef && !!vcDef && capDef.id !== vcDef.id, 'pickDefaultCaptains escolhe dois líderes distintos');
+  assert(leadershipOf(capDef!) >= leadershipOf(vcDef!), 'o capitão tem liderança >= à do sub-capitão');
+
+  // Definição de capitães
+  const tac = s.tactics[managedId]!;
+  tac.captainId = capDef!.id;
+  tac.viceCaptainId = vcDef!.id;
+
+  // On-pitch captain quando capitão joga
+  const onPitch1 = onPitchCaptain(tac, s.players);
+  assert(onPitch1.player?.id === capDef!.id && !onPitch1.isVice, 'com capitão no onze, ele assume a braçadeira');
+
+  // On-pitch captain quando capitão está de fora e vice joga
+  const oldLineup = tac.lineup;
+  tac.lineup = [
+    { playerId: vcDef!.id, position: 'CM' },
+    ...oldLineup.filter((slot) => slot.playerId !== capDef!.id && slot.playerId !== vcDef!.id),
+  ];
+  const onPitch2 = onPitchCaptain(tac, s.players);
+  assert(onPitch2.player?.id === vcDef!.id && onPitch2.isVice, 'com capitão fora, sub-capitão assume a braçadeira');
+  tac.lineup = oldLineup;
+
+  // Trocar de capitão: despromover capitão com alta liderança penaliza confiança
+  setClubCaptains(s, managedId, vcDef!.id, capDef!.id);
+  assert(tac.captainId === vcDef!.id && tac.viceCaptainId === capDef!.id, 'capitães trocados com sucesso');
+}
+
+// ====================================================================
+console.log('\nGabinete do Treinador — Audiências com Jogadores (4 tipos, 3 opções cada):');
+
+{
+  const pTest = club.squad.map((id) => s.players[id]!)[2]!;
+  pTest.condition.morale = 50;
+  pTest.condition.relation = { trust: 50 };
+  const initialWage = pTest.wage;
+
+  // 1. WANTS_MINUTES
+  s.inbox.push({
+    kind: 'REQUEST', id: 'req_min_test', playerId: pTest.id,
+    request: 'WANTS_MINUTES', createdDate: s.meta.currentDate, expiresDate: s.meta.currentDate,
+  });
+  // Opção A: Prometer titularidade
+  const msgA = resolveAudienceChoice(s, 'req_min_test', 'OPTION_A');
+  assert(msgA?.key === 'aud.minutes.promise', 'WANTS_MINUTES Opção A gera promessa de titularidade');
+  assert(pTest.condition.relation?.promise?.kind === 'PLAYING_TIME', 'promessa PLAYING_TIME registada');
+
+  // 2. WAGE_RISE
+  s.inbox.push({
+    kind: 'REQUEST', id: 'req_wage_test', playerId: pTest.id,
+    request: 'WAGE_RISE', createdDate: s.meta.currentDate, expiresDate: s.meta.currentDate,
+  });
+  // Opção A: Conceder aumento
+  const msgWageA = resolveAudienceChoice(s, 'req_wage_test', 'OPTION_A');
+  assert(msgWageA?.key === 'aud.wage.accepted', 'WAGE_RISE Opção A aceita aumento');
+  assert(pTest.wage > initialWage, `salário subiu de ${initialWage} para ${pTest.wage}`);
+  assert(pTest.condition.morale >= 70, 'moral subiu com o aumento salarial');
+
+  // 3. WANTS_BIG_MOVE
+  s.inbox.push({
+    kind: 'REQUEST', id: 'req_move_test', playerId: pTest.id,
+    request: 'WANTS_BIG_MOVE', createdDate: s.meta.currentDate, expiresDate: s.meta.currentDate,
+  });
+  // Opção A: Pacto por títulos
+  const msgMoveA = resolveAudienceChoice(s, 'req_move_test', 'OPTION_A');
+  assert(msgMoveA?.key === 'aud.bigMove.pact', 'WANTS_BIG_MOVE Opção A sela pacto por títulos');
+  assert(pTest.condition.relation?.promise?.kind === 'PROMOTION_OR_TITLE', 'promessa PROMOTION_OR_TITLE registada');
+
+  // 4. WANTS_LEAVE
+  s.inbox.push({
+    kind: 'REQUEST', id: 'req_leave_test', playerId: pTest.id,
+    request: 'WANTS_LEAVE', createdDate: s.meta.currentDate, expiresDate: s.meta.currentDate,
+  });
+  // Opção A: Colocar na lista de transferências
+  pTest.transferListed = false;
+  resolveAudienceChoice(s, 'req_leave_test', 'OPTION_A');
+  assert((pTest.transferListed as boolean) === true, 'WANTS_LEAVE Opção A coloca jogador na lista de transferências');
+
+  // 5. Novas promessas no tickPromises
+  pTest.condition.relation.promise = {
+    kind: 'CONTRACT_EXTENSION',
+    deadline: s.meta.currentDate,
+  };
+  pTest.contractUntil = s.meta.season; // Não renovou
+  const verdicts = tickPromises(s);
+  assert(verdicts.some((v) => v.playerId === pTest.id && !v.kept), 'promessa não cumprida resolvida no tick');
+  assert(pTest.condition.relation.promise === undefined, 'promessa limpa após resolução');
 }
 
 // ====================================================================

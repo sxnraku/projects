@@ -34,10 +34,12 @@ export interface RenewalItem {
   createdDate: string;
 }
 
-/** O que um jogador insatisfeito pode pedir. */
+/** O que um jogador pode pedir numa audiência ao treinador. */
 export const PlayerRequest = {
   WAGE_RISE: 'WAGE_RISE', // quer aumento salarial
   WANTS_LEAVE: 'WANTS_LEAVE', // quer ser colocado na lista de transferências
+  WANTS_MINUTES: 'WANTS_MINUTES', // quer mais minutos / titularidade
+  WANTS_BIG_MOVE: 'WANTS_BIG_MOVE', // quer dar o salto para clube maior / competições europeias
 } as const;
 export type PlayerRequest = (typeof PlayerRequest)[keyof typeof PlayerRequest];
 
@@ -125,9 +127,17 @@ export interface PressItem {
   expiresDate: string;
   /** Adversário do próximo jogo, quando a pergunta é sobre ele. */
   opponentName?: string;
-  /** Jogador em causa (proposta recebida), quando a pergunta é sobre ele. */
+  /** Jogador em causa (proposta recebida, reforço, castigo, rumor), quando a pergunta é sobre ele. */
   playerId?: string;
   playerName?: string;
+  /** Perfil/contexto do jogador na pergunta de transferência (STAR, WONDERKID, UNHAPPY, EXPIRING, BID). */
+  playerProfile?: 'STAR' | 'WONDERKID' | 'UNHAPPY' | 'EXPIRING' | 'BID';
+  /** Clube interessado / pretendente do rumor. */
+  suitorName?: string;
+  /** Órgão de comunicação social responsável pela pergunta. */
+  outletKey?: string;
+  /** Nome do jornalista/repórter. */
+  journalistName?: string;
 }
 
 export type InboxItem = BidItem | RenewalItem | RequestItem | OfferItem | CrisisItem | PressItem;

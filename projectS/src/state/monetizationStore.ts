@@ -11,6 +11,18 @@ import {
 import { useGameStore } from './gameStore';
 
 /**
+ * O adaptador de anúncios é carregado À DEMANDA, nunca no topo.
+ *
+ * `native/ads` arrasta o React Native, e esta store corre também em Node nos
+ * testes (`smoke:ads`): um import estático derrubava a suite inteira no arranque
+ * do módulo, antes do primeiro teste. Assim, quem nunca mostra um anúncio —
+ * testes e utilizadores Premium — nunca chega a tocar no RN.
+ */
+async function ads() {
+  return import('../native/ads');
+}
+
+/**
  * Store de monetização — contadores de anúncios e estado premium.
  *
  * Nota: o estado vive em memória. O premium real será restaurado pelo fornecedor
@@ -28,6 +40,22 @@ export interface MonetizationStore {
 
   /** Consome um rewarded e aplica a recompensa ao jogo. Devolve o descritor de mensagem. */
   claimReward: (reward: AdReward) => import('../core/i18n').Msg | null;
+
+  /**
+   * Há bónus disponível AGORA? Use isto para mostrar/esconder os botões.
+   *
+   * Sem Premium é sempre true (o anúncio é que trava). Com Premium fica false
+   * depois de gasto o bónus do dia — assim o botão desaparece em vez de falhar.
+   */
+  adSlotAvailable: () => boolean;
+
+  /**
+   * Pede a recompensa: anúncio para quem não tem Premium, direto para quem tem.
+   *
+   * É o substituto de `showRewarded()` em todos os botões de bónus. Devolve true
+   * quando o bónus deve ser aplicado.
+   */
+  claimAdSlot: () => Promise<boolean>;
 
   /** Ativa premium (chamado pelo fluxo de compra IAP quando existir). */
   setPremium: (premium: boolean) => void;
@@ -53,11 +81,15 @@ export const useMonetizationStore = create<MonetizationStore>((set, get) => ({
     const gameStore = useGameStore.getState();
     const game = gameStore.state;
     if (!game) return null;
-    if (!canUseRewarded(get().m, game.meta.currentDate)) return null;
-
-    const m = { ...get().m };
-    consumeRewarded(m, game.meta.currentDate);
-    set({ m });
+    const m0 = get().m;
+    // Com Premium o slot já foi consumido por `claimAdSlot` antes de chegar
+    // aqui; consumir outra vez gastava dois bónus num só toque.
+    if (!m0.premium) {
+      if (!canUseRewarded(m0, game.meta.currentDate)) return null;
+      const m = { ...m0 };
+      consumeRewarded(m, game.meta.currentDate);
+      set({ m });
+    }
 
     const msg = applyReward(game, reward);
     // Notifica a UI da mutação do GameState (mesma técnica do gameStore).
@@ -65,5 +97,33 @@ export const useMonetizationStore = create<MonetizationStore>((set, get) => ({
     return msg;
   },
 
-  setPremium: (premium) => set({ m: { ...get().m, premium } }),
+  adSlotAvailable: () => {
+    const m = get().m;
+    if (!m.premium) return true; // o anúncio é o travão
+    const game = useGameStore.getState().state;
+    if (!game) return false;
+    return canUseRewarded(m, game.meta.currentDate);
+  },
+
+  claimAdSlot: async () => {
+    const m0 = get().m;
+    if (!m0.premium) return (await ads()).showRewarded();
+
+    // Premium: sem vídeo. Gasta o bónus do dia de jogo e concede.
+    const game = useGameStore.getState().state;
+    if (!game) return false;
+    const date = game.meta.currentDate;
+    if (!canUseRewarded(m0, date)) return false;
+    const m = { ...m0 };
+    consumeRewarded(m, date);
+    set({ m });
+    return true;
+  },
+
+  setPremium: (premium) => {
+    set({ m: { ...get().m, premium } });
+    // A fronteira dos anúncios tem de saber, para nunca chegar a carregar um.
+    // Falhar aqui (Node, web) não pode partir a ativação do Premium.
+    void ads().then((a) => a.setAdsPremium(premium)).catch(() => { /* sem SDK */ });
+  },
 }));

@@ -47,6 +47,7 @@ import {
   reservedBudget as coreReservedBudget,
   resolveRenewal as coreResolveRenewal,
   resolveRequest as coreResolveRequest,
+  resolveAudienceChoice as coreResolveAudienceChoice,
   rolloverSeason,
   RotationResult,
   SeasonSummary,
@@ -74,6 +75,7 @@ import {
   tierInRange,
   academyCandidates as coreAcademyCandidates,
   recruitAcademyCandidate,
+  academyRollsLeft,
   generateAcademyBatch,
   RecruitResult,
   loanOutCandidates,
@@ -276,6 +278,9 @@ export interface GameStore {
   /** Gera um novo grupo de candidatos. */
   refreshAcademy: () => void;
 
+  /** Quantas rolagens de grupo ainda cabem nesta época (máx. 5). */
+  academyRollsLeft: () => number;
+
   /** Compra o próximo nível de uma instalação do clube gerido. */
   upgrade: (type: FacilityType) => UpgradeResult;
 
@@ -415,6 +420,7 @@ export interface GameStore {
   setListed: (playerId: string, listed: boolean) => void;
   resolveRenewal: (itemId: string, years?: number) => RenewalDecision;
   resolveRequest: (itemId: string, accept: boolean) => import('../core/i18n').Msg | null;
+  resolveAudience: (itemId: string, choice: 'OPTION_A' | 'OPTION_B' | 'OPTION_C') => import('../core/i18n').Msg | null;
   dismissItem: (itemId: string) => void;
 
   // Seletores (derivados — não guardam estado)
@@ -809,8 +815,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
   refreshAcademy: () => {
     const { state } = get();
     if (!state) return;
+    // O limite vive aqui e não só na UI: é o que garante que nenhum caminho
+    // novo (ou um toque duplo) rola o grupo mais vezes do que a época permite.
+    if (academyRollsLeft(state) <= 0) return;
     generateAcademyBatch(state, true);
     set({ state: bump(state) });
+  },
+
+  academyRollsLeft: () => {
+    const { state } = get();
+    return state ? academyRollsLeft(state) : 0;
   },
 
   upgrade: (type) => {
@@ -1175,6 +1189,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return msg;
   },
 
+  resolveAudience: (itemId, choice) => {
+    const { state } = get();
+    if (!state) return null;
+    const msg = coreResolveAudienceChoice(state, itemId, choice);
+    set({ state: bump(state) });
+    return msg;
+  },
+
   dismissItem: (itemId) => {
     const { state } = get();
     if (!state) return;
@@ -1394,3 +1416,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return { mood: Math.round(fanMood(state)), band: fanBand(f.mood), reasons: f.reasons };
   },
 }));
+
+if (typeof globalThis !== 'undefined' && (globalThis as any).window) {
+  (globalThis as any).window.__gameStore = useGameStore;
+}

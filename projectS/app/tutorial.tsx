@@ -13,13 +13,13 @@
  * visível), o passo cai para um cartão centrado com o mesmo texto — o tutorial
  * nunca fica preso à espera de uma medição.
  */
-import React, { useEffect, useState } from 'react';
-import { Dimensions, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useT } from '../src/ui/i18n';
 import { theme } from '../src/ui/theme';
 import {
-  clearTargets, getTargetRect, remeasure, subscribeTargets, TutorialTargets,
+  clearTargets, forgetTarget, getTargetRect, remeasure, subscribeTargets, TutorialTargets,
 } from '../src/ui/tutorial/registry';
 
 /** Um passo: onde vive, o que aponta e o que diz. */
@@ -49,6 +49,7 @@ const STEPS: Step[] = [
   { titleKey: 'tut.ch.squad.t', bodyKey: 'tut.ch.squad.b', chapter: true },
   { route: '/(tabs)/squad', target: TutorialTargets.squadFilters, titleKey: 'tut.squadFilters.t', bodyKey: 'tut.squadFilters.b' },
   { route: '/(tabs)/squad', target: TutorialTargets.squadRow, titleKey: 'tut.squadRow.t', bodyKey: 'tut.squadRow.b' },
+  { route: '/(tabs)/squad', target: TutorialTargets.squadRow, titleKey: 'tut.injuries.t', bodyKey: 'tut.injuries.b' },
 
   // -------------------------------------------------------------- tática
   { titleKey: 'tut.ch.tactics.t', bodyKey: 'tut.ch.tactics.b', chapter: true },
@@ -56,10 +57,12 @@ const STEPS: Step[] = [
   { route: '/(tabs)/tactics', target: TutorialTargets.pitch, titleKey: 'tut.pitch.t', bodyKey: 'tut.pitch.b' },
   { route: '/(tabs)/tactics', target: TutorialTargets.pitch, titleKey: 'tut.roles.t', bodyKey: 'tut.roles.b' },
   { route: '/(tabs)/tactics', target: TutorialTargets.setPieces, titleKey: 'tut.setPieces.t', bodyKey: 'tut.setPieces.b' },
+  { titleKey: 'tut.talk.t', bodyKey: 'tut.talk.b' },
 
   // ------------------------------------------------------------- mercado
   { titleKey: 'tut.ch.market.t', bodyKey: 'tut.ch.market.b', chapter: true },
   { route: '/(tabs)/market', target: TutorialTargets.marketList, titleKey: 'tut.market.t', bodyKey: 'tut.market.b' },
+  { route: '/(tabs)/market', target: TutorialTargets.marketList, titleKey: 'tut.free.t', bodyKey: 'tut.free.b' },
 
   // ---------------------------------------------------------------- liga
   { route: '/(tabs)/league', target: TutorialTargets.leagueTable, titleKey: 'tut.league.t', bodyKey: 'tut.league.b' },
@@ -96,28 +99,48 @@ export default function Tutorial({ onDone }: { onDone: () => void }) {
   useEffect(() => subscribeTargets(() => bump((v) => v + 1)), []);
   const rect = getTargetRect(step.target);
 
-  // Navega para a aba do passo. O tutorial conduz — não pede que o utilizador
-  // encontre o ecrã sozinho, que é onde os tutoriais costumam perder gente.
+  // ORIGEM DO OVERLAY em coordenadas de janela — o elo que faltava entre a
+  // medição do alvo e o desenho do buraco. Ver o comentário no `return`.
+  const overlayRef = useRef<View>(null);
+  const [origin, setOrigin] = useState({ x: 0, y: 0 });
+  const measureOrigin = useCallback(() => {
+    overlayRef.current?.measureInWindow((x, y) => {
+      setOrigin((o) => (Math.abs(o.x - x) < 0.5 && Math.abs(o.y - y) < 0.5 ? o : { x, y }));
+    });
+  }, []);
+
+  // O BURACO SEGUE O ELEMENTO, em vez de ser fotografado uma vez.
   //
-  // `navigate` e não `push`: com `push`, os 21 passos empilhavam 21 ecrãs no
-  // histórico e, no fim, o botão de voltar do telemóvel obrigava a 21 toques
-  // para sair do jogo. `navigate` reutiliza o ecrã que já lá está.
-  // A CADA PASSO, pede uma medição fresca do alvo.
+  // As coordenadas são de janela e mudam sem que o `onLayout` do alvo dispare:
+  // basta o ecrã fazer scroll, ou um cartão acima aparecer mais tarde (dados
+  // assíncronos) e empurrar tudo para baixo. Antes media-se em quatro instantes
+  // fixos depois de mudar de passo; se o ecrã montasse ou mexesse depois do
+  // último, o buraco ficava onde o elemento ESTEVE — era esse o destaque
+  // desalinhado.
   //
-  // As coordenadas dos alvos são de janela, e mudam sem que o `onLayout` deles
-  // dispare: basta o ecrã fazer scroll, ou um cartão acima aparecer mais tarde
-  // (dados que só chegam depois do primeiro render) e empurrar tudo para baixo.
-  // Era isso que fazia o buraco cair no cartão de cima em vez do certo.
+  // Agora remede-se em ciclo enquanto o passo está à vista. O custo é um
+  // `measureInWindow` a cada 250 ms, e o `setTargetRect` ignora medições
+  // iguais, por isso só há redesenho quando o elemento se mexe mesmo.
   //
-  // Mede várias vezes de propósito: logo a seguir a navegar o ecrã de destino
-  // ainda pode nem estar montado, e a última medição é a que fica.
+  // O `forgetTarget` é o que impede o pior caso: se o ecrã do alvo não estiver
+  // montado, ficava lá a medida da visita ANTERIOR e o buraco aparecia, cheio
+  // de confiança, no sítio errado. Sem medida, o passo cai no cartão centrado.
   useEffect(() => {
     const id = step.target;
     if (!id) return undefined;
-    const timers = [0, 120, 320, 700].map((ms) => setTimeout(() => remeasure(id), ms));
-    return () => { for (const t of timers) clearTimeout(t); };
-  }, [i, step.target]);
+    forgetTarget(id);
+    measureOrigin();
+    remeasure(id);
+    const timer = setInterval(() => { measureOrigin(); remeasure(id); }, 250);
+    return () => clearInterval(timer);
+  }, [i, step.target, measureOrigin]);
 
+  // Navega para a aba do passo. O tutorial conduz — não pede que o utilizador
+  // encontre o ecrã sozinho, que é onde os tutoriais costumam perder gente.
+  //
+  // `navigate` e não `push`: com `push`, os passos empilhavam ecrãs no
+  // histórico e, no fim, o botão de voltar obrigava a dezenas de toques para
+  // sair do jogo. `navigate` reutiliza o ecrã que já lá está.
   useEffect(() => {
     if (step.route) router.navigate(step.route as never);
   }, [i, step.route, router]);
@@ -139,9 +162,15 @@ export default function Tutorial({ onDone }: { onDone: () => void }) {
     && rect.y + rect.height > 0
     && rect.y < win.height - 48;
 
+  // O buraco desenha-se em coordenadas DO OVERLAY, e o alvo foi medido em
+  // coordenadas da JANELA. Descontar a origem do overlay é o que junta os dois.
+  //
+  // Mede-se em vez de se assumir: com o overlay colado ao topo a origem é (0,0)
+  // e não muda nada, mas se algum dia levar um `SafeAreaView`, uma barra ou um
+  // padding, isto corrige-se sozinho em vez de ficar torto outra vez.
   const hole = onScreen && rect ? {
-    x: Math.max(0, rect.x - PAD),
-    y: Math.max(0, rect.y - PAD),
+    x: Math.max(0, rect.x - origin.x - PAD),
+    y: Math.max(0, rect.y - origin.y - PAD),
     width: Math.min(win.width, rect.width + PAD * 2),
     height: rect.height + PAD * 2,
   } : null;
@@ -163,7 +192,23 @@ export default function Tutorial({ onDone }: { onDone: () => void }) {
   const centred = !hole || (!placeBelow && !placeAbove);
 
   return (
-    <Modal transparent animationType="fade" visible onRequestClose={finish} statusBarTranslucent>
+    // SEM `Modal`.
+    //
+    // O overlay estava dentro de um `<Modal statusBarTranslucent>`, que no
+    // Android é uma JANELA NATIVA à parte. Os alvos medem-se com
+    // `measureInWindow` na janela da APP; o buraco era desenhado na janela do
+    // Modal. Duas janelas, dois sistemas de coordenadas — e o destaque saía ao
+    // lado do elemento por um desvio constante que nenhuma remedição corrige.
+    //
+    // O `Modal` também não era preciso para ficar por cima: o `TutorialGate` já
+    // é irmão do navegador na raiz (ver `_layout.tsx`), portanto um `View`
+    // absoluto aqui cobre tudo na mesma.
+    <View
+      ref={overlayRef}
+      style={StyleSheet.absoluteFill}
+      pointerEvents="box-none"
+      onLayout={measureOrigin}
+    >
       <View style={styles.fill} pointerEvents="box-none">
         {/* MÁSCARA — quatro retângulos à volta do buraco. É assim (e não com um
             SVG com máscara) porque o projeto não tem react-native-svg e quatro
@@ -178,6 +223,7 @@ export default function Tutorial({ onDone }: { onDone: () => void }) {
             <View style={[styles.shade, { left: 0, right: 0, top: hole.y + hole.height, bottom: 0 }]} />
             <View
               pointerEvents="none"
+              testID="tutorial-ring"
               style={[styles.ring, {
                 left: hole.x, top: hole.y, width: hole.width, height: hole.height,
               }]}
@@ -243,7 +289,7 @@ export default function Tutorial({ onDone }: { onDone: () => void }) {
           </View>
         </View>
       </View>
-    </Modal>
+    </View>
   );
 }
 

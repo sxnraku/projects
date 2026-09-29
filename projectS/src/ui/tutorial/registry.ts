@@ -49,10 +49,30 @@ export const TutorialTargets = {
 } as const;
 export type TutorialTargetId = (typeof TutorialTargets)[keyof typeof TutorialTargets];
 
+/** Duas medições iguais ao pixel? (o RN devolve fracionários) */
+function same(a: TargetRect | undefined, b: TargetRect): boolean {
+  return !!a
+    && Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5
+    && Math.abs(a.width - b.width) < 0.5 && Math.abs(a.height - b.height) < 0.5;
+}
+
 export function setTargetRect(id: string, rect: TargetRect | null): void {
-  if (rect === null) rects.delete(id);
-  else rects.set(id, rect);
+  if (rect === null) {
+    if (!rects.has(id)) return;
+    rects.delete(id);
+  } else {
+    // O tutorial remede em ciclo (4×/s) para o buraco SEGUIR o elemento. Sem
+    // esta guarda, cada medição — mesmo idêntica — notificava os ouvintes e
+    // redesenhava a sobreposição inteira quatro vezes por segundo.
+    if (same(rects.get(id), rect)) return;
+    rects.set(id, rect);
+  }
   for (const fn of listeners) fn();
+}
+
+/** Esquece a medida de um alvo (usado ao entrar num passo novo). */
+export function forgetTarget(id: string): void {
+  setTargetRect(id, null);
 }
 
 export function getTargetRect(id: string | undefined): TargetRect | undefined {

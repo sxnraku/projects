@@ -113,6 +113,14 @@ export interface AcademyState {
   candidates: import('../models').Player[];
   season: number; // época em que o grupo foi gerado (refresca a cada época)
   gen: number; // contador de grupos gerados (varia a seed a cada "novo grupo")
+  /**
+   * Quantos "novo grupo" já foram usados NESTA época.
+   *
+   * Opcional para os saves antigos, que não o têm — ausente conta como zero.
+   * Não se pode usar o `gen` para isto: o `gen` é vitalício (é o que faz cada
+   * grupo ter seed diferente) e nunca reinicia.
+   */
+  rolls?: number;
 }
 
 /** Estado completo da carreira, persistido no save. */

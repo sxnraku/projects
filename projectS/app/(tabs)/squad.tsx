@@ -6,7 +6,7 @@ import { MaybeSpot, Spot } from '../../src/ui/tutorial/Spot';
 import { TutorialTargets } from '../../src/ui/tutorial/registry';
 import { isWonderkid, lineupWarnings, ROTATION_ALERT_FITNESS } from '../../src/core/game';
 import { individualFocus } from '../../src/core/training';
-import { isAtRisk } from '../../src/core/game';
+import { isAtRisk, isFragile } from '../../src/core/game';
 import { fullName, naturalOverall, naturalOverallFine, Player, POSITION_GROUP, PositionGroup } from '../../src/core/models';
 import { money, to100, wage } from '../../src/ui/format';
 import { useT } from '../../src/ui/i18n';
@@ -57,6 +57,9 @@ export default function Squad() {
   ];
 
   const clubColor = state ? state.clubs[state.meta.managedClubId]?.primaryColor : undefined;
+  const tactic = state ? state.tactics[state.meta.managedClubId] : undefined;
+  const captainId = tactic?.captainId;
+  const viceCaptainId = tactic?.viceCaptainId;
 
   // Titulares em risco — o aviso vive no topo, onde é impossível não ver.
   const tired = useMemo(
@@ -165,6 +168,8 @@ export default function Squad() {
             player={item}
             clubColor={clubColor}
             starter={inLineup.has(item.id)}
+            isCaptain={captainId === item.id}
+            isViceCaptain={viceCaptainId === item.id}
             expiring={!!state && item.contractUntil === state.meta.season}
             onPress={() => router.push(`/player/${item.id}` as never)}
           />
@@ -182,8 +187,8 @@ export default function Squad() {
 }
 
 function PlayerRow({
-  player, clubColor, starter, expiring, onPress,
-}: { player: Player; clubColor?: string; starter: boolean; expiring: boolean; onPress: () => void }) {
+  player, clubColor, starter, isCaptain, isViceCaptain, expiring, onPress,
+}: { player: Player; clubColor?: string; starter: boolean; isCaptain?: boolean; isViceCaptain?: boolean; expiring: boolean; onPress: () => void }) {
   const t = useT();
   const ovr = naturalOverall(player);
   const injured = player.condition.status === 'INJURED';
@@ -192,6 +197,7 @@ function PlayerRow({
   const retrain = player.condition.retraining;
   const yellows = player.condition.seasonYellows ?? 0;
   const atRisk = isAtRisk(yellows);
+  const fragile = isFragile(player);
   // Quem não pode jogar não deve exigir leitura: a linha inteira apaga-se.
   const unavailable = injured || player.condition.fitness < 45;
 
@@ -220,18 +226,23 @@ function PlayerRow({
         <View style={styles.info}>
           <Text style={styles.name} numberOfLines={1} ellipsizeMode="tail">
             {fullName(player)}
-            {isWonderkid(player) ? <Text style={{ color: theme.colors.yellow }}> ★</Text> : null}
-            {player.transferListed ? <Text style={{ color: theme.colors.blue }}> €</Text> : null}
-            {expiring ? <Text style={{ color: theme.colors.yellow }}> ⌛</Text> : null}
-            {injured ? <Text style={{ color: theme.colors.red }}> 🚑</Text> : null}
-            {player.condition.suspended ? <Text> 🟥</Text> : null}
+            {isCaptain ? <Text style={{ color: theme.colors.yellow, fontWeight: '800' }}> [C]</Text> : null}
+            {isViceCaptain ? <Text style={{ color: theme.colors.blue, fontWeight: '800' }}> [VC]</Text> : null}
+            {isWonderkid(player) ? <Text style={{ color: theme.colors.yellow, fontWeight: '700' }}> [PRODÍGIO]</Text> : null}
+            {player.transferListed ? <Text style={{ color: theme.colors.blue }}> [LISTADO]</Text> : null}
+            {expiring ? <Text style={{ color: theme.colors.yellow }}> [FIM CONTRATO]</Text> : null}
+            {injured ? <Text style={{ color: theme.colors.red, fontWeight: '700' }}> [LESIONADO]</Text> : null}
+            {/* FRÁGIL — voltou de lesão há pouco. Sem este aviso, a recaída era
+                má sorte inexplicável; com ele, pô-lo a jogar é uma decisão. */}
+            {!injured && fragile ? <Text style={{ color: theme.colors.yellow }}> [FRÁGIL]</Text> : null}
+            {player.condition.suspended ? <Text style={{ color: theme.colors.red, fontWeight: '700' }}> [SUSPENSO]</Text> : null}
             {/* A UM AMARELO DO CASTIGO. É o aviso que faltava: sem ele, um
                 titular desaparecia do onze na jornada seguinte sem que nada,
                 em lado nenhum, tivesse dado sinal. */}
-            {!player.condition.suspended && atRisk ? <Text style={{ color: theme.colors.yellow }}> 🟨</Text> : null}
+            {!player.condition.suspended && atRisk ? <Text style={{ color: theme.colors.yellow }}> [RISCO]</Text> : null}
             {player.condition.loanOwnerId ? <Text style={{ color: theme.colors.blue }}> {t('loan.badge')}</Text> : null}
-            {focus ? <Text style={{ color: theme.colors.green }}> 🎯</Text> : null}
-            {retrain ? <Text style={{ color: theme.colors.blue }}> ⇄</Text> : null}
+            {focus ? <Text style={{ color: theme.colors.green }}> [FOCO]</Text> : null}
+            {retrain ? <Text style={{ color: theme.colors.blue }}> [ADAPTAÇÃO]</Text> : null}
           </Text>
           <View style={styles.subLine}>
             <PosText position={player.positions[0]!} />
@@ -242,7 +253,7 @@ function PlayerRow({
             </Text>
             {yellows > 0 ? (
               <Text style={[styles.subStat, { color: atRisk ? theme.colors.yellow : theme.colors.textDim }]}>
-                · 🟨 {yellows}
+                · AMAR: {yellows}
               </Text>
             ) : null}
           </View>
@@ -252,12 +263,12 @@ function PlayerRow({
             <View style={styles.workLine}>
               {focus ? (
                 <Text style={[styles.workChip, styles.workFocus]} numberOfLines={1}>
-                  🎯 {t(`focus.${focus}`)}
+                  FOCO: {t(`focus.${focus}`)}
                 </Text>
               ) : null}
               {retrain ? (
                 <Text style={[styles.workChip, styles.workRetrain]} numberOfLines={1}>
-                  ⇄ {t('retrain.busy', { pos: retrain.position, weeks: retrain.weeksLeft })}
+                  ADAPTAÇÃO: {t('retrain.busy', { pos: retrain.position, weeks: retrain.weeksLeft })}
                 </Text>
               ) : null}
             </View>

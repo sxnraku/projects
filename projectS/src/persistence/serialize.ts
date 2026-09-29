@@ -42,10 +42,11 @@ export interface SaveRows {
   setpieces: BlobRow;
 }
 
-/** Bolas paradas de um clube, tal como vão para o blob `setpieces`. */
+/** Bolas paradas e liderança de um clube, tal como vão para o blob `setpieces`. */
 interface SetPieceEntry {
   fk: string | null;
   ck: string | null;
+  vc?: string | null;
   focus: Tactic['cornerFocus'];
 }
 
@@ -138,10 +139,11 @@ export function serialize(state: GameState): SaveRows {
 function serializeSetPieces(tactics: Record<string, Tactic>): Record<string, SetPieceEntry> {
   const out: Record<string, SetPieceEntry> = {};
   for (const t of Object.values(tactics)) {
-    if (!t.freeKickTakerId && !t.cornerTakerId && !t.cornerFocus) continue;
+    if (!t.freeKickTakerId && !t.cornerTakerId && !t.cornerFocus && !t.viceCaptainId) continue;
     out[t.clubId] = {
       fk: t.freeKickTakerId ?? null,
       ck: t.cornerTakerId ?? null,
+      vc: t.viceCaptainId ?? null,
       focus: t.cornerFocus,
     };
   }
@@ -237,6 +239,7 @@ export function deserialize(rows: SaveRows): GameState {
       pressing: r.pressing ?? 5, defensiveLine: r.defensive_line ?? 5, creativity: r.creativity ?? 5,
       lineup: JSON.parse(r.lineup), bench: JSON.parse(r.bench),
       captainId: r.captain_id, penaltyTakerId: r.penalty_taker_id,
+      viceCaptainId: sp?.vc ?? undefined,
       // `undefined` (nunca escolhido) e `null` (escolhido e depois limpo) são
       // equivalentes para o motor, mas trocá-los quebrava a igualdade exata do
       // save: gravar e recarregar devolvia uma tática "diferente" da original.

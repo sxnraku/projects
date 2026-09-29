@@ -53,11 +53,32 @@ function makeCandidate(state: GameState, rng: Rng, idx: number): Player {
   return youth;
 }
 
+/**
+ * Quantos "novo grupo" cabem numa época.
+ *
+ * Sem isto o recrutamento não tinha travão nenhum: dava para rolar o grupo até
+ * sair um craque, e o único custo era a paciência de ver um vídeo de cada vez —
+ * nenhum, para quem tem Premium. Cinco chega para procurar a posição que falta
+ * sem transformar a academia numa máquina de fabricar talento.
+ */
+export const ACADEMY_ROLLS_PER_SEASON = 5;
+
+/** Rolagens de grupo ainda disponíveis nesta época. */
+export function academyRollsLeft(state: GameState): number {
+  const a = state.career.academy;
+  if (!a || a.season !== state.meta.season) return ACADEMY_ROLLS_PER_SEASON;
+  return Math.max(0, ACADEMY_ROLLS_PER_SEASON - (a.rolls ?? 0));
+}
+
 /** (Re)gera o grupo de candidatos. `bump` incrementa a geração (varia a seed). */
 export function generateAcademyBatch(state: GameState, bump: boolean): AcademyState {
-  const prevGen = state.career.academy?.gen ?? 0;
+  const prev = state.career.academy;
+  const prevGen = prev?.gen ?? 0;
   const gen = bump ? prevGen + 1 : prevGen;
-  const acad: AcademyState = { candidates: [], season: state.meta.season, gen };
+  // As rolagens contam por época: mudar de época dá cinco novas.
+  const sameSeason = prev?.season === state.meta.season;
+  const rolls = (sameSeason ? prev?.rolls ?? 0 : 0) + (bump && sameSeason ? 1 : 0);
+  const acad: AcademyState = { candidates: [], season: state.meta.season, gen, rolls };
   state.career.academy = acad; // definido antes p/ makeCandidate ler o gen
   const rng = new Rng(deriveSeed(state.meta.rngSeed, 'academy', state.meta.season, gen));
   const n = academyCandidateCount(academyLevel(state));

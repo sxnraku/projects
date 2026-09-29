@@ -60,13 +60,13 @@ export default function League() {
           </Pressable>
         ))}
         <Pressable onPress={() => router.push('/world' as never)} style={[styles.viewBtn, styles.worldBtn]}>
-          <Text style={[styles.viewText, styles.worldText]}>🌍 {t('world.title')}</Text>
+          <Text style={[styles.viewText, styles.worldText]}>{t('world.title').toUpperCase()}</Text>
         </Pressable>
         <Pressable onPress={() => router.push('/europe' as never)} style={[styles.viewBtn, styles.euroBtn]}>
-          <Text style={[styles.viewText, styles.euroText]}>🏆 {t('euro.title')}</Text>
+          <Text style={[styles.viewText, styles.euroText]}>{t('euro.title').toUpperCase()}</Text>
         </Pressable>
         <Pressable onPress={() => router.push('/history' as never)} style={[styles.viewBtn, styles.histBtn]}>
-          <Text style={[styles.viewText, styles.histText]}>📜 {t('history.title')}</Text>
+          <Text style={[styles.viewText, styles.histText]}>{t('history.title').toUpperCase()}</Text>
         </Pressable>
       </View>
 

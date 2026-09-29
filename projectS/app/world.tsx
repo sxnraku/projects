@@ -30,10 +30,10 @@ export default function World() {
     <Screen edges={['left', 'right', 'bottom']}>
       <View style={styles.seg}>
         <Pressable onPress={() => setTab('leagues')} style={[styles.segBtn, tab === 'leagues' && styles.segOn]}>
-          <Text style={[styles.segText, tab === 'leagues' && styles.segTextOn]}>🌍 {t('world.tab.leagues')}</Text>
+          <Text style={[styles.segText, tab === 'leagues' && styles.segTextOn]}>{t('world.tab.leagues').toUpperCase()}</Text>
         </Pressable>
         <Pressable onPress={() => setTab('market')} style={[styles.segBtn, tab === 'market' && styles.segOn]}>
-          <Text style={[styles.segText, tab === 'market' && styles.segTextOn]}>🔎 {t('world.tab.market')}</Text>
+          <Text style={[styles.segText, tab === 'market' && styles.segTextOn]}>{t('world.tab.market').toUpperCase()}</Text>
         </Pressable>
       </View>
 
@@ -128,7 +128,7 @@ function MarketPanel({
         <Text style={styles.moneyText}>{t('world.market.budget', { v: budget.toLocaleString('pt-PT') })}</Text>
       </View>
       <Pressable style={[styles.scoutBtn, !canAfford && { opacity: 0.5 }]} disabled={!canAfford} onPress={() => setPick(true)}>
-        <Text style={styles.scoutBtnText}>🔎 {t('world.market.scout', { v: cost.toLocaleString('pt-PT') })}</Text>
+        <Text style={styles.scoutBtnText}>{t('world.market.scout', { v: cost.toLocaleString('pt-PT') }).toUpperCase()}</Text>
       </Pressable>
       {scouted.length > 0 ? (
         <>
@@ -173,7 +173,7 @@ function MarketPanel({
               onPress={() => onSign(tg.id)}
               style={[styles.signBtn, tg.reach === 'LOCKED' && { opacity: 0.35 }]}
             >
-              <Text style={styles.signBtnText}>{tg.reach === 'LOCKED' ? '🔒' : t('world.market.sign')}</Text>
+              <Text style={styles.signBtnText}>{tg.reach === 'LOCKED' ? '[BLOQ]' : t('world.market.sign')}</Text>
             </Pressable>
           </View>
         ))}

@@ -33,6 +33,7 @@ import {
 } from '../../src/core/models';
 import { lineupOverall, reselectLineup } from '../../src/core/game';
 import { physicalLoad } from '../../src/core/engine';
+import { leadershipOf } from '../../src/core/game/leadership';
 import { attrColor, fitnessColor, theme } from '../../src/ui/theme';
 import { to100 } from '../../src/ui/format';
 import { useT } from '../../src/ui/i18n';
@@ -151,7 +152,7 @@ export default function Tactics() {
 
   const [pitchW, setPitchW] = useState(0);
   const [pickSlot, setPickSlot] = useState<number | null>(null); // slot a escolher
-  const [pickTaker, setPickTaker] = useState<'FK' | 'CK' | null>(null); // bola parada
+  const [pickTaker, setPickTaker] = useState<'FK' | 'CK' | 'CAPTAIN' | 'VICE_CAPTAIN' | null>(null); // bola parada ou liderança
   const [formOpen, setFormOpen] = useState(false); // gaveta das formações
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'info'; text: string } | null>(null);
 
@@ -247,7 +248,7 @@ export default function Tactics() {
             ? { kind: 'ok', text: t('tac.autoDone', { n: r.swapped }) }
             : { kind: 'info', text: t('tac.autoNoChange') });
         }}>
-          <Text style={styles.autoBtnText}>⚡ {t('tac.autoXI')}</Text>
+          <Text style={styles.autoBtnText}>{t('tac.autoXI').toUpperCase()}</Text>
         </Pressable>
 
         {/* FORMAÇÕES EM GAVETA. São doze; em fila deixavam o ecrã ilegível.
@@ -378,6 +379,38 @@ export default function Tactics() {
 
         {/* O preço da tática, em números — decidir pressão alta é decidir
             estoirar o plantel para a jornada seguinte. */}
+        {/* LIDERANÇA — Capitão e Sub-Capitão que comandam o balneário e a equipa em campo. */}
+        <Section title={t('tac.leadership')} />
+        <Pressable style={styles.takerRow} onPress={() => setPickTaker('CAPTAIN')}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.takerLabel}>[C] {t('tac.captain')}</Text>
+            <Text style={styles.takerHint}>{t('tac.captain.hint')}</Text>
+          </View>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={styles.takerValue}>{takerName(tactic.captainId)}</Text>
+            {tactic.captainId && state.players[tactic.captainId] ? (
+              <Text style={{ fontSize: 11, color: theme.colors.yellow, fontWeight: '700' }}>
+                LDR {leadershipOf(state.players[tactic.captainId]!)} {t('tac.leadScore')}
+              </Text>
+            ) : null}
+          </View>
+        </Pressable>
+        <Pressable style={styles.takerRow} onPress={() => setPickTaker('VICE_CAPTAIN')}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.takerLabel}>[VC] {t('tac.viceCaptain')}</Text>
+            <Text style={styles.takerHint}>{t('tac.viceCaptain.hint')}</Text>
+          </View>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={styles.takerValue}>{takerName(tactic.viceCaptainId)}</Text>
+            {tactic.viceCaptainId && state.players[tactic.viceCaptainId] ? (
+              <Text style={{ fontSize: 11, color: theme.colors.blue, fontWeight: '700' }}>
+                LDR {leadershipOf(state.players[tactic.viceCaptainId]!)} {t('tac.leadScore')}
+              </Text>
+            ) : null}
+          </View>
+        </Pressable>
+        <View style={{ height: theme.spacing(0.75) }} />
+
         {/* BOLAS PARADAS — quem bate e para onde vai o canto. */}
         <Spot id={TutorialTargets.setPieces}>
         <Section title={t('tac.setPieces')} />
@@ -564,19 +597,26 @@ export default function Tactics() {
         </Pressable>
       </Modal>
 
-      {/* MARCADOR DE BOLA PARADA — só o onze, porque só o onze bate. */}
+      {/* MARCADOR DE BOLA PARADA OU LIDERANÇA (Capitão / Sub-Capitão) */}
       <Modal visible={pickTaker !== null} animationType="fade" transparent onRequestClose={() => setPickTaker(null)}>
         <Pressable style={styles.modalBack} onPress={() => setPickTaker(null)}>
           <Pressable style={styles.modalBox} onPress={() => {}}>
             <Text style={styles.modalTitle}>
-              {pickTaker === 'FK' ? t('tac.freeKickTaker') : t('tac.cornerTaker')}
+              {pickTaker === 'CAPTAIN'
+                ? t('tac.captain')
+                : pickTaker === 'VICE_CAPTAIN'
+                ? t('tac.viceCaptain')
+                : pickTaker === 'FK'
+                ? t('tac.freeKickTaker')
+                : t('tac.cornerTaker')}
             </Text>
             <Pressable
               style={styles.pickRow}
               onPress={() => {
-                setTactic(pickTaker === 'FK'
-                  ? { ...tactic, freeKickTakerId: null }
-                  : { ...tactic, cornerTakerId: null });
+                if (pickTaker === 'CAPTAIN') setTactic({ ...tactic, captainId: null });
+                else if (pickTaker === 'VICE_CAPTAIN') setTactic({ ...tactic, viceCaptainId: null });
+                else if (pickTaker === 'FK') setTactic({ ...tactic, freeKickTakerId: null });
+                else setTactic({ ...tactic, cornerTakerId: null });
                 setPickTaker(null);
               }}
             >
@@ -584,28 +624,50 @@ export default function Tactics() {
             </Pressable>
             <View style={styles.sep} />
             <FlatList
-              data={tactic.lineup.map((s) => state.players[s.playerId]).filter(Boolean)}
+              data={(pickTaker === 'CAPTAIN' || pickTaker === 'VICE_CAPTAIN'
+                ? club.squad.map((id) => state.players[id]).filter(Boolean)
+                : tactic.lineup.map((s) => state.players[s.playerId]).filter(Boolean)
+              ).sort((a, b) => {
+                if (pickTaker === 'CAPTAIN' || pickTaker === 'VICE_CAPTAIN') {
+                  return leadershipOf(b!) - leadershipOf(a!);
+                }
+                return 0;
+              })}
               keyExtractor={(p) => p!.id}
               style={{ maxHeight: 420 }}
               renderItem={({ item }) => {
                 const p = item!;
-                const current = (pickTaker === 'FK' ? tactic.freeKickTakerId : tactic.cornerTakerId) === p.id;
-                // O que importa num batedor: remate/compostura no livre,
-                // passe/visão no canto. Mostra-se o número que decide.
-                const value = pickTaker === 'FK'
-                  ? Math.round(p.attributes.finishing * 0.45 + p.attributes.composure * 0.25 + p.attributes.vision * 0.3)
-                  : Math.round(p.attributes.passing * 0.55 + p.attributes.vision * 0.3 + p.attributes.composure * 0.15);
+                const current = (pickTaker === 'CAPTAIN'
+                  ? tactic.captainId
+                  : pickTaker === 'VICE_CAPTAIN'
+                  ? tactic.viceCaptainId
+                  : pickTaker === 'FK'
+                  ? tactic.freeKickTakerId
+                  : tactic.cornerTakerId) === p.id;
+
+                let value = 0;
+                if (pickTaker === 'CAPTAIN' || pickTaker === 'VICE_CAPTAIN') {
+                  value = Math.round(leadershipOf(p) / 5);
+                } else if (pickTaker === 'FK') {
+                  value = Math.round(p.attributes.finishing * 0.45 + p.attributes.composure * 0.25 + p.attributes.vision * 0.3);
+                } else {
+                  value = Math.round(p.attributes.passing * 0.55 + p.attributes.vision * 0.3 + p.attributes.composure * 0.15);
+                }
+
                 return (
                   <Pressable
                     style={({ pressed }) => [styles.pickRow, pressed && { backgroundColor: theme.colors.surfaceAlt }]}
                     onPress={() => {
-                      setTactic(pickTaker === 'FK'
-                        ? { ...tactic, freeKickTakerId: p.id }
-                        : { ...tactic, cornerTakerId: p.id });
+                      if (pickTaker === 'CAPTAIN') setTactic({ ...tactic, captainId: p.id });
+                      else if (pickTaker === 'VICE_CAPTAIN') setTactic({ ...tactic, viceCaptainId: p.id });
+                      else if (pickTaker === 'FK') setTactic({ ...tactic, freeKickTakerId: p.id });
+                      else setTactic({ ...tactic, cornerTakerId: p.id });
                       setPickTaker(null);
                     }}
                   >
-                    <Text style={[styles.pickOvr, { color: attrColor(value) }]}>{to100(value)}</Text>
+                    <Text style={[styles.pickOvr, { color: attrColor(value) }]}>
+                      {pickTaker === 'CAPTAIN' || pickTaker === 'VICE_CAPTAIN' ? leadershipOf(p) : to100(value)}
+                    </Text>
                     <Face seed={p.id} size={30} shirt={club.primaryColor} />
                     <View style={{ flex: 1 }}>
                       <Text style={styles.pickName}>
@@ -719,7 +781,7 @@ function PlayerMarker({
         <View style={[styles.mkSleeve, styles.mkSleeveL, { backgroundColor: fill }]} />
         <View style={[styles.mkSleeve, styles.mkSleeveR, { backgroundColor: fill }]} />
         <Text style={[styles.mkOvr, { color: ink }]}>{ovr}</Text>
-        {injured ? <Text style={styles.mkBadge}>🚑</Text> : suspended ? <Text style={styles.mkBadge}>🟥</Text> : null}
+        {injured ? <Text style={styles.mkBadge}>LES</Text> : suspended ? <Text style={styles.mkBadge}>SUS</Text> : null}
       </View>
       <View style={[styles.mkPosPill, outOfPos && { backgroundColor: theme.colors.red }]}>
         <Text style={styles.mkPosText}>{pos}</Text>
@@ -852,7 +914,11 @@ const styles = StyleSheet.create({
   },
   mkShirtWarn: { borderColor: theme.colors.red, borderWidth: 2 },
   mkShirtUnavail: { borderColor: theme.colors.red, borderWidth: 2, opacity: 0.7 },
-  mkBadge: { position: 'absolute', top: -8, right: -8, fontSize: 13 },
+  mkBadge: {
+    position: 'absolute', top: -7, right: -9, backgroundColor: theme.colors.red,
+    color: '#fff', fontSize: 7, fontWeight: '900', paddingHorizontal: 3, paddingVertical: 1,
+    borderRadius: 3, overflow: 'hidden',
+  },
   mkSleeve: { position: 'absolute', top: 3, width: 9, height: 11, borderRadius: 3, borderWidth: 1, borderColor: 'rgba(0,0,0,0.30)' },
   mkSleeveL: { left: -5, transform: [{ rotate: '-20deg' }] },
   mkSleeveR: { right: -5, transform: [{ rotate: '20deg' }] },

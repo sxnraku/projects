@@ -115,7 +115,7 @@ export function generateIncomingBids(state: GameState, rng: Rng): BidItem[] {
   const buyers = Object.values(state.clubs)
     .filter((c) => c.id !== managedId && !c.european)
     .map((c) => ({ club: c, fin: state.finances[c.id] }))
-    .filter((c) => c.fin && c.fin.transferBudget > 500_000);
+    .filter((c) => c.fin && c.fin.transferBudget > 30_000);
 
   const created: BidItem[] = [];
 
@@ -146,9 +146,13 @@ export function generateIncomingBids(state: GameState, rng: Rng): BidItem[] {
     // mensagem em caso de sucesso, o botão parecia simplesmente não funcionar
     // (queixa repetida do playtest). Agora o comprador tem de conseguir pagar
     // EXATAMENTE o que vai propor, passe e ordenado.
+    const sellerTier = state.leagues[club.leagueId]?.tier ?? 1;
+    // Jogadores em escalões inferiores (2ª e 3ª divisões) são transferidos por frações realistas
+    // da avaliação de elite (evita que um clube da Liga 3 encaixe 2M-3M € por jogador modesto).
+    const tierDiscount = sellerTier === 1 ? 1.0 : sellerTier === 2 ? 0.45 : sellerTier === 3 ? 0.20 : 0.10;
     const value = computeMarketValue(player, state.meta.season);
     const mult = listed ? 0.85 + rng.next() * 0.25 : 1.15 + rng.next() * 0.35;
-    const fee = Math.round((value * mult) / 10000) * 10000;
+    const fee = Math.max(10_000, Math.round((value * mult * tierDiscount) / 10000) * 10000);
     const wageOffer = Math.round(suggestedWage(player, state.meta.season) * (1 + rng.next() * 0.3));
 
     const interested = buyers.filter((b) => {
@@ -636,13 +640,26 @@ export function generatePlayerRequests(state: GameState, rng: Rng): RequestItem[
     const trustScale = Math.max(0.4, Math.min(1.6, 1 - trust / 100));
 
     const morale = p.condition.morale;
+    const ovr = naturalOverall(p);
+    const seasonApps = p.condition.seasonApps ?? 0;
     let request: RequestItem['request'] | null = null;
-    if (morale < WANTS_LEAVE_MORALE && rng.chance(0.25 * trustScale)) request = 'WANTS_LEAVE';
-    // Só pede aumento quem ganha ABAIXO do mercado. Um jogador bem pago e
-    // desmotivado quer jogar, não mais dinheiro — pedir aumento era um não-senso
-    // e enchia o inbox de pedidos impossíveis de satisfazer.
-    else if (morale < WAGE_RISE_MORALE && p.wage < suggestedWage(p, state.meta.season) * 0.95
-      && rng.chance(0.15 * trustScale)) request = 'WAGE_RISE';
+
+    // 1. Minutos / Titularidade: jogador com qualidade para jogar mas sem minutos
+    if (ovr >= 12 && seasonApps <= 2 && morale <= 45 && rng.chance(0.25 * trustScale)) {
+      request = 'WANTS_MINUTES';
+    }
+    // 2. Salto na carreira: craque do plantel cobiçado ou com ambição europeia
+    else if (ovr >= 15 && club.reputation <= 65 && morale <= 50 && rng.chance(0.20 * trustScale)) {
+      request = 'WANTS_BIG_MOVE';
+    }
+    // 3. Pedido de saída: descontentamento agudo
+    else if (morale < WANTS_LEAVE_MORALE && rng.chance(0.25 * trustScale)) {
+      request = 'WANTS_LEAVE';
+    }
+    // 4. Aumento salarial: ganha abaixo do mercado e está desmotivado
+    else if (morale < WAGE_RISE_MORALE && p.wage < suggestedWage(p, state.meta.season) * 0.95 && rng.chance(0.15 * trustScale)) {
+      request = 'WAGE_RISE';
+    }
     if (!request) continue;
 
     const item: RequestItem = {
@@ -660,49 +677,10 @@ export function generatePlayerRequests(state: GameState, rng: Rng): RequestItem[
 }
 
 /**
- * Resolve um pedido. As consequências mexem na moral (que alimenta a força da
- * equipa) — decisões com peso real:
- *  - Aumento aceite: salário sobe ~25%, moral recupera. Recusado: moral cai.
- *  - Saída aceite: entra na lista de transferências, moral alivia. Recusado: moral cai mais.
- * Devolve a mensagem para a UI, ou null se o item não existir.
+ * Resolve um pedido legado (compatibilidade rápida com UI antiga/testes).
+ * Mapeia accept=true para OPTION_A e accept=false para OPTION_C.
  */
 export function resolveRequest(state: GameState, itemId: string, accept: boolean): import('../i18n').Msg | null {
-  const item = state.inbox.find((it): it is RequestItem => it.kind === 'REQUEST' && it.id === itemId);
-  if (!item) return null;
-  const player = state.players[item.playerId];
-  state.inbox = state.inbox.filter((it) => it.id !== itemId);
-  if (!player) return null;
-
-  const clamp = (v: number) => Math.max(5, Math.min(95, v));
-  const name = `${player.firstName} ${player.lastName}`;
-  // Resolvido é resolvido: o assunto fica arrumado por umas semanas. Sem isto,
-  // recusar baixava a moral e o mesmo jogador voltava a pedir logo a seguir —
-  // uma espiral de pedidos impossível de travar (queixa do playtest).
-  silenceRequests(player.condition, state.meta.currentDate, REQUEST_COOLDOWN_DAYS);
-
-  if (item.request === 'WAGE_RISE') {
-    if (accept) {
-      const newWage = Math.max(
-        Math.round((player.wage * 1.25) / 100) * 100,
-        suggestedWage(player, state.meta.season),
-      );
-      player.wage = newWage;
-      player.condition.morale = clamp(65);
-      const club = state.clubs[state.meta.managedClubId];
-      const fin = state.finances[state.meta.managedClubId];
-      if (club && fin) recalcWages(club, fin, state.players);
-      return { key: 'req.wageAccepted', params: { name, wage: newWage.toLocaleString('pt-PT') } };
-    }
-    player.condition.morale = clamp(player.condition.morale - 8);
-    return { key: 'req.wageRefused', params: { name } };
-  }
-
-  // WANTS_LEAVE
-  if (accept) {
-    player.transferListed = true;
-    player.condition.morale = clamp(55);
-    return { key: 'req.leaveAccepted', params: { name } };
-  }
-  player.condition.morale = clamp(player.condition.morale - 10);
-  return { key: 'req.leaveRefused', params: { name } };
+  const { resolveAudienceChoice } = require('./relations');
+  return resolveAudienceChoice(state, itemId, accept ? 'OPTION_A' : 'OPTION_C');
 }

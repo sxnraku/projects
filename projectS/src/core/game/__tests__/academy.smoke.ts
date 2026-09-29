@@ -9,6 +9,8 @@ import {
   academyLevel,
   academyCandidateCount,
   academyCandidates,
+  academyRollsLeft,
+  ACADEMY_ROLLS_PER_SEASON,
   candidatePotentialRange,
   academyFee,
   recruitAcademyCandidate,
@@ -65,6 +67,33 @@ const idsA = academyCandidates(s).map((c) => c.id).join(',');
 generateAcademyBatch(s, true);
 const idsB = academyCandidates(s).map((c) => c.id).join(',');
 assert(idsA !== idsB, 'gerar novo grupo muda os candidatos');
+
+// ---------------------------------------------------------------------------
+// LIMITE DE ROLAGENS — 5 por época.
+//
+// Antes disto não havia travão nenhum: o único custo de rolar o grupo era ver
+// um vídeo, e para quem tem Premium nem isso. Dava para rolar até sair um
+// craque, o que fazia da academia uma máquina de fabricar talento.
+// ---------------------------------------------------------------------------
+console.log('\nLimite de rolagens da academia:');
+const s2 = createNewGame({ managerName: 'R', numClubs: 6, squadSize: 16, divisions: 1, seed: 99 });
+generateAcademyBatch(s2, false); // grupo inicial não conta como rolagem
+assert(academyRollsLeft(s2) === ACADEMY_ROLLS_PER_SEASON,
+  `arranca com ${ACADEMY_ROLLS_PER_SEASON} rolagens`);
+
+for (let k = 1; k <= ACADEMY_ROLLS_PER_SEASON; k++) {
+  generateAcademyBatch(s2, true);
+  assert(academyRollsLeft(s2) === ACADEMY_ROLLS_PER_SEASON - k,
+    `depois de ${k} rolagem(ns) restam ${ACADEMY_ROLLS_PER_SEASON - k}`);
+}
+assert(academyRollsLeft(s2) === 0, 'esgotadas as rolagens da época');
+
+// Época nova → cinco novas. É por época e não vitalício.
+s2.meta.season += 1;
+assert(academyRollsLeft(s2) === ACADEMY_ROLLS_PER_SEASON, 'época nova repõe as rolagens');
+generateAcademyBatch(s2, false); // regenera para a época nova
+assert(academyRollsLeft(s2) === ACADEMY_ROLLS_PER_SEASON,
+  'o grupo da época nova não gasta rolagem');
 
 console.log(`\n${failures === 0 ? '✅ TODOS OS TESTES PASSARAM' : `❌ ${failures} FALHA(S)`}`);
 process.exit(failures === 0 ? 0 : 1);

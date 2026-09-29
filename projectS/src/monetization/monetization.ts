@@ -12,7 +12,10 @@ import { moveMoney } from '../core/economy';
  *    e nunca para utilizadores premium.
  *  - Rewarded (voluntário): o jogador troca um anúncio por um bónus no jogo,
  *    com limite diário (data do jogo) para não quebrar o equilíbrio.
- *  - Premium: remove interstitials; rewarded continua disponível (é opt-in).
+ *  - Premium: NÃO vê anúncio nenhum. Os bónus continuam a existir e concedem-se
+ *    ao toque — mas com limite MAIS APERTADO, porque o anúncio deixa de estar lá
+ *    a travar. Sem isso, `refreshAcademy` (que não tem limite próprio) rolava a
+ *    academia infinitamente até sair um craque.
  *
  * O SDK (AdMob) vive em app/ads.ts; aqui só decidimos QUANDO e O QUÊ.
  */
@@ -23,7 +26,24 @@ import { moveMoney } from '../core/economy';
 // que rende mais por impressão) fica como a via principal de receita.
 export const INTERSTITIAL_EVERY = 15; // 1 anúncio a cada 15 jornadas avançadas
 export const GRACE_ADVANCES = 15; // primeiras 15 jornadas sem anúncios
-export const REWARDED_DAILY_CAP = 3; // máx. de bónus por dia de jogo
+export const REWARDED_DAILY_CAP = 3; // máx. de bónus por dia de jogo (com anúncio)
+
+/**
+ * Bónus por dia de jogo para quem tem Premium — concedidos sem anúncio.
+ *
+ * Cinco, não um: o que limita o jogador gratuito é o incómodo de ver vídeos, e
+ * tirado o vídeo tem de ficar um travão no lugar — mas um travão tão apertado
+ * que o Premium rendesse MENOS do que a paciência era castigar quem pagou.
+ *
+ * O exploit que isto travava (rolar a academia sem fim) passou a ter limite
+ * próprio — `ACADEMY_ROLLS_PER_DAY` — que é onde o problema estava mesmo.
+ */
+export const PREMIUM_DAILY_CAP = 5;
+
+/** Quantos bónus por dia de jogo este utilizador tem direito. */
+export function rewardedCap(m: MonetizationState): number {
+  return m.premium ? PREMIUM_DAILY_CAP : REWARDED_DAILY_CAP;
+}
 
 export interface MonetizationState {
   premium: boolean;
@@ -72,7 +92,7 @@ export const FITNESS_BOOST_AMOUNT = 20;
 /** O jogador ainda pode usar rewarded hoje (data do jogo)? */
 export function canUseRewarded(m: MonetizationState, gameDate: string): boolean {
   if (m.rewardedDate !== gameDate) return true; // novo dia de jogo, contador reinicia
-  return m.rewardedUsed < REWARDED_DAILY_CAP;
+  return m.rewardedUsed < rewardedCap(m);
 }
 
 /** Regista o uso de um rewarded na data de jogo atual. Muta o estado. */

@@ -1,5 +1,5 @@
 import { Club, Finance, weeklyNet } from '../models';
-import { divisionBudgetFloor, divisionLiquidityFloor } from './divisions';
+import { divisionBudgetFloor, divisionLiquidityCap, divisionLiquidityFloor } from './divisions';
 
 /**
  * Receita de bilheteira de um jogo em casa.
@@ -47,9 +47,10 @@ export function matchdayGate(
   const attendanceRate = Math.min(1, Math.max(0.3, base * formMultiplier * derbyMul * fanFactor));
 
   const attendance = Math.round(club.stadiumCapacity * attendanceRate);
-  // Num dérbi o bilhete é mais caro — é a receita que faz um clube pequeno
-  // aguentar a época com dois jogos grandes.
-  const ticketPrice = (8 + club.reputation * 0.25) * (derby ? 1.25 : 1); // 8..33
+  // Preço de bilhete calibrado pela dimensão/estatuto: escalões inferiores pagam 4-10 €,
+  // grandes palcos e dérbis de elite chegam aos 25-35 €.
+  const ticketBase = Math.max(4, Math.round(4 + Math.pow(club.reputation / 95, 2) * 26));
+  const ticketPrice = ticketBase * (derby ? 1.25 : 1);
   return { attendance, revenue: Math.round(attendance * ticketPrice) };
 }
 
@@ -205,10 +206,13 @@ export function recalcBudgets(finance: Finance, tier = 1, countryFactor = 1): vo
  */
 export function liquidityCeiling(finance: Finance, tier = 1, countryFactor = 1): number {
   const weekly = finance.expenses.wages + finance.expenses.facilities + finance.expenses.staff;
-  // Teto = ~40 semanas de despesa corrente OU o piso de liquidez do escalão (o
-  // que for maior) — assim um clube que sobe consegue guardar caixa da divisão
-  // nova e transformá-la em orçamento, em vez de a direção absorver tudo.
-  return Math.max(divisionLiquidityFloor(tier, countryFactor), Math.round(weekly * 40));
+  const floor = divisionLiquidityFloor(tier, countryFactor);
+  const cap = divisionLiquidityCap(tier, countryFactor);
+  // Teto = ~40 semanas de despesa corrente OU o piso de liquidez do escalão.
+  // Nos escalões inferiores (tier 2 e tier 3), o teto máximo rígido (divisionLiquidityCap)
+  // é imposto de forma absoluta — a direção nunca autoriza 10M ou 40M parados em caixa.
+  const formula = Math.max(floor, Math.round(weekly * 40));
+  return tier === 1 ? Math.max(cap, formula) : Math.min(cap, formula);
 }
 
 /**

@@ -10,36 +10,36 @@ import { PositionGroup } from '../core/models';
  */
 export const theme = {
   colors: {
-    bg: '#20242A',
-    surface: '#2B3138',
-    surfaceAlt: '#333A43',
-    border: '#3A424C',
-    text: '#E8EAED',
-    textDim: '#9AA3AD',
+    bg: '#080B10',
+    surface: '#0E131E',
+    surfaceAlt: '#141C2A',
+    border: 'rgba(255, 255, 255, 0.08)',
+    text: '#F1F5F9',
+    textDim: '#94A3B8',
 
-    // Cores de ESTADO (nunca decorativas)
-    green: '#3FB950', // positivo: confirmar, lucro, vitória
-    red: '#F85149', // negativo: perda, lesão, derrota, alerta
-    yellow: '#E3B341', // aviso: cartões, atenção
-    starOff: '#4A5058', // estrela por preencher (fundo das meias estrelas)
-    blue: '#4A9EFF', // seleção e navegação
+    // Cores de ESTADO e Destaque
+    green: '#00F59B', // positivo: confirmar, lucro, vitória (esmeralda néon)
+    red: '#FF3366', // negativo: perda, lesão, derrota, alerta (carmesim vívido)
+    yellow: '#FFB800', // aviso: cartões, atenção, capitão (ouro champanhe)
+    starOff: '#2D3748', // estrela por preencher
+    blue: '#00D2FF', // seleção e navegação (ciano elétrico)
 
     // Aliases usados pelo código existente
-    primary: '#3FB950',
-    primaryDim: '#2E7D3B',
-    accent: '#E3B341',
-    danger: '#F85149',
-    info: '#4A9EFF',
-    win: '#3FB950',
-    draw: '#9AA3AD',
-    loss: '#F85149',
-    borderLight: '#4A525C',
-    pitch: '#2F6B3F', // campo tático — verde dessaturado, não gritante
-    pitchStripe: '#357B48', // risca de relvado (banda alternada, mais clara)
-    pitchLine: 'rgba(255,255,255,0.22)',
+    primary: '#00F59B',
+    primaryDim: '#059669',
+    accent: '#FFB800',
+    danger: '#FF3366',
+    info: '#00D2FF',
+    win: '#00F59B',
+    draw: '#94A3B8',
+    loss: '#FF3366',
+    borderLight: 'rgba(255, 255, 255, 0.14)',
+    pitch: '#133824', // campo tático com relvado moderno
+    pitchStripe: '#18442C', // risca alternada
+    pitchLine: 'rgba(255, 255, 255, 0.28)',
   },
   spacing: (n: number) => n * 8,
-  radius: { sm: 6, md: 8, lg: 8, pill: 6 },
+  radius: { sm: 8, md: 14, lg: 20, pill: 9999 },
   font: {
     h1: 22,
     h2: 17,

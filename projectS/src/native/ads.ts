@@ -15,6 +15,23 @@ let adsModule: AdsModule | null = null;
 let unavailable = isExpoGo; // Expo Go não tem o módulo nativo
 let initialized = false;
 
+/**
+ * PREMIUM — quem pagou não vê UM ÚNICO anúncio.
+ *
+ * A porta fica aqui, no adaptador, e não em cada botão: são sete sítios a pedir
+ * rewarded (bónus, academia ×2, instalações, empréstimo, segunda hipótese) e
+ * bastava esquecer um para o jogador pago levar com publicidade que comprou
+ * para não ver. Aqui é impossível esquecer, e qualquer sítio novo nasce correto.
+ *
+ * O estado vem da store de monetização via `setAdsPremium`, para este ficheiro
+ * não importar `src/state` (a fronteira nativa não conhece a app).
+ */
+let premium = false;
+
+export function setAdsPremium(value: boolean): void {
+  premium = value;
+}
+
 async function loadSdk(): Promise<AdsModule | null> {
   if (unavailable) return null;
   if (!adsModule) {
@@ -64,6 +81,7 @@ const AD_WATCH_CAP_MS = 180_000;
  * nunca deixa o jogo congelado à espera de um anúncio que não veio.
  */
 export async function showInterstitial(): Promise<void> {
+  if (premium) return;
   const sdk = await loadSdk();
   if (!sdk) return;
   await new Promise<void>((resolve) => {
@@ -94,6 +112,10 @@ export async function showInterstitial(): Promise<void> {
  * aberto, aguarda o fecho com um cap de segurança.
  */
 export async function showRewarded(): Promise<boolean> {
+  // Premium: o bónus é concedido no toque, sem vídeo nenhum. Devolver `true`
+  // aqui faz os sete sítios de chamada funcionarem sem alteração — cada um já
+  // trata `true` como "recompensa ganha, aplica o bónus".
+  if (premium) return true;
   const sdk = await loadSdk();
   if (!sdk) {
     // Fallback de desenvolvimento (Expo Go/sem SDK): simula anúncio visto.

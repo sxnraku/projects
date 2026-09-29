@@ -17,7 +17,7 @@ import {
 import { assignObjective } from '../career';
 import { generateCup } from '../cup';
 import {
-  computeMarketValue, countryPrestige, recalcIncome, recalcUpkeep, suggestedWage, syncBudgets,
+  computeMarketValue, countryEconFactor, countryPrestige, divisionLiquidityCap, recalcIncome, recalcUpkeep, suggestedWage, syncBudgets,
 } from '../economy';
 import { emptyStandings, generateSchedule } from '../season';
 import { Rng } from '../engine/rng';
@@ -277,9 +277,14 @@ function buildBaseWorld(state: GameState, season: number, seed: number, rng: Rng
 function makeClubFromBase(
   bt: WorldTeam, clubId: string, leagueId: string, reputation: number,
 ): Club {
-  // Estádio proporcional à reputação (força+país), não ao escalão — Andorra tem
-  // estádios pequenos mesmo sendo "1ª divisão".
-  const capacity = Math.round((1_500 + Math.pow(reputation / 95, 2) * 58_000) / 500) * 500;
+  // Estádio proporcional ao escalão e à reputação dentro da divisão.
+  // Equipas da 3ª divisão jogam em campos de 1.500-3.500 lugares; 2ª divisão 3.000-7.000;
+  // 1ª divisão escala até aos grandes palcos de 50.000+.
+  const capacity = bt.tier === 3
+    ? Math.min(3_500, Math.max(1_500, Math.round((1_500 + Math.pow(reputation / 80, 2) * 1_800) / 250) * 250))
+    : bt.tier === 2
+    ? Math.min(8_000, Math.max(3_000, Math.round((3_000 + Math.pow(reputation / 85, 2) * 4_500) / 500) * 500))
+    : Math.round((8_000 + Math.pow(reputation / 95, 2) * 52_000) / 500) * 500;
   const cityName = bt.name.split(' ')[0] ?? bt.name;
   return {
     id: clubId, name: bt.name, shortName: bt.sigla, country: bt.slug, leagueId,
@@ -523,7 +528,8 @@ function makeFinance(
   squadIds: string[],
 ): Finance {
   const wages = squadIds.reduce((s, id) => s + (players[id]?.wage ?? 0), 0);
-  const balance = balanceFromReputation(club.reputation);
+  const rawBalance = balanceFromReputation(club.reputation);
+  const balance = Math.min(rawBalance, divisionLiquidityCap(tier, countryEconFactor(club.country)));
 
   const fin: Finance = {
     clubId: club.id,

@@ -35,7 +35,11 @@ export function Spot({
   useEffect(() => registerMeasurer(id, measure), [id, measure]);
 
   return (
-    <View ref={ref} style={style} onLayout={measure} collapsable={false}>
+    // O `testID` existe para os E2E poderem comparar a caixa deste elemento com
+    // a do anel do tutorial. Sem ele, o teste percorria os 24 passos sem nunca
+    // verificar a única coisa que importa: se o destaque cai em cima da coisa
+    // certa. Em web sai como `data-testid`.
+    <View ref={ref} testID={`spot-${id}`} style={style} onLayout={measure} collapsable={false}>
       {children}
     </View>
   );

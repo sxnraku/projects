@@ -15,8 +15,13 @@
 //
 // Assim podes instalar o APK de teste e tocar nos anúncios à vontade, sem
 // risco de banimento da conta AdMob (cliques nos próprios anúncios reais).
+//
+// O `typeof` não é decorativo: `__DEV__` só existe dentro do RN. Fora dele —
+// nos testes com `tsx`, que agora chegam aqui porque a store de monetização
+// importa `ads.ts` — lê-lo direto atira `ReferenceError` no ARRANQUE do módulo
+// e derruba a suite inteira antes do primeiro teste correr.
 export const USE_TEST_ADS =
-  __DEV__ || process.env.EXPO_PUBLIC_TEST_ADS === '1';
+  (typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_TEST_ADS === '1';
 
 // IDs de teste oficiais da Google (não editar).
 const TEST = {

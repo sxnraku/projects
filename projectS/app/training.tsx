@@ -289,7 +289,7 @@ export default function Training() {
                   {d.growing ? t('train.toPot', { v: d.pot }) : d.declining ? t('train.ceiling', { v: d.pot }) : t('train.peak')}
                   {'  '}
                   <Text style={d.growing ? styles.up : d.declining ? styles.down : styles.flat}>
-                    {d.growing ? '↗' : d.declining ? '↘' : '✓'}
+                    {d.growing ? '+' : d.declining ? '-' : '='}
                   </Text>
                 </Text>
               </View>

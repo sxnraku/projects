@@ -2,17 +2,21 @@
  * Academia de jovens — recrutamento com ESCOLHA.
  * Mostra um grupo de candidatos (idade, OVR atual, intervalo de potencial).
  * Recrutar = ver um anúncio + pagar uma taxa baixa. "Novo grupo" = anúncio.
+ *
+ * Com Premium não há anúncio: o bónus é concedido ao toque, mas limitado a um
+ * por dia de jogo (ver `PREMIUM_DAILY_CAP`). Sem esse limite, "novo grupo" —
+ * que não tem travão próprio — rolava a academia até sair um craque.
  */
 import React, { useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useGameStore } from '../src/state/gameStore';
-import { academyLevel, academyFee, candidatePotentialRange } from '../src/core/game';
+import { academyLevel, academyFee, candidatePotentialRange, ACADEMY_ROLLS_PER_SEASON } from '../src/core/game';
 import { naturalOverall, naturalOverallFine } from '../src/core/models';
 import { money, to100 } from '../src/ui/format';
 import { useT } from '../src/ui/i18n';
 import { attrColor, theme } from '../src/ui/theme';
 import { Face } from '../src/ui/Face';
-import { showRewarded } from '../src/native/ads';
+import { useMonetizationStore } from '../src/state/monetizationStore';
 import { Toast } from '../src/ui/Toast';
 import { Body, Button, PosText, Screen, Section } from './components';
 
@@ -24,6 +28,10 @@ export default function Academy() {
   const academyCandidates = useGameStore((s) => s.academyCandidates);
   const recruitYouth = useGameStore((s) => s.recruitYouth);
   const refreshAcademy = useGameStore((s) => s.refreshAcademy);
+  const rollsLeft = useGameStore((s) => s.academyRollsLeft)();
+  const claimAdSlot = useMonetizationStore((s) => s.claimAdSlot);
+  const adSlotAvailable = useMonetizationStore((s) => s.adSlotAvailable);
+  const premium = useMonetizationStore((s) => s.m.premium);
 
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [busy, setBusy] = useState(false);
@@ -38,7 +46,7 @@ export default function Academy() {
     if (busy) return;
     setBusy(true);
     setFeedback(null);
-    if (await showRewarded()) {
+    if (await claimAdSlot()) {
       const res = recruitYouth(id);
       setFeedback(res.ok
         ? { kind: 'ok', text: t('academy.recruited', { name }) }
@@ -51,7 +59,7 @@ export default function Academy() {
     if (busy) return;
     setBusy(true);
     setFeedback(null);
-    if (await showRewarded()) refreshAcademy();
+    if (await claimAdSlot()) refreshAcademy();
     setBusy(false);
   };
 
@@ -96,7 +104,7 @@ export default function Academy() {
                 <Text style={styles.fee}>{money(fee)}</Text>
                 <Button
                   label={t('academy.recruit')}
-                  disabled={busy || !canAfford}
+                  disabled={busy || !canAfford || !adSlotAvailable()}
                   onPress={() => doRecruit(c.id, c.lastName)}
                 />
               </View>
@@ -105,8 +113,19 @@ export default function Academy() {
         })}
 
         <View style={{ marginTop: theme.spacing(2) }}>
-          <Button label={t('academy.newBatch')} variant="ghost" disabled={busy} onPress={doRefresh} />
-          <Text style={styles.adNote}>{t('academy.adNote')}</Text>
+          <Button
+            label={t(premium ? 'academy.newBatchPremium' : 'academy.newBatch')}
+            variant="ghost"
+            disabled={busy || !adSlotAvailable() || rollsLeft <= 0}
+            onPress={doRefresh}
+          />
+          <Text style={styles.adNote}>
+            {rollsLeft <= 0
+              ? t('academy.rollsNone')
+              : `${t('academy.rollsLeft', { n: rollsLeft, max: ACADEMY_ROLLS_PER_SEASON })} ${t(premium
+                ? (adSlotAvailable() ? 'academy.adNotePremium' : 'bonus.premiumSpent')
+                : 'academy.adNote')}`}
+          </Text>
         </View>
       </ScrollView>
     </Screen>

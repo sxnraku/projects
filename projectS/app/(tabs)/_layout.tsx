@@ -29,16 +29,16 @@ export default function TabsLayout() {
       screenOptions={{
         header: () => <TopBar />,
         tabBarStyle: {
-          backgroundColor: theme.colors.surface,
-          borderTopColor: theme.colors.border,
+          backgroundColor: '#0E131E',
+          borderTopColor: 'rgba(255, 255, 255, 0.08)',
           borderTopWidth: 1,
-          height: 50 + bottomInset,
+          height: 52 + bottomInset,
           paddingBottom: bottomInset,
-          paddingTop: 4,
+          paddingTop: 6,
         },
-        tabBarActiveTintColor: theme.colors.blue, // azul = navegação/seleção
+        tabBarActiveTintColor: theme.colors.green,
         tabBarInactiveTintColor: theme.colors.textDim,
-        tabBarLabelStyle: { fontSize: 10, fontWeight: '700' },
+        tabBarLabelStyle: { fontSize: 10, fontWeight: '800' },
       }}
     >
       <Tabs.Screen name="index" options={{ title: t('tab.home'), tabBarIcon: icon('home') }} />

@@ -22,6 +22,7 @@
  */
 import type { MsgParams } from '../i18n';
 import type { GameState, PressItem } from '../models';
+import { addNews } from '../news';
 import { nudgeFans } from './fans';
 
 /** Assunto da conferência. Determina a pergunta e as respostas possíveis. */
@@ -44,6 +45,18 @@ export const PressTopic = {
   RELEGATION: 'RELEGATION',
   /** Na frente do campeonato com a época adiantada — a pergunta inevitável. */
   TITLE_RACE: 'TITLE_RACE',
+  /** Vitória expressiva ou goleada na última jornada. */
+  BIG_WIN: 'BIG_WIN',
+  /** Noite europeia / jogo de competição internacional. */
+  EUROPE: 'EUROPE',
+  /** Eliminatória ou decisão de Taça nacional. */
+  CUP_MATCH: 'CUP_MATCH',
+  /** Apresentação / comentário sobre nova contratação de peso. */
+  NEW_SIGNING: 'NEW_SIGNING',
+  /** Questões disciplinares ou castigo de jogador. */
+  DISCIPLINE_ISSUE: 'DISCIPLINE_ISSUE',
+  /** Provocações e jogos psicológicos contra o treinador adversário. */
+  MIND_GAMES: 'MIND_GAMES',
 } as const;
 export type PressTopic = (typeof PressTopic)[keyof typeof PressTopic];
 
@@ -126,7 +139,57 @@ export const PRESS_OPTIONS: Record<PressTopic, PressOption[]> = {
     { tone: 'BACK_SQUAD', morale: 4, confidence: 0, fans: 4 },
     { tone: 'BOLD', morale: 2, confidence: -2, fans: 11, claim: true },
   ],
+  BIG_WIN: [
+    { tone: 'CALM', morale: 1, confidence: 1, fans: 1 },
+    { tone: 'BACK_SQUAD', morale: 5, confidence: 0, fans: 4 },
+    { tone: 'BOLD', morale: 2, confidence: -1, fans: 8, claim: true },
+  ],
+  EUROPE: [
+    { tone: 'CALM', morale: 0, confidence: 1, fans: 0 },
+    { tone: 'BACK_SQUAD', morale: 4, confidence: 0, fans: 3 },
+    { tone: 'BOLD', morale: 2, confidence: -2, fans: 9, claim: true },
+  ],
+  CUP_MATCH: [
+    { tone: 'CALM', morale: 0, confidence: 1, fans: -1 },
+    { tone: 'BACK_SQUAD', morale: 4, confidence: 0, fans: 2 },
+    { tone: 'BOLD', morale: 2, confidence: -1, fans: 8, claim: true },
+  ],
+  NEW_SIGNING: [
+    { tone: 'CALM', morale: 1, confidence: 1, fans: 2 },
+    { tone: 'BACK_SQUAD', morale: 4, confidence: 0, fans: 5 },
+    { tone: 'BLAME', morale: -4, confidence: 1, fans: -1 },
+  ],
+  DISCIPLINE_ISSUE: [
+    { tone: 'CALM', morale: 0, confidence: 1, fans: 0 },
+    { tone: 'BACK_SQUAD', morale: 4, confidence: -1, fans: -2 },
+    { tone: 'BLAME', morale: -6, confidence: 2, fans: 4 },
+  ],
+  MIND_GAMES: [
+    { tone: 'CALM', morale: 0, confidence: 2, fans: -1 },
+    { tone: 'BACK_SQUAD', morale: 3, confidence: 0, fans: 2 },
+    { tone: 'BOLD', morale: 2, confidence: -2, fans: 9, claim: true },
+  ],
 };
+
+/** Lista de órgãos de comunicação social para atribuir à conferência. */
+export const PRESS_OUTLETS = [
+  'press.outlet.sportsDaily',
+  'press.outlet.tabloid',
+  'press.outlet.fanRadio',
+  'press.outlet.national',
+] as const;
+
+/** Nomes de repórteres conhecidos da sala de imprensa. */
+export const PRESS_REPORTERS = [
+  'João Pereira',
+  'Miguel Silva',
+  'Carlos Santos',
+  'André Costa',
+  'Tiago Martins',
+  'Ricardo Ferreira',
+  'Diogo Oliveira',
+  'Rui Rodrigues',
+] as const;
 
 /**
  * Quantas maneiras diferentes existem de fazer a mesma pergunta.
@@ -180,13 +243,27 @@ export function pressOption(topic: PressTopic, tone: PressTone): PressOption | n
 const suffix = (v: number) => (v > 0 ? `.${'bc'[v - 1]}` : '');
 
 /** Chave i18n da pergunta do jornalista, na variante pedida. */
-export function questionKey(topic: PressTopic, variant = 0): string {
+export function questionKey(topic: PressTopic, variant = 0, profile?: string): string {
+  if (topic === 'TRANSFER' && profile) {
+    return `press.q.TRANSFER.${profile}${suffix(variant % PRESS_VARIANTS)}`;
+  }
   return `press.q.${topic}${suffix(variant % PRESS_VARIANTS)}`;
 }
 
 /** Chave i18n de uma resposta possível, na variante pedida. */
-export function answerKey(topic: PressTopic, tone: PressTone, variant = 0): string {
+export function answerKey(topic: PressTopic, tone: PressTone, variant = 0, profile?: string): string {
+  if (topic === 'TRANSFER' && profile) {
+    return `press.a.TRANSFER.${profile}.${tone}${suffix(variant % ANSWER_VARIANTS)}`;
+  }
   return `press.a.${topic}.${tone}${suffix(variant % ANSWER_VARIANTS)}`;
+}
+
+/** Escolhe deterministicamente o órgão e repórter da conferência. */
+export function pickOutlet(season: number, round: number, topic: PressTopic): { outletKey: string; journalistName: string } {
+  const hash = Math.abs(season * 13 + round * 17 + topic.length * 23);
+  const outletKey = PRESS_OUTLETS[hash % PRESS_OUTLETS.length]!;
+  const journalistName = PRESS_REPORTERS[(hash >> 2) % PRESS_REPORTERS.length]!;
+  return { outletKey, journalistName };
 }
 
 // ---------------------------------------------------------------------------
@@ -216,8 +293,25 @@ export interface PressContext {
   clubCount: number;
   /** Fração da época já jogada (0..1). */
   seasonProgress: number;
-  /** Jogador nosso com proposta em cima da mesa (id + nome), se houver. */
-  bidTarget?: { playerId: string; playerName: string };
+  /** Jogador nosso alvo de proposta ou rumor de mercado (id + nome + perfil). */
+  bidTarget?: {
+    playerId: string;
+    playerName: string;
+    profile?: 'STAR' | 'WONDERKID' | 'UNHAPPY' | 'EXPIRING' | 'BID';
+    suitorName?: string;
+  };
+  /** Golos marcados / sofridos no último jogo. */
+  lastResultGoals?: { scored: number; conceded: number };
+  /** O próximo jogo é europeu? */
+  nextIsEurope?: boolean;
+  /** O próximo jogo é de taça? */
+  nextIsCup?: boolean;
+  /** Reforço recém-contratado (id + nome), se houver. */
+  newSigning?: { playerId: string; playerName: string };
+  /** Jogador em risco/castigo disciplinar (id + nome), se houver. */
+  disciplinedPlayer?: { playerId: string; playerName: string };
+  /** Treinador ou clube adversário para mind games. */
+  mindGamesOpponent?: string;
 }
 
 /** Vitórias seguidas, do jogo mais recente para trás. */
@@ -242,8 +336,13 @@ export function winlessStreak(form: ('W' | 'D' | 'L')[]): number {
  */
 export function pickTopic(ctx: PressContext): PressTopic | null {
   if (ctx.unrest) return 'FAN_UNREST';
+  if (ctx.disciplinedPlayer) return 'DISCIPLINE_ISSUE';
   if (ctx.lastMargin <= -3) return 'HEAVY_LOSS';
+  if (ctx.lastMargin >= 3 || (ctx.lastResultGoals && ctx.lastResultGoals.scored >= 4)) return 'BIG_WIN';
   if (ctx.nextIsDerby) return 'DERBY';
+  if (ctx.nextIsEurope) return 'EUROPE';
+  if (ctx.nextIsCup) return 'CUP_MATCH';
+  if (ctx.newSigning) return 'NEW_SIGNING';
   if (ctx.bidTarget) return 'TRANSFER';
 
   // A CORRIDA AO TÍTULO passa à frente da simples série de vitórias: quem lidera
@@ -257,6 +356,9 @@ export function pickTopic(ctx: PressContext): PressTopic | null {
   const dropZone = ctx.clubCount - 2;
   if (ctx.seasonProgress >= 0.5 && ctx.position >= dropZone) return 'RELEGATION';
 
+  // Mind games ocasionais com o adversário.
+  if (ctx.mindGamesOpponent && ctx.seasonProgress >= 0.25) return 'MIND_GAMES';
+
   // Antevisão normal: só de vez em quando, para a conferência continuar a ser
   // um acontecimento. Sem próximo adversário não há o que anteceder.
   if (!ctx.nextOpponent) return null;
@@ -268,7 +370,7 @@ export function pickTopic(ctx: PressContext): PressTopic | null {
  * criado (ou null). Determinística: o assunto sai do contexto, não do acaso.
  *
  * `preMatchEvery` limita as antevisões banais a uma em cada N jornadas — os
- * assuntos quentes (dérbi, contestação, derrota pesada) passam sempre.
+ * assuntos quentes (dérbi, contestação, derrota pesada, etc.) passam sempre.
  */
 export function generatePressConference(
   state: GameState, ctx: PressContext, round: number, preMatchEvery = 4,
@@ -284,11 +386,11 @@ export function generatePressConference(
 
   // A variante sai da época + jornada: estável para esta conferência, diferente
   // na próxima. Nada de acaso — o mesmo save relê sempre a mesma pergunta.
-  //
-  // ⚠ Os coeficientes têm de ser COPRIMOS de `PRESS_VARIANTS`. Com `round * 3`
-  // e 3 variantes, `round` desaparecia no resto e saía sempre a mesma redação —
-  // exatamente o problema que isto existe para resolver.
   const variant = (state.meta.season * 5 + round * 7 + topic.length * 11) % PRESS_VARIANTS;
+  const { outletKey, journalistName } = pickOutlet(state.meta.season, round, topic);
+
+  const targetPlayer = ctx.bidTarget ?? ctx.newSigning ?? ctx.disciplinedPlayer;
+
   const item: PressItem = {
     kind: 'PRESS',
     id: `press_${state.meta.season}_${round}_${topic}`,
@@ -298,9 +400,13 @@ export function generatePressConference(
       : topic === 'BAD_RUN' ? winlessStreak(ctx.form) : undefined,
     createdDate: state.meta.currentDate,
     expiresDate: addDays(state.meta.currentDate, PRESS_TTL_DAYS),
-    opponentName: ctx.nextOpponent || undefined,
-    playerId: ctx.bidTarget?.playerId,
-    playerName: ctx.bidTarget?.playerName,
+    opponentName: ctx.mindGamesOpponent || ctx.nextOpponent || undefined,
+    playerId: targetPlayer?.playerId,
+    playerName: targetPlayer?.playerName,
+    playerProfile: ctx.bidTarget?.profile,
+    suitorName: ctx.bidTarget?.suitorName,
+    outletKey,
+    journalistName,
   };
   state.inbox.push(item);
   press.lastDate = state.meta.currentDate;
@@ -362,13 +468,42 @@ export function answerPress(state: GameState, itemId: string, tone: PressTone): 
     nudgeFans(state, `press.reason.${tone}`, opt.fans, { opp: item.opponentName ?? '' });
   }
 
+  // Efeito de moral individual no jogador em foco (reforço, castigo ou proposta/rumor)
+  if (item.playerId && state.players[item.playerId]) {
+    const p = state.players[item.playerId];
+    if (opt.tone === 'BACK_SQUAD') {
+      p.condition.morale = Math.max(10, Math.min(95, p.condition.morale + 8));
+    } else if (opt.tone === 'BLAME') {
+      p.condition.morale = Math.max(10, Math.min(95, p.condition.morale - 10));
+    }
+  }
+
   const press = ensurePress(state);
   if (opt.claim) press.claim = { topic: item.topic, createdDate: state.meta.currentDate };
 
+  const clubShort = state.clubs[state.meta.managedClubId]?.shortName ?? '';
+
+  // Gera manchetes no feed de notícias quando há declarações marcantes
+  if (item.topic === 'TRANSFER') {
+    if (opt.tone === 'BACK_SQUAD') {
+      addNews(state, 'TRANSFER', 'news.press.transferLocked', { player: item.playerName ?? '', club: clubShort });
+    } else if (opt.tone === 'BLAME') {
+      addNews(state, 'TRANSFER', 'news.press.transferOpen', { player: item.playerName ?? '', club: clubShort });
+    }
+  } else if (opt.tone === 'BOLD') {
+    addNews(state, 'CLUB', 'news.press.boldHeadline', {
+      opp: item.opponentName ?? '',
+      club: clubShort,
+    });
+  } else if (opt.tone === 'BLAME') {
+    addNews(state, 'CLUB', 'news.press.blameHeadline', {
+      player: item.playerName ?? '',
+      club: clubShort,
+    });
+  }
+
   return {
     ok: true,
-    // A reação é por TOM, não por (assunto × tom): 24 frases quase iguais só
-    // dariam 24 sítios para a tradução envelhecer mal.
     messageKey: `press.said.${tone}`,
     messageParams: { opp: item.opponentName ?? '', player: item.playerName ?? '' },
     claimed: opt.claim === true,

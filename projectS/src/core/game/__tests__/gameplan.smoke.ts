@@ -262,20 +262,30 @@ const oppId = leagueIds.find((id) => id !== managedId)!;
   const plan = { markStar: true, blockWings: true };
   const noop = [{ side: 'HOME' as const, minute: 60, tactic: hT }];
 
-  const goalsWith = (p: typeof plan | undefined, ch: typeof noop | undefined) => {
-    let gf = 0;
-    for (let k = 0; k < 160; k++) {
-      gf += simulateMatch(home, away, hT, s.tactics[away]!, s.players, 60_000 + k, ch,
-        p ? { homePlan: p } : undefined).home.goals;
+  // Mede-se em xG e não em GOLOS.
+  //
+  // O golo é uma amostra de Poisson do xG: a 160 jogos, o erro da medição é
+  // duas a três vezes maior do que o efeito que se quer ver (~0,04). O teste
+  // passava por sorte — bastou o plantel mudar (lesões mais longas) para a
+  // medição cair para -0,006 e a suite acusar uma regressão que não existia.
+  //
+  // Em xG a invariante que importa — o custo SOBREVIVER a uma substituição —
+  // sai exata ao decimal, em qualquer amostra.
+  const N = 600;
+  const xgWith = (p: typeof plan | undefined, ch: typeof noop | undefined) => {
+    let v = 0;
+    for (let k = 0; k < N; k++) {
+      v += simulateMatch(home, away, hT, s.tactics[away]!, s.players, 60_000 + k, ch,
+        p ? { homePlan: p } : undefined).home.xg;
     }
-    return gf / 160;
+    return v / N;
   };
 
-  const costPlain = goalsWith(plan, undefined) - goalsWith(undefined, undefined);
-  const costAfterSub = goalsWith(plan, noop) - goalsWith(undefined, noop);
-  assert(costPlain < -0.02, `as instruções custam mesmo golos (${costPlain.toFixed(3)})`);
-  assert(Math.abs(costAfterSub - costPlain) < 0.005,
-    `e o custo NÃO desaparece com uma substituição (${costPlain.toFixed(3)} vs ${costAfterSub.toFixed(3)})`);
+  const costPlain = xgWith(plan, undefined) - xgWith(undefined, undefined);
+  const costAfterSub = xgWith(plan, noop) - xgWith(undefined, noop);
+  assert(costPlain < -0.015, `as instruções custam mesmo ataque (${costPlain.toFixed(4)} xG)`);
+  assert(Math.abs(costAfterSub - costPlain) < 0.0005,
+    `e o custo NÃO desaparece com uma substituição (${costPlain.toFixed(4)} vs ${costAfterSub.toFixed(4)})`);
 }
 
 // ====================================================================

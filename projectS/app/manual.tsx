@@ -97,7 +97,7 @@ function Entry({ entry }: { entry: ManualEntry }) {
     <View style={styles.entry}>
       <Text style={styles.entryTitle}>{t(entry.titleKey)}</Text>
       {entry.whereKey ? (
-        <Text style={styles.entryWhere}>📍 {t(entry.whereKey)}</Text>
+        <Text style={styles.entryWhere}>[LOCAL] {t(entry.whereKey)}</Text>
       ) : null}
       <Text style={styles.entryBody}>{t(entry.bodyKey)}</Text>
     </View>

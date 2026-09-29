@@ -173,6 +173,7 @@ export function ensureValidLineup(
   tactic.lineup = carryRoles(tactic.lineup, fresh.lineup);
   tactic.bench = fresh.bench;
   tactic.captainId = fresh.captainId;
+  tactic.viceCaptainId = fresh.viceCaptainId;
   tactic.penaltyTakerId = fresh.penaltyTakerId;
 }
 
@@ -203,6 +204,8 @@ export function reselectLineup(
     bench: picked.bench,
     captainId: previous.captainId && inLineup.has(previous.captainId)
       ? previous.captainId : picked.captainId,
+    viceCaptainId: previous.viceCaptainId && inLineup.has(previous.viceCaptainId)
+      ? previous.viceCaptainId : picked.viceCaptainId,
     penaltyTakerId: previous.penaltyTakerId && inLineup.has(previous.penaltyTakerId)
       ? previous.penaltyTakerId : picked.penaltyTakerId,
   };

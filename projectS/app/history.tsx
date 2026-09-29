@@ -48,7 +48,7 @@ export default function HistoryScreen() {
     return (
       <Screen edges={['left', 'right', 'bottom']}>
         <View style={styles.emptyWrap}>
-          <Text style={styles.emptyIcon}>🏆</Text>
+          <Text style={styles.emptyBadge}>HISTÓRICO</Text>
           <Text style={styles.emptyText}>{t('history.empty')}</Text>
         </View>
       </Screen>
@@ -140,14 +140,14 @@ function SeasonCard({ entry }: { entry: SeasonHistoryEntry }) {
       {champions.map((c) => (
         <View key={c.leagueId} style={styles.champRow}>
           <Text style={styles.champLeague} numberOfLines={1}>{c.leagueName}</Text>
-          <Text style={styles.champClub} numberOfLines={1}>🏅 {c.clubName}</Text>
+          <Text style={styles.champClub} numberOfLines={1}>[1º] {c.clubName}</Text>
           <Text style={styles.champPts}>{c.points}</Text>
         </View>
       ))}
 
       {topScorer ? (
         <Text style={styles.detail}>
-          ⚽ {t('history.topScorer')}: <Text style={styles.detailStrong}>{topScorer.playerName}</Text> ({topScorer.goals})
+          [MELHOR MARCADOR] {t('history.topScorer')}: <Text style={styles.detailStrong}>{topScorer.playerName}</Text> ({topScorer.goals})
         </Text>
       ) : null}
 
@@ -158,7 +158,7 @@ function SeasonCard({ entry }: { entry: SeasonHistoryEntry }) {
         <View style={styles.awards}>
           {mainAwards.map((a) => (
             <Text key={a.kind} style={styles.detail} numberOfLines={1}>
-              🏆 {t(`award.${a.kind}`)}: <Text style={styles.detailStrong}>{a.playerName}</Text>
+              [PRÉMIO] {t(`award.${a.kind}`)}: <Text style={styles.detailStrong}>{a.playerName}</Text>
               {a.kind === 'TOP_SCORER' ? ` (${t('award.goals', { value: a.value })})`
                 : a.kind === 'BEST_MANAGER' ? ''
                 : ` (${t('award.rating', { value: (a.value / 10).toFixed(1) })})`}
@@ -222,6 +222,10 @@ const styles = StyleSheet.create({
   titles: { color: theme.colors.accent, fontSize: 12, fontWeight: '700' },
 
   emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 },
-  emptyIcon: { fontSize: 40 },
+  emptyBadge: {
+    backgroundColor: 'rgba(255,184,0,0.15)', borderWidth: 1, borderColor: theme.colors.yellow,
+    borderRadius: theme.radius.sm, paddingHorizontal: 12, paddingVertical: 6,
+    color: theme.colors.yellow, fontSize: 13, fontWeight: '800', letterSpacing: 1,
+  },
   emptyText: { color: theme.colors.textDim, fontSize: 13, textAlign: 'center', lineHeight: 19 },
 });

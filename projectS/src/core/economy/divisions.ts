@@ -87,9 +87,20 @@ export function baseStaffCost(club: Club, tier: number): number {
   return Math.round((8_000 + scale * scale * 350_000) * divisionMultiplier(tier));
 }
 
+/**
+ * Base de prémio por escalão — a 1ª divisão tem direitos e prémios televisivos,
+ * enquanto a 2ª e 3ª divisões têm orçamentos e prémios substancialmente mais contidos.
+ */
+function tierPrizeBase(tier: number): number {
+  if (tier === 1) return 4_000_000;
+  if (tier === 2) return 400_000;
+  if (tier === 3) return 75_000;
+  return 20_000;
+}
+
 /** Prémio por posição final na liga, já indexado ao escalão. */
 export function leaguePrize(tier: number, position: number, leagueSize: number): number {
-  const base = 18_000_000 * divisionMultiplier(tier);
+  const base = tierPrizeBase(tier);
   // 1º leva o prémio cheio; o último leva ~15%.
   const share = 1 - (position - 1) / Math.max(1, leagueSize - 1) * 0.85;
   return Math.round(base * share);
@@ -97,30 +108,47 @@ export function leaguePrize(tier: number, position: number, leagueSize: number):
 
 /** Prémio extra por subir de divisão — o "salto" de orçamento. */
 export function promotionPrize(newTier: number): number {
-  return Math.round(30_000_000 * divisionMultiplier(newTier));
+  if (newTier === 1) return 1_500_000;
+  if (newTier === 2) return 200_000;
+  if (newTier === 3) return 40_000;
+  return 15_000;
 }
 
 /**
  * PISO do orçamento de transferências por escalão — garante que subir de divisão
- * dá mesmo mais dinheiro para gastar, mesmo antes de a folha salarial crescer.
- * Num país TOP: 1ª ~10M, 2ª ~4M, 3ª ~1.6M, 4ª ~0.6M. A queda por escalão é mais
- * funda (0.4×) do que a das receitas (0.5×) de propósito: a 2ª divisão de
- * Inglaterra tem estádios cheios mas não compra como a Premier League.
- *
- * O `countryFactor` (0.2..1.5) faz o resto — a 1ª divisão de um país fraco fica
- * com ~2M, não com os 10M de um país grande.
+ * dá mais poder de compra sem injetar dezenas de milhões em clubes secundários.
  */
-const BUDGET_TIER_DECAY = 0.4;
-
 export function divisionBudgetFloor(tier: number, countryFactor = 1): number {
-  const decay = Math.pow(BUDGET_TIER_DECAY, Math.max(0, tier - 1));
-  return Math.round(10_000_000 * decay * countryFactor / 10_000) * 10_000;
+  const base = tier === 1 ? 3_000_000
+    : tier === 2 ? 400_000
+    : tier === 3 ? 100_000
+    : 40_000;
+  const factor = Math.min(1.3, Math.max(0.7, countryFactor));
+  return Math.round(base * factor / 10_000) * 10_000;
 }
 
-/** Piso de liquidez por escalão — quanto de caixa um clube da divisão pode guardar. */
+/** Piso de liquidez por escalão — quanto de caixa de arranque/reserva um clube da divisão deve manter. */
 export function divisionLiquidityFloor(tier: number, countryFactor = 1): number {
-  const decay = Math.pow(BUDGET_TIER_DECAY, Math.max(0, tier - 1));
-  return Math.round(8_000_000 * decay * countryFactor);
+  const base = tier === 1 ? 4_000_000
+    : tier === 2 ? 800_000
+    : tier === 3 ? 250_000
+    : 100_000;
+  const factor = Math.min(1.3, Math.max(0.7, countryFactor));
+  return Math.round(base * factor);
+}
+
+/**
+ * TETO RÍGIDO DE LIQUIDEZ (Tesouraria máxima autorizada pela Direção).
+ * Numa equipa de 2ª ou 3ª divisão, a direção/SAD nunca deixa dezenas de milhões parados
+ * na conta à ordem: qualquer excedente é absorvido para passivo, acionistas ou infraestruturas.
+ */
+export function divisionLiquidityCap(tier: number, countryFactor = 1): number {
+  const baseCap = tier === 1 ? 25_000_000
+    : tier === 2 ? 2_200_000
+    : tier === 3 ? 750_000
+    : 300_000;
+  const factor = Math.min(1.3, Math.max(0.7, countryFactor));
+  return Math.round(baseCap * factor);
 }
 
 // ---------------------------------------------------------------------------

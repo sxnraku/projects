@@ -10,6 +10,7 @@ import {
   checkInterest,
   playerStanding,
   divisionCapRemaining,
+  divisionLiquidityCap,
   divisionWageCap,
   withinDivisionCap,
 } from './divisions';

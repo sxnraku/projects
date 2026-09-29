@@ -22,7 +22,8 @@ import {
   Bar, Body, contrastOn, CrestCircle, darken, DashCard, FormDots, RowKV, Screen, Stars, StrengthTriplet,
   BalanceSplit,
 } from '../components';
-import { showInterstitial, showRewarded } from '../../src/native/ads';
+import { showInterstitial } from '../../src/native/ads';
+import { worldTeamOfClubId } from '../../src/core/game';
 import AdBanner from '../../src/native/AdBanner';
 
 const FOCUSES: TrainingFocus[] = ['PHYSICAL', 'TECHNICAL', 'TACTICAL', 'RECOVERY'] as TrainingFocus[];
@@ -70,6 +71,7 @@ export default function Dashboard() {
   const rejectBid = useGameStore((s) => s.rejectBid);
   const resolveRenewal = useGameStore((s) => s.resolveRenewal);
   const resolveRequest = useGameStore((s) => s.resolveRequest);
+  const resolveAudience = useGameStore((s) => s.resolveAudience);
   const dismissItem = useGameStore((s) => s.dismissItem);
   const acceptCounter = useGameStore((s) => s.acceptCounter);
   const withdrawOffer = useGameStore((s) => s.withdrawOffer);
@@ -77,6 +79,8 @@ export default function Dashboard() {
   const onAdvanceAd = useMonetizationStore((s) => s.onAdvance);
   const rewardedAvailable = useMonetizationStore((s) => s.rewardedAvailable);
   const claimReward = useMonetizationStore((s) => s.claimReward);
+  const claimAdSlot = useMonetizationStore((s) => s.claimAdSlot);
+  const premium = useMonetizationStore((s) => s.m.premium);
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'error' | 'info'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [askRotate, setAskRotate] = useState(false);
@@ -293,35 +297,60 @@ export default function Dashboard() {
                   if (item.kind === 'PRESS') {
                     return (
                       <View key={item.id} style={styles.pressBox}>
-                        <Text style={styles.pressTitle}>🎙 {t('press.title')}</Text>
+                        <View style={styles.pressHeader}>
+                          <Text style={styles.pressTitle}>[IMPRENSA] {t('press.title')}</Text>
+                          {(item.outletKey || item.journalistName) && (
+                            <Text style={styles.pressOutlet} numberOfLines={1}>
+                              {item.outletKey ? t(item.outletKey) : ''}{item.outletKey && item.journalistName ? ' · ' : ''}{item.journalistName ?? ''}
+                            </Text>
+                          )}
+                        </View>
                         <Text style={styles.pressQuestion}>
-                          {t(questionKey(item.topic, item.variant ?? 0), {
+                          «{t(questionKey(item.topic, item.variant ?? 0, item.playerProfile), {
                             opp: item.opponentName ?? '',
                             player: item.playerName ?? '',
+                            suitor: item.suitorName ?? '',
                             n: item.streak ?? 3,
-                          })}
+                          })}»
                         </Text>
-                        {PRESS_OPTIONS[item.topic].map((opt) => (
-                          <Pressable
-                            key={opt.tone}
-                            style={styles.pressAnswer}
-                            onPress={() => {
-                              const r = answerPress(item.id, opt.tone);
-                              setFeedback(r.messageKey
-                                ? { kind: r.ok ? 'ok' : 'error', text: tMsg({ key: r.messageKey, params: r.messageParams }) }
-                                : null);
-                            }}
-                          >
-                            <Text style={styles.pressTone}>{t(`press.tone.${opt.tone}`)}</Text>
-                            <Text style={styles.pressLine}>
-                              {t(answerKey(item.topic, opt.tone, item.variant ?? 0), {
-                                opp: item.opponentName ?? '',
-                                player: item.playerName ?? '',
-                                n: item.streak ?? 3,
-                              })}
-                            </Text>
-                          </Pressable>
-                        ))}
+                        {PRESS_OPTIONS[item.topic].map((opt) => {
+                          const toneColor = opt.tone === 'BOLD'
+                            ? theme.colors.yellow
+                            : opt.tone === 'BACK_SQUAD'
+                            ? theme.colors.green
+                            : opt.tone === 'BLAME'
+                            ? theme.colors.red
+                            : theme.colors.blue;
+                          return (
+                            <Pressable
+                              key={opt.tone}
+                              style={({ pressed }) => [styles.pressAnswer, pressed && { opacity: 0.8 }]}
+                              onPress={() => {
+                                const r = answerPress(item.id, opt.tone);
+                                setFeedback(r.messageKey
+                                  ? { kind: r.ok ? 'ok' : 'error', text: tMsg({ key: r.messageKey, params: r.messageParams }) }
+                                  : null);
+                              }}
+                            >
+                              <View style={styles.pressToneRow}>
+                                <Text style={[styles.pressTone, { color: toneColor }]}>
+                                  {t(`press.tone.${opt.tone}`)}
+                                </Text>
+                                {opt.claim && (
+                                  <Text style={styles.pressClaimBadge}>[AVISO] {t('press.tone.BOLD')}</Text>
+                                )}
+                              </View>
+                              <Text style={styles.pressLine}>
+                                {t(answerKey(item.topic, opt.tone, item.variant ?? 0, item.playerProfile), {
+                                  opp: item.opponentName ?? '',
+                                  player: item.playerName ?? '',
+                                  suitor: item.suitorName ?? '',
+                                  n: item.streak ?? 3,
+                                })}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
                       </View>
                     );
                   }
@@ -333,7 +362,7 @@ export default function Dashboard() {
                   if (item.kind === 'CRISIS') {
                     return (
                       <View key={item.id} style={styles.crisisBox}>
-                        <Text style={styles.crisisTitle}>⚠ {t('crisis.title')}</Text>
+                        <Text style={styles.crisisTitle}>[ALERTA] {t('crisis.title')}</Text>
                         <Text style={styles.crisisMeta}>
                           {t('crisis.meta', { debt: money(item.debt) })}
                         </Text>
@@ -445,15 +474,56 @@ export default function Dashboard() {
                     );
                   }
 
-                  const label = t(item.request === 'WAGE_RISE' ? 'inbox.reqWage' : 'inbox.reqLeave');
+                  // GABINETE DO TREINADOR — Audiência com Jogador (3 opções de diálogo)
                   return (
-                    <InboxRow key={item.id} accent={theme.colors.red}
-                      face={<Face seed={p.id} size={30} shirt={club.primaryColor} />}
-                      name={name} meta={t('inbox.reqMeta', { label, morale: p.condition.morale })}
-                      onOpen={() => router.push(`/player/${p.id}`)}>
-                      <MiniBtn label={t('btn.accept')} bg={theme.colors.green} onPress={() => { const m = resolveRequest(item.id, true); setFeedback(m ? { kind: 'info', text: tMsg(m) } : null); }} />
-                      <MiniBtn label={t('btn.reject')} bg={theme.colors.surfaceAlt} onPress={() => { const m = resolveRequest(item.id, false); setFeedback(m ? { kind: 'info', text: tMsg(m) } : null); }} />
-                    </InboxRow>
+                    <View key={item.id} style={styles.audienceBox}>
+                      <View style={styles.audienceHeader}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <Face seed={p.id} size={32} shirt={club.primaryColor} />
+                          <View>
+                            <Text style={styles.audienceTitle}>[GABINETE] {t('aud.office').toUpperCase()}</Text>
+                            <Text style={styles.audiencePlayerName} numberOfLines={1}>{name}</Text>
+                          </View>
+                        </View>
+                        <Text style={styles.audienceMorale}>
+                          {t('squad.sort.mor')} {p.condition.morale}
+                        </Text>
+                      </View>
+                      <Text style={styles.audienceSpeech}>
+                        «{t(`aud.say.${item.request}`)}»
+                      </Text>
+                      <View style={styles.audienceOptions}>
+                        <Pressable
+                          style={({ pressed }) => [styles.audienceOption, { borderColor: theme.colors.green }, pressed && { opacity: 0.8 }]}
+                          onPress={() => {
+                            const m = resolveAudience(item.id, 'OPTION_A');
+                            setFeedback(m ? { kind: 'info', text: tMsg(m) } : null);
+                          }}
+                        >
+                          <Text style={[styles.audienceOptionKey, { color: theme.colors.green }]}>[A] {t(`aud.optA.${item.request}`)}</Text>
+                        </Pressable>
+
+                        <Pressable
+                          style={({ pressed }) => [styles.audienceOption, { borderColor: theme.colors.blue }, pressed && { opacity: 0.8 }]}
+                          onPress={() => {
+                            const m = resolveAudience(item.id, 'OPTION_B');
+                            setFeedback(m ? { kind: 'info', text: tMsg(m) } : null);
+                          }}
+                        >
+                          <Text style={[styles.audienceOptionKey, { color: theme.colors.blue }]}>[B] {t(`aud.optB.${item.request}`)}</Text>
+                        </Pressable>
+
+                        <Pressable
+                          style={({ pressed }) => [styles.audienceOption, { borderColor: theme.colors.red }, pressed && { opacity: 0.8 }]}
+                          onPress={() => {
+                            const m = resolveAudience(item.id, 'OPTION_C');
+                            setFeedback(m ? { kind: 'info', text: tMsg(m) } : null);
+                          }}
+                        >
+                          <Text style={[styles.audienceOptionKey, { color: theme.colors.red }]}>[C] {t(`aud.optC.${item.request}`)}</Text>
+                        </Pressable>
+                      </View>
+                    </View>
                   );
                 })}
               </DashCard>
@@ -523,7 +593,7 @@ export default function Dashboard() {
               {euroNight ? (
                 <View style={styles.euroBanner}>
                   <Text style={styles.euroBannerText}>
-                    🏆 {euroMatch ? `${t('euro.night')} · ${t(`euro.name.${euroMatch.comp}`)}` : t('euro.pause')}
+                    [EUROPA] {euroMatch ? `${t('euro.night')} · ${t(`euro.name.${euroMatch.comp}`)}` : t('euro.pause')}
                   </Text>
                   <Text style={styles.euroBannerSub}>
                     {euroMatch ? t('euro.nightHint') : t('euro.pauseHint')}
@@ -570,7 +640,7 @@ export default function Dashboard() {
                   {/* DÉRBI — a semana não é igual às outras, e vê-se logo aqui. */}
                   {pre?.derby && !euroNight ? (
                     <View style={styles.derbyTag}>
-                      <Text style={styles.derbyText}>🔥 {t('derby.tag')}</Text>
+                      <Text style={styles.derbyText}>{t('derby.tag').toUpperCase()}</Text>
                     </View>
                   ) : null}
                   <View style={styles.versus}>
@@ -797,18 +867,18 @@ export default function Dashboard() {
                   <>
                     <Pressable disabled={busy} style={[styles.bonusRow, busy && { opacity: 0.5 }]} onPress={async () => {
                       setBusy(true);
-                      if (await showRewarded()) { const m = claimReward(AdReward.SPONSOR_BONUS); if (m) setFeedback({ kind: 'ok', text: tMsg(m) }); }
+                      if (await claimAdSlot()) { const m = claimReward(AdReward.SPONSOR_BONUS); if (m) setFeedback({ kind: 'ok', text: tMsg(m) }); }
                       setBusy(false);
                     }}>
-                      <Text style={styles.bonusText}>{t('bonus.sponsor')}</Text>
+                      <Text style={styles.bonusText}>{t(premium ? 'bonus.sponsorPremium' : 'bonus.sponsor')}</Text>
                       <Text style={styles.bonusVal}>+{money(scaled(250_000))}</Text>
                     </Pressable>
                     <Pressable disabled={busy} style={[styles.bonusRow, busy && { opacity: 0.5 }]} onPress={async () => {
                       setBusy(true);
-                      if (await showRewarded()) { const m = claimReward(AdReward.FITNESS_BOOST); if (m) setFeedback({ kind: 'ok', text: tMsg(m) }); }
+                      if (await claimAdSlot()) { const m = claimReward(AdReward.FITNESS_BOOST); if (m) setFeedback({ kind: 'ok', text: tMsg(m) }); }
                       setBusy(false);
                     }}>
-                      <Text style={styles.bonusText}>{t('bonus.fitness')}</Text>
+                      <Text style={styles.bonusText}>{t(premium ? 'bonus.fitnessPremium' : 'bonus.fitness')}</Text>
                       <Text style={styles.bonusVal}>+20 fit</Text>
                     </Pressable>
                   </>
@@ -1126,19 +1196,32 @@ function MeritOfferModal({
     <Modal visible transparent animationType="fade" onRequestClose={onDecline}>
       <View style={styles.cdBackdrop}>
         <View style={[styles.cdCard, { borderColor: theme.colors.blue }]}>
-          <Text style={[styles.cdTitle, { color: theme.colors.blue }]}>📈 {t('merit.title')}</Text>
+          <Text style={[styles.cdTitle, { color: theme.colors.blue }]}>[MÉRITO] {t('merit.title')}</Text>
           <Text style={styles.cdSub}>{t('merit.sub')}</Text>
           <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
             {offers.map((id) => {
               const c = clubs[id];
-              if (!c) return null;
-              const lg = leagues[c.leagueId];
+              // OFERTA DO ESTRANGEIRO: o clube ainda NÃO existe no estado — o
+              // país dele só é materializado se o treinador aceitar. Sem este
+              // ramo, `clubs[id]` vinha vazio e a proposta era desenhada como
+              // nada: a maior oferta da carreira, invisível.
+              const wt = c ? undefined : worldTeamOfClubId(id);
+              if (!c && !wt) return null;
+              const nome = c?.name ?? wt!.name;
+              const escudo = c ?? {
+                id, name: wt!.name, shortName: wt!.sigla, primaryColor: wt!.color,
+                secondaryColor: '#ffffff',
+              } as Club;
+              const meta = c
+                ? t('merit.clubMeta', { league: leagues[c.leagueId]?.name ?? '', rep: c.reputation })
+                : `${wt!.league} · ${t('offer.abroad', { country: wt!.country })}`;
               return (
                 <View key={id} style={styles.cdRow}>
-                  <CrestCircle club={c} size={34} />
+                  <CrestCircle club={escudo} size={34} />
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.cdName} numberOfLines={1}>{c.name}</Text>
-                    <Text style={styles.sub}>{t('merit.clubMeta', { league: lg?.name ?? '', rep: c.reputation })}</Text>
+                    <Text style={styles.cdName} numberOfLines={1}>{nome}</Text>
+                    <Text style={styles.sub}>{meta}</Text>
+                    {wt ? <Text style={styles.meritWarn}>{t('offer.abroadWarn')}</Text> : null}
                   </View>
                   <MiniBtn label={t('merit.accept')} bg={theme.colors.green} onPress={() => onAccept(id)} />
                 </View>
@@ -1162,7 +1245,7 @@ function RetiringModal({ players, onClose }: { players: Player[]; onClose: () =>
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.cdBackdrop}>
         <View style={[styles.cdCard, { borderColor: theme.colors.blue }]}>
-          <Text style={[styles.cdTitle, { color: theme.colors.blue }]}>👋 {t('retire.soon.title')}</Text>
+          <Text style={[styles.cdTitle, { color: theme.colors.blue }]}>[DESPEDIDA] {t('retire.soon.title')}</Text>
           <Text style={styles.cdSub}>{t('retire.soon.sub')}</Text>
           <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
             {players.map((p) => (
@@ -1191,12 +1274,12 @@ function RetiredModal({ names, onClose }: { names: string[]; onClose: () => void
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.cdBackdrop}>
         <View style={styles.cdCard}>
-          <Text style={styles.cdTitle}>🎖️ {t('retire.done.title')}</Text>
+          <Text style={styles.cdTitle}>[HOMENAGEM] {t('retire.done.title')}</Text>
           <Text style={styles.cdSub}>{t('retire.done.sub')}</Text>
           <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
             {names.map((n, i) => (
               <View key={i} style={styles.cdRow}>
-                <Text style={styles.cdName} numberOfLines={1}>🎖️  {n}</Text>
+                <Text style={styles.cdName} numberOfLines={1}>•  {n}</Text>
               </View>
             ))}
           </ScrollView>
@@ -1212,6 +1295,9 @@ function RetiredModal({ names, onClose }: { names: string[]; onClose: () => void
 const styles = StyleSheet.create({
   body: { color: theme.colors.text, fontSize: theme.font.body },
   dlgBtn: { marginTop: theme.spacing(1.25), paddingVertical: theme.spacing(1.2), borderRadius: theme.radius.sm, alignItems: 'center' },
+  // Aviso da oferta do estrangeiro: pequeno mas em destaque — mudar de país
+  // não pode ser aceite por engano.
+  meritWarn: { color: theme.colors.accent, fontSize: 11, marginTop: 3, lineHeight: 15 },
   meritStay: { marginTop: theme.spacing(1), paddingVertical: theme.spacing(1), alignItems: 'center' },
   meritStayText: { color: theme.colors.textDim, fontSize: theme.font.body, fontWeight: '700' },
   dlgBtnText: { color: '#fff', fontSize: theme.font.body, fontWeight: '800' },
@@ -1267,22 +1353,62 @@ const styles = StyleSheet.create({
   pressBox: {
     backgroundColor: theme.colors.bg, borderRadius: theme.radius.sm,
     borderLeftWidth: 3, borderLeftColor: theme.colors.accent,
-    padding: theme.spacing(1), marginBottom: theme.spacing(0.75), gap: theme.spacing(0.75),
+    padding: theme.spacing(1.2), marginBottom: theme.spacing(0.75), gap: theme.spacing(0.75),
+  },
+  pressHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 4,
+  },
+  pressOutlet: {
+    color: theme.colors.textDim, fontSize: 10, fontWeight: '700',
+    backgroundColor: theme.colors.surfaceAlt, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
   },
   pressTitle: {
     color: theme.colors.accent, fontSize: theme.font.small, fontWeight: '900',
     letterSpacing: 0.5, textTransform: 'uppercase',
   },
-  pressQuestion: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '700' },
+  pressQuestion: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '700', fontStyle: 'italic', marginVertical: 2 },
   pressAnswer: {
     backgroundColor: theme.colors.surfaceAlt, borderRadius: theme.radius.sm,
     paddingVertical: theme.spacing(0.85), paddingHorizontal: theme.spacing(1), gap: 2,
+    borderWidth: 1, borderColor: theme.colors.border,
   },
+  pressToneRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   pressTone: {
-    color: theme.colors.blue, fontSize: 10, fontWeight: '900',
+    fontSize: 10, fontWeight: '900',
     letterSpacing: 0.5, textTransform: 'uppercase',
   },
+  pressClaimBadge: {
+    color: theme.colors.yellow, fontSize: 9, fontWeight: '800',
+    backgroundColor: 'rgba(255,180,0,0.12)', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 3,
+  },
   pressLine: { color: theme.colors.text, fontSize: theme.font.small },
+
+  // ---- Gabinete do Treinador (Audiências) ----
+  audienceBox: {
+    backgroundColor: theme.colors.bg, borderRadius: theme.radius.sm,
+    borderLeftWidth: 3, borderLeftColor: theme.colors.yellow,
+    padding: theme.spacing(1.2), marginBottom: theme.spacing(0.75), gap: theme.spacing(0.75),
+  },
+  audienceHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 4,
+  },
+  audienceTitle: {
+    color: theme.colors.yellow, fontSize: 10, fontWeight: '900',
+    letterSpacing: 0.5, textTransform: 'uppercase',
+  },
+  audiencePlayerName: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '800' },
+  audienceMorale: {
+    color: theme.colors.textDim, fontSize: 10, fontWeight: '800',
+    backgroundColor: theme.colors.surfaceAlt, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
+  },
+  audienceSpeech: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '700', fontStyle: 'italic', marginVertical: 2 },
+  audienceOptions: { gap: 6, marginTop: 2 },
+  audienceOption: {
+    backgroundColor: theme.colors.surfaceAlt, borderRadius: theme.radius.sm,
+    paddingVertical: theme.spacing(0.85), paddingHorizontal: theme.spacing(1),
+    borderWidth: 1, borderColor: theme.colors.border,
+  },
+  audienceOptionKey: { fontSize: theme.font.small, fontWeight: '800' },
 
   // ---- Barra dos adeptos ----
   fansRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1) },

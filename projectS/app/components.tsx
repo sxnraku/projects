@@ -236,7 +236,7 @@ export function TopBar() {
         </View>
         <Pressable onPress={() => router.push('/club' as never)} hitSlop={8}
           style={[styles.gearBtn, { borderColor: ink === '#FFFFFF' ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.25)' }]}>
-          <Text style={[styles.gearText, { color: ink }]}>⚙</Text>
+          <Text style={[styles.gearText, { color: ink }]}>CFG</Text>
         </Pressable>
       </View>
 
@@ -248,9 +248,9 @@ export function TopBar() {
             : t('top.seasonNoRound', { y: careerYear, season: seasonLabel })}
         </Text>
         <View style={styles.resPills}>
-          <ResPill icon="⚡" text={`${avgFit}%`} color={fitnessColor(avgFit)} />
-          <ResPill icon="✚" text={String(injured)} color={injured > 0 ? theme.colors.red : theme.colors.textDim} />
-          <ResPill icon="€" text={money(balance)} color={balance >= 0 ? theme.colors.green : theme.colors.red} />
+          <ResPill icon="FIT" text={`${avgFit}%`} color={fitnessColor(avgFit)} />
+          <ResPill icon="DM" text={String(injured)} color={injured > 0 ? theme.colors.red : theme.colors.textDim} />
+          <ResPill icon="EUR" text={money(balance)} color={balance >= 0 ? theme.colors.green : theme.colors.red} />
         </View>
       </Spot>
     </SafeAreaView>
@@ -260,7 +260,9 @@ export function TopBar() {
 function ResPill({ icon, text, color }: { icon: string; text: string; color: string }) {
   return (
     <View style={styles.resPill}>
-      <Text style={[styles.resPillIcon, { color }]}>{icon}</Text>
+      <View style={[styles.resPillBadge, { backgroundColor: `${color}22` }]}>
+        <Text style={[styles.resPillIcon, { color }]}>{icon}</Text>
+      </View>
       <Text style={[styles.resPillText, { color }]}>{text}</Text>
     </View>
   );
@@ -456,7 +458,7 @@ export function Button({
       {loading ? (
         <ActivityIndicator color={theme.colors.text} />
       ) : (
-        <Text style={[styles.btnText, variant === 'ghost' && styles.btnGhostText]}>{label}</Text>
+        <Text style={[styles.btnText, variant === 'danger' && { color: '#FFFFFF' }, variant === 'ghost' && styles.btnGhostText]}>{label}</Text>
       )}
     </Pressable>
   );
@@ -550,24 +552,28 @@ const styles = StyleSheet.create({
   },
   clubBandName: { fontSize: theme.font.h2, fontWeight: '800' },
   gearBtn: {
-    width: 34, height: 34, borderRadius: 8, borderWidth: 1,
+    width: 36, height: 28, borderRadius: 6, borderWidth: 1,
     alignItems: 'center', justifyContent: 'center',
   },
-  gearText: { fontSize: 18 },
+  gearText: { fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },
 
   resBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: '#171B21', paddingHorizontal: theme.spacing(1.5), paddingVertical: theme.spacing(0.75),
-    borderBottomWidth: 1, borderBottomColor: theme.colors.border,
+    backgroundColor: '#080B10', paddingHorizontal: theme.spacing(1.5), paddingVertical: theme.spacing(0.75),
+    borderBottomWidth: 1, borderBottomColor: 'rgba(255, 255, 255, 0.08)',
   },
   resSeason: { color: theme.colors.text, fontSize: theme.font.small, fontWeight: '700', flexShrink: 1 },
   resPills: { flexDirection: 'row', gap: theme.spacing(0.75) },
   resPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 3,
-    backgroundColor: theme.colors.surface, borderRadius: 5,
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)', borderRadius: 8,
+    borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.08)',
     paddingHorizontal: theme.spacing(0.75), paddingVertical: 3,
   },
-  resPillIcon: { fontSize: 11, fontWeight: '800' },
+  resPillBadge: {
+    paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4,
+  },
+  resPillIcon: { fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
   resPillText: { fontSize: theme.font.small, fontWeight: '800', fontVariant: ['tabular-nums'] },
 
   crestCircle: { alignItems: 'center', justifyContent: 'center' },
@@ -594,14 +600,15 @@ const styles = StyleSheet.create({
   splitVal: { color: theme.colors.text, fontSize: theme.font.small, fontWeight: '700' },
 
   dashCard: {
-    backgroundColor: theme.colors.surface, borderRadius: theme.radius.md,
-    borderWidth: 1, borderColor: theme.colors.border, marginBottom: theme.spacing(1.25),
+    backgroundColor: 'rgba(18, 24, 38, 0.85)', borderRadius: theme.radius.md,
+    borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.08)', marginBottom: theme.spacing(1.25),
     overflow: 'hidden',
   },
   dashHead: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: theme.spacing(1.5), paddingVertical: theme.spacing(1),
-    backgroundColor: theme.colors.surfaceAlt,
+    backgroundColor: 'rgba(20, 28, 42, 0.9)',
+    borderBottomWidth: 1, borderBottomColor: 'rgba(255, 255, 255, 0.06)',
   },
   dashTitle: {
     color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '800',
@@ -612,8 +619,9 @@ const styles = StyleSheet.create({
 
   triplet: { flexDirection: 'row', gap: theme.spacing(0.75) },
   tripletCell: {
-    flex: 1, alignItems: 'center', backgroundColor: theme.colors.bg,
+    flex: 1, alignItems: 'center', backgroundColor: 'rgba(0, 0, 0, 0.25)',
     borderRadius: theme.radius.sm, paddingVertical: theme.spacing(0.75),
+    borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.04)',
   },
   tripletLabel: { color: theme.colors.textDim, fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
   tripletVal: { color: theme.colors.text, fontSize: theme.font.h2, fontWeight: '800', fontVariant: ['tabular-nums'] },
@@ -628,8 +636,8 @@ const styles = StyleSheet.create({
   },
 
   card: {
-    backgroundColor: theme.colors.surface, borderRadius: theme.radius.md,
-    borderWidth: 1, borderColor: theme.colors.border, padding: theme.spacing(1.5),
+    backgroundColor: 'rgba(18, 24, 38, 0.85)', borderRadius: theme.radius.md,
+    borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.08)', padding: theme.spacing(1.5),
   },
 
   h1: { color: theme.colors.text, fontSize: theme.font.h1, fontWeight: '700' },
@@ -647,20 +655,26 @@ const styles = StyleSheet.create({
 
   statBarRow: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1), paddingVertical: 3 },
   statBarLabel: { color: theme.colors.textDim, fontSize: theme.font.small, width: 88 },
-  statBarTrack: { flex: 1, height: 8, backgroundColor: theme.colors.bg, borderRadius: 2, overflow: 'hidden' },
-  statBarFill: { height: '100%', backgroundColor: theme.colors.blue, borderRadius: 2 },
+  statBarTrack: { flex: 1, height: 8, backgroundColor: 'rgba(0, 0, 0, 0.3)', borderRadius: 4, overflow: 'hidden' },
+  statBarFill: { height: '100%', backgroundColor: theme.colors.blue, borderRadius: 4 },
   statBarVal: { color: theme.colors.text, fontSize: theme.font.small, fontWeight: '700', width: 22, textAlign: 'right', fontVariant: ['tabular-nums'] },
 
   btn: {
-    height: 42, borderRadius: theme.radius.sm, alignItems: 'center', justifyContent: 'center',
+    height: 44, borderRadius: theme.radius.sm, alignItems: 'center', justifyContent: 'center',
     paddingHorizontal: theme.spacing(2),
   },
-  btnPrimary: { backgroundColor: theme.colors.green },
+  btnPrimary: {
+    backgroundColor: theme.colors.green,
+    shadowColor: theme.colors.green,
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 3,
+  },
   btnDanger: { backgroundColor: theme.colors.red },
   btnGhost: { backgroundColor: 'transparent', borderWidth: 1, borderColor: theme.colors.borderLight },
   btnDisabled: { opacity: 0.45 },
   btnPressed: { opacity: 0.85 },
-  btnText: { color: '#fff', fontSize: theme.font.h3, fontWeight: '700' },
+  btnText: { color: '#052316', fontSize: theme.font.h3, fontWeight: '800', letterSpacing: 0.5 },
   btnGhostText: { color: theme.colors.text },
 
   stepper: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1) },

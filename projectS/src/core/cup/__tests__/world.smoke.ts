@@ -3,6 +3,7 @@
  * Corre com: npm run smoke:world
  */
 import { createNewGame, advanceWeek, nextRound } from '../../game';
+import { smallerFirst } from '../cup';
 import { simulateMatch } from '../../engine';
 import { makeTeam } from '../../engine/__tests__/fixtures';
 import { facilityUpgradeCost, upgradeFacility } from '../../economy';
@@ -67,7 +68,10 @@ while (nextRound(state, state.clubs[state.meta.managedClubId]!.leagueId) !== nul
   advanceWeek(state, TrainingFocus.TECHNICAL);
 }
 assert(state.cup.winnerClubId !== null, `Taça tem vencedor no fim da época: ${state.clubs[state.cup.winnerClubId!]?.name}`);
-assert(state.cup.fixtures.length === 15, `${state.cup.fixtures.length} jogos de Taça disputados (16 clubes → 15)`);
+// 16 clubes → 15 eliminatórias. As MEIAS-FINAIS (2 eliminatórias) jogam-se a
+// duas mãos, por isso somam 2 jogos extra: 15 + 2 = 17.
+assert(state.cup.fixtures.length === 17,
+  `${state.cup.fixtures.length} jogos de Taça (16 clubes → 15 eliminatórias + 2 segundas mãos nas meias)`);
 assert(state.news.length > 0, `${state.news.length} notícias geradas durante a época`);
 assert(state.news.some((n) => n.type === 'MATCH'), 'há notícias de resultados');
 assert(state.news.some((n) => n.type === 'CUP'), 'há notícias da Taça');
@@ -87,6 +91,65 @@ assert(fin.balance === 50_000_000 - cost, 'custo saiu do saldo');
 
 fin.balance = 0;
 assert(!upgradeFacility(state, 'training').ok, 'sem saldo, upgrade falha');
+
+// ---------------------------------------------------------------------------
+// TAÇA — a magia (o pequeno recebe) e as meias-finais a duas mãos.
+// ---------------------------------------------------------------------------
+console.log('\nTaça — o pequeno recebe em casa:');
+const s2 = createNewGame({ managerName: 'R', useBase: true, seed: 777 });
+
+// `smallerFirst` é a regra pura: escalão mais baixo primeiro, empate pela reputação.
+const porTier = Object.values(s2.clubs).reduce<Record<number, string[]>>((acc, c) => {
+  const t = s2.leagues[c.leagueId]?.tier ?? 1;
+  (acc[t] ??= []).push(c.id);
+  return acc;
+}, {});
+const tiers = Object.keys(porTier).map(Number).sort((a, b) => a - b);
+if (tiers.length >= 2) {
+  const grande = porTier[tiers[0]!]![0]!;
+  const pequeno = porTier[tiers[tiers.length - 1]!]![0]!;
+  assert(smallerFirst(s2, grande, pequeno)[0] === pequeno,
+    'o clube de divisão mais baixa fica em casa (ordem A)');
+  assert(smallerFirst(s2, pequeno, grande)[0] === pequeno,
+    'e continua em casa com a ordem trocada (não depende do sorteio)');
+}
+
+// Mesmo escalão → o de menor reputação recebe.
+const mesmoTier = porTier[tiers[0]!]!;
+if (mesmoTier.length >= 2) {
+  const [x, y] = [mesmoTier[0]!, mesmoTier[1]!];
+  const [casa] = smallerFirst(s2, x, y);
+  const repCasa = s2.clubs[casa]!.reputation;
+  const outro = casa === x ? y : x;
+  assert(repCasa <= s2.clubs[outro]!.reputation,
+    'no mesmo escalão, recebe quem tem menos reputação');
+}
+
+console.log('\nTaça — meias-finais a duas mãos:');
+const s3 = createNewGame({ managerName: 'R', useBase: true, seed: 313 });
+let guardCup = 0;
+while (!s3.cup.winnerClubId && guardCup++ < 60) advanceWeek(s3);
+assert(!!s3.cup.winnerClubId, 'a Taça chegou ao fim e tem vencedor');
+
+// A ronda das meias (4 em prova) tem de ter gerado 4 jogos: 2 eliminatórias × 2 mãos.
+const porRonda = s3.cup.fixtures.reduce<Record<number, number>>((acc, f) => {
+  acc[f.round] = (acc[f.round] ?? 0) + 1;
+  return acc;
+}, {});
+const rondas = Object.keys(porRonda).map(Number).sort((a, b) => a - b);
+const meias = rondas[rondas.length - 2];
+const final = rondas[rondas.length - 1];
+assert(meias !== undefined && porRonda[meias] === 4,
+  `meias-finais com 4 jogos (2 eliminatórias × 2 mãos) — teve ${meias !== undefined ? porRonda[meias] : '?'}`);
+assert(final !== undefined && porRonda[final] === 1,
+  `a final é a UM jogo — teve ${final !== undefined ? porRonda[final] : '?'}`);
+
+// As duas mãos são com os campos trocados.
+const jogosMeias = s3.cup.fixtures.filter((f) => f.round === meias);
+const ida = jogosMeias[0]!;
+const volta = jogosMeias.find((f) => f.id === `${ida.id}_2`);
+assert(!!volta && volta.homeClubId === ida.awayClubId && volta.awayClubId === ida.homeClubId,
+  'a segunda mão joga-se com os campos trocados');
 
 console.log(`\n${failures === 0 ? '✅ TODOS OS TESTES PASSARAM' : `❌ ${failures} FALHA(S)`}`);
 process.exit(failures === 0 ? 0 : 1);

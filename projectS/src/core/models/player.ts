@@ -37,6 +37,19 @@ export interface PlayerCondition {
   fitness: number; // condição física / frescura 0..100 (100 = descansado)
   status: PlayerStatus;
   injuryDaysRemaining: number; // 0 se apto
+  /**
+   * Gravidade da lesão ATUAL (`injury.sev.*`). Limpa-se quando ele volta.
+   * Opcional: saves anteriores não a têm e leem-se na mesma.
+   */
+  injurySeverity?: import('../game/injuries').InjurySeverity;
+  /**
+   * Jornadas de FRAGILIDADE depois de voltar de uma lesão a sério.
+   *
+   * Enquanto for > 0, pô-lo a jogar arrisca uma recaída — e a recaída é sempre
+   * um escalão pior. Só descansar desconta. É o que transforma "voltar cedo
+   * demais" numa decisão em vez de um sorteio.
+   */
+  fragileRounds?: number;
   // Totalizadores da ÉPOCA (reiniciam no rollover). Opcionais: saves antigos = 0.
   seasonGoals?: number;
   seasonAssists?: number;
@@ -119,6 +132,10 @@ export const PromiseKind = {
   PLAYING_TIME: 'PLAYING_TIME',
   /** Um reforço à altura dele antes do prazo. */
   SIGNING: 'SIGNING',
+  /** Conquista de título ou subida de divisão na época. */
+  PROMOTION_OR_TITLE: 'PROMOTION_OR_TITLE',
+  /** Renovação de contrato prometida para o fecho da época. */
+  CONTRACT_EXTENSION: 'CONTRACT_EXTENSION',
 } as const;
 export type PromiseKind = (typeof PromiseKind)[keyof typeof PromiseKind];
 

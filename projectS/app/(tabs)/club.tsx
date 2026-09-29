@@ -12,14 +12,12 @@ import {
   cashRunway, cashWarning, FacilityType, facilityUpgradeCost,
   RUNWAY_WARNING_WEEKS, TRANSFER_SHARE, WAGE_RESERVE_WEEKS,
 } from '../../src/core/economy';
-import { showRewarded } from '../../src/native/ads';
 import { money } from '../../src/ui/format';
 import { theme } from '../../src/ui/theme';
 import { Face } from '../../src/ui/Face';
 import { useT, useTMsg } from '../../src/ui/i18n';
 import { LANGS, LANG_LABELS } from '../../src/core/i18n';
 import { OBJECTIVE_KEYS } from '../../src/core/career';
-import { CloudBackup } from '../../src/ui/CloudBackup';
 import { BalanceSplit, Bar, Body, contrastOn, CrestCircle, darken, RowKV, Screen, Section, Stars } from '../components';
 import { reputationStars } from '../../src/ui/theme';
 import { Toast } from '../../src/ui/Toast';
@@ -127,6 +125,9 @@ export default function ClubScreen() {
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const [adBusy, setAdBusy] = useState(false);
+  const claimAdSlot = useMonetizationStore((s) => s.claimAdSlot);
+  const adSlotAvailable = useMonetizationStore((s) => s.adSlotAvailable);
+  const premiumOn = useMonetizationStore((s) => s.m.premium);
   /** Lugar cuja lista de candidatos está aberta (null = todas fechadas). */
   const [openRole, setOpenRole] = useState<StaffRole | null>(null);
 
@@ -233,7 +234,7 @@ export default function ClubScreen() {
         <Spot id={TutorialTargets.clubFacilities}><Section title={t('club.section.facilities')} /></Spot>
         {freeUpgradePending() ? (
           <View style={styles.freeBanner}>
-            <Text style={styles.freeBannerText}>🎁 {t('facility.freeAvailable')}</Text>
+            <Text style={styles.freeBannerText}>[BÓNUS] {t(premiumOn ? 'facility.freeAvailablePremium' : 'facility.freeAvailable')}</Text>
           </View>
         ) : null}
         {FACILITY_TYPES.map((type) => {
@@ -242,7 +243,9 @@ export default function ClubScreen() {
           const maxed = level >= FACILITY_MAX_LEVEL;
           const cost = maxed ? 0 : facilityUpgradeCost(type, level, tier);
           const affordable = !maxed && fin.balance >= cost;
-          const canFree = !maxed && freeUpgradePending();
+          // Com Premium a melhoria grátis também gasta o bónus do dia: sem o
+          // anúncio a travar, era um nível de instalação de graça por jornada.
+          const canFree = !maxed && freeUpgradePending() && adSlotAvailable();
           return (
             <View key={type} style={styles.facCard}>
               <View style={{ flex: 1 }}>
@@ -262,9 +265,9 @@ export default function ClubScreen() {
                     onPress={async () => {
                       if (adBusy) return;
                       setAdBusy(true);
-                      const watched = await showRewarded();
+                      const watched = await claimAdSlot();
                       setAdBusy(false);
-                      if (!watched) { setFeedback({ kind: 'error', text: t('facility.freeFailed') }); return; }
+                      if (!watched) { setFeedback({ kind: 'error', text: t(premiumOn ? 'bonus.premiumSpent' : 'facility.freeFailed') }); return; }
                       const r = claimFreeUpgrade(type);
                       setFeedback(r.ok
                         ? { kind: 'ok', text: t('club.upgraded', { name: t(`facility.${type}`), level: r.newLevel ?? level + 1, cost: money(0) }) }
@@ -411,9 +414,14 @@ export default function ClubScreen() {
           <Text style={styles.boardHint}>{t('club.board.requestHint')}</Text>
         </View>
 
-        {/* CÓPIA NA NUVEM (Google Drive) */}
-        <Section title={t('cloud.section')} />
-        <CloudBackup />
+        {/* CÓPIA NA NUVEM — RETIRADA por agora.
+            O login Google devolvia "Erro 400: invalid_request" e não havia como
+            o jogador contornar isso: carregava, abria o browser, levava com um
+            ecrã de erro da Google e voltava sem save na nuvem. Um botão que só
+            sabe falhar é pior do que não existir.
+            O código fica todo — `src/ui/CloudBackup.tsx`, `native/cloudSave.ts`,
+            `native/cloudConfig.ts` — para voltar assim que o consentimento OAuth
+            estiver resolvido, ou quando passar para Play Games Saved Games. */}
 
         {/* TROFÉUS */}
         <Section title={t('club.section.trophies')} />
@@ -422,7 +430,7 @@ export default function ClubScreen() {
         ) : (
           career.trophies.map((tr, i) => (
             <View key={i} style={styles.trophyRow}>
-              <Text style={styles.trophyIcon}>🏆</Text>
+              <View style={styles.trophyTag}><Text style={styles.trophyTagText}>TAÇA</Text></View>
               <Text style={styles.trophyText}>{tMsg(tr)}</Text>
               <Text style={styles.trophySeason}>{tr.season}</Text>
             </View>
@@ -446,7 +454,7 @@ export default function ClubScreen() {
                 <Text style={[styles.hc, { width: 44 }]}>{s.season}</Text>
                 <Text style={[styles.hc, { flex: 1 }]} numberOfLines={1}>
                   {s.clubName} · {s.leagueName}
-                  {s.champion ? <Text style={{ color: theme.colors.yellow }}> 🏆</Text> : null}
+                  {s.champion ? <Text style={{ color: theme.colors.yellow, fontWeight: '700' }}> [CAMPEÃO]</Text> : null}
                   {s.promoted && !s.champion ? <Text style={{ color: theme.colors.green }}> ↑</Text> : null}
                   {s.relegated ? <Text style={{ color: theme.colors.red }}> ↓</Text> : null}
                 </Text>
@@ -463,7 +471,7 @@ export default function ClubScreen() {
             primeiro nas Definições porque é o que alguém perdido procura. */}
         <Spot id={TutorialTargets.manual}>
           <Pressable style={styles.helpBtn} onPress={() => router.push('/manual' as never)}>
-            <Text style={styles.helpIcon}>📖</Text>
+            <View style={styles.helpTag}><Text style={styles.helpTagText}>GUIA</Text></View>
             <View style={{ flex: 1 }}>
               <Text style={styles.helpTitle}>{t('manual.title')}</Text>
               <Text style={styles.helpSub}>{t('manual.subtitle')}</Text>
@@ -472,7 +480,7 @@ export default function ClubScreen() {
           </Pressable>
         </Spot>
         <Pressable style={styles.helpBtn} onPress={() => { replayTutorial(); router.push('/(tabs)' as never); }}>
-          <Text style={styles.helpIcon}>🎓</Text>
+          <View style={styles.helpTag}><Text style={styles.helpTagText}>TUT</Text></View>
           <View style={{ flex: 1 }}>
             <Text style={styles.helpTitle}>{t('manual.replayTutorial')}</Text>
             <Text style={styles.helpSub}>{t('manual.replayTutorial.sub')}</Text>
@@ -623,7 +631,11 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.sm, paddingHorizontal: theme.spacing(1.5),
     paddingVertical: theme.spacing(1.25), marginBottom: theme.spacing(0.75),
   },
-  helpIcon: { fontSize: 20 },
+  helpTag: {
+    backgroundColor: 'rgba(0,210,255,0.12)', borderWidth: 1, borderColor: theme.colors.blue,
+    borderRadius: theme.radius.sm, paddingHorizontal: 6, paddingVertical: 2,
+  },
+  helpTagText: { color: theme.colors.blue, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
   helpTitle: { color: theme.colors.text, fontSize: theme.font.body, fontWeight: '800' },
   helpSub: { color: theme.colors.textDim, fontSize: theme.font.small, marginTop: 1 },
   helpChevron: { color: theme.colors.textDim, fontSize: 20, fontWeight: '800' },
@@ -799,7 +811,11 @@ const styles = StyleSheet.create({
     paddingVertical: theme.spacing(0.75),
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border,
   },
-  trophyIcon: { fontSize: 14 },
+  trophyTag: {
+    backgroundColor: 'rgba(255,184,0,0.15)', borderWidth: 1, borderColor: theme.colors.yellow,
+    borderRadius: theme.radius.sm, paddingHorizontal: 6, paddingVertical: 2,
+  },
+  trophyTagText: { color: theme.colors.yellow, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
   trophyText: { color: theme.colors.text, fontSize: theme.font.body, flex: 1 },
   trophySeason: { color: theme.colors.textDim, fontSize: theme.font.body, fontVariant: ['tabular-nums'] },
   histHead: { flexDirection: 'row', gap: 6, paddingVertical: theme.spacing(0.75) },

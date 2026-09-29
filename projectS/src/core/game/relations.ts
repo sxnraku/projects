@@ -188,12 +188,22 @@ function isKept(state: GameState, player: Player, promise: PlayerPromise): boole
     const apps = (player.condition.seasonApps ?? 0) - (promise.baselineApps ?? 0);
     return apps >= PROMISE_APPS_TARGET;
   }
-  // SIGNING: entrou algum reforço com o nível prometido depois da promessa?
-  // O contador `n` é monotónico, por isso a lista poder ser truncada não parte
-  // a comparação (ao contrário de usar índices do array).
-  const since = promise.baselineSignings ?? 0;
-  const required = promise.requiredOverall ?? 0;
-  return (state.career.signings ?? []).some((s) => s.n > since && s.overall >= required);
+  if (promise.kind === 'SIGNING') {
+    // SIGNING: entrou algum reforço com o nível prometido depois da promessa?
+    const since = promise.baselineSignings ?? 0;
+    const required = promise.requiredOverall ?? 0;
+    return (state.career.signings ?? []).some((s) => s.n > since && s.overall >= required);
+  }
+  if (promise.kind === 'CONTRACT_EXTENSION') {
+    return (player.contractUntil ?? 0) > state.meta.season;
+  }
+  if (promise.kind === 'PROMOTION_OR_TITLE') {
+    const club = state.clubs[state.meta.managedClubId];
+    const table = club?.leagueId ? state.standings[club.leagueId] : undefined;
+    const pos = table ? Object.values(table).sort((a, b) => b.points - a.points).findIndex((r) => r.clubId === club?.id) + 1 : 99;
+    return pos <= 2;
+  }
+  return false;
 }
 
 /**
@@ -221,11 +231,11 @@ export function tickPromises(state: GameState): PromiseVerdict[] {
 
     rel.promise = undefined;
     if (kept) {
-      player.condition.morale = clampMorale(player.condition.morale + 8);
-      rel.trust = clampTrust(rel.trust + 14);
+      player.condition.morale = clampMorale(player.condition.morale + 10);
+      rel.trust = clampTrust(rel.trust + 16);
     } else {
-      player.condition.morale = clampMorale(player.condition.morale - 18);
-      rel.trust = clampTrust(rel.trust - 25);
+      player.condition.morale = clampMorale(player.condition.morale - 20);
+      rel.trust = clampTrust(rel.trust - 30);
     }
     out.push({
       playerId: player.id,
@@ -237,5 +247,121 @@ export function tickPromises(state: GameState): PromiseVerdict[] {
   return out;
 }
 
-// O registo dos reforços é feito por `executeTransfer` (economy/transfers.ts),
-// que é o único sítio por onde passa uma contratação. Aqui só se lê.
+/**
+ * Resolve uma audiência interativa no Gabinete do Treinador com 3 opções de diálogo.
+ */
+export function resolveAudienceChoice(
+  state: GameState,
+  itemId: string,
+  choice: 'OPTION_A' | 'OPTION_B' | 'OPTION_C',
+): Msg | null {
+  const item = state.inbox.find((it) => it.kind === 'REQUEST' && it.id === itemId);
+  if (!item || item.kind !== 'REQUEST') return null;
+  const player = state.players[item.playerId];
+  state.inbox = state.inbox.filter((it) => it.id !== itemId);
+  if (!player) return null;
+
+  const rel = relationOf(player);
+  const name = `${player.firstName} ${player.lastName}`;
+  player.condition.requestCooldownUntil = addDays(state.meta.currentDate, 56);
+
+  if (item.request === 'WANTS_MINUTES') {
+    if (choice === 'OPTION_A') {
+      // Prometer titularidade (3 jogos em 5 semanas)
+      rel.promise = {
+        kind: 'PLAYING_TIME',
+        deadline: addDays(state.meta.currentDate, PROMISE_DAYS),
+        baselineApps: player.condition.seasonApps ?? 0,
+      };
+      player.condition.morale = clampMorale(player.condition.morale + 12);
+      rel.trust = clampTrust(rel.trust + 10);
+      return { key: 'aud.minutes.promise', params: { name } };
+    }
+    if (choice === 'OPTION_B') {
+      // Pedir paciência e rotação
+      if (rel.trust >= 0) {
+        player.condition.morale = clampMorale(player.condition.morale + 4);
+        rel.trust = clampTrust(rel.trust + 5);
+        return { key: 'aud.minutes.calm.ok', params: { name } };
+      }
+      player.condition.morale = clampMorale(player.condition.morale - 6);
+      rel.trust = clampTrust(rel.trust - 8);
+      return { key: 'aud.minutes.calm.bad', params: { name } };
+    }
+    // Rejeitar / Autoridade
+    player.condition.morale = clampMorale(player.condition.morale - 15);
+    rel.trust = clampTrust(rel.trust - 18);
+    if (player.condition.morale < 30) player.transferListed = true;
+    return { key: 'aud.minutes.reject', params: { name } };
+  }
+
+  if (item.request === 'WAGE_RISE') {
+    if (choice === 'OPTION_A') {
+      // Aumento salarial imediato
+      const newWage = Math.max(Math.round((player.wage * 1.25) / 100) * 100, Math.round(player.wage * 1.2));
+      player.wage = newWage;
+      player.condition.morale = clampMorale(80);
+      rel.trust = clampTrust(rel.trust + 15);
+      return { key: 'aud.wage.accepted', params: { name, wage: newWage.toLocaleString('pt-PT') } };
+    }
+    if (choice === 'OPTION_B') {
+      // Promessa de renovação no fecho da época
+      rel.promise = {
+        kind: 'CONTRACT_EXTENSION',
+        deadline: addDays(state.meta.currentDate, 70),
+      };
+      player.condition.morale = clampMorale(player.condition.morale + 8);
+      rel.trust = clampTrust(rel.trust + 8);
+      return { key: 'aud.wage.promise', params: { name } };
+    }
+    // Recusa financeira
+    player.condition.morale = clampMorale(player.condition.morale - 10);
+    rel.trust = clampTrust(rel.trust - 12);
+    return { key: 'aud.wage.reject', params: { name } };
+  }
+
+  if (item.request === 'WANTS_BIG_MOVE') {
+    if (choice === 'OPTION_A') {
+      // Pacto de 1 época para lutar por objetivos
+      rel.promise = {
+        kind: 'PROMOTION_OR_TITLE',
+        deadline: addDays(state.meta.currentDate, 120),
+      };
+      player.condition.morale = clampMorale(player.condition.morale + 10);
+      rel.trust = clampTrust(rel.trust + 12);
+      return { key: 'aud.bigMove.pact', params: { name } };
+    }
+    if (choice === 'OPTION_B') {
+      // Acordo de mercado amigável
+      player.transferListed = true;
+      player.condition.morale = clampMorale(60);
+      rel.trust = clampTrust(rel.trust + 6);
+      return { key: 'aud.bigMove.list', params: { name } };
+    }
+    // Porta trancada
+    player.condition.morale = clampMorale(player.condition.morale - 18);
+    rel.trust = clampTrust(rel.trust - 20);
+    return { key: 'aud.bigMove.lock', params: { name } };
+  }
+
+  // WANTS_LEAVE
+  if (choice === 'OPTION_A') {
+    player.transferListed = true;
+    player.condition.morale = clampMorale(55);
+    rel.trust = clampTrust(rel.trust + 5);
+    return { key: 'req.leaveAccepted', params: { name } };
+  }
+  if (choice === 'OPTION_B') {
+    if (rel.trust >= 20) {
+      player.transferListed = false;
+      player.condition.morale = clampMorale(player.condition.morale + 6);
+      rel.trust = clampTrust(rel.trust + 8);
+      return { key: 'aud.leave.reconsider.ok', params: { name } };
+    }
+    player.condition.morale = clampMorale(player.condition.morale - 8);
+    return { key: 'aud.leave.reconsider.bad', params: { name } };
+  }
+  player.condition.morale = clampMorale(player.condition.morale - 14);
+  rel.trust = clampTrust(rel.trust - 18);
+  return { key: 'req.leaveRefused', params: { name } };
+}
