@@ -17,6 +17,7 @@ import {
   REWARDED_DAILY_CAP,
   SPONSOR_BONUS_AMOUNT,
 } from '../index';
+import { CASH_PACKS, cashPackBySku } from '../catalog';
 import { useMonetizationStore } from '../../state/monetizationStore';
 import { useGameStore } from '../../state/gameStore';
 
@@ -150,6 +151,33 @@ assert(!(await useMonetizationStore.getState().claimAdSlot()),
 const g = useGameStore.getState().state!;
 useGameStore.getState().loadState({ ...g, meta: { ...g.meta, currentDate: '2030-01-01' } });
 assert(useMonetizationStore.getState().adSlotAvailable(), 'premium: novo dia de jogo repõe o bónus');
+
+console.log('\nLoja: catálogo, VIP e pacotes de dinheiro:');
+assert(new Set(CASH_PACKS.map((p) => p.sku)).size === CASH_PACKS.length, 'SKUs dos pacotes são únicos');
+assert(CASH_PACKS.every((p) => p.amount > 0 && /^[a-z][a-z0-9_]*$/.test(p.sku)), 'pacotes: valor > 0 e ID válido na Play Console');
+assert(CASH_PACKS.every((p, i) => i === 0 || p.amount > CASH_PACKS[i - 1].amount), 'pacotes por ordem crescente de valor');
+assert(cashPackBySku('cash_medium')?.amount === 4_000_000, 'cashPackBySku encontra o pacote médio');
+assert(cashPackBySku('nao_existe') === undefined, 'cashPackBySku ignora SKUs desconhecidos');
+
+useMonetizationStore.setState({ m: initialMonetization() });
+useMonetizationStore.getState().setVip(true);
+assert(useMonetizationStore.getState().m.premium, 'VIP dispensa anúncios (premium efetivo)');
+useMonetizationStore.getState().setVip(false);
+assert(!useMonetizationStore.getState().m.premium, 'VIP expirado volta a ter anúncios');
+useMonetizationStore.getState().setPremium(true);
+useMonetizationStore.getState().setVip(true);
+useMonetizationStore.getState().setVip(false);
+assert(useMonetizationStore.getState().m.premium, 'VIP expirado não tira o Premium comprado');
+useMonetizationStore.getState().setPremium(false);
+assert(!useMonetizationStore.getState().m.premium, 'sem Premium nem VIP → anúncios');
+
+const cashBefore = useGameStore.getState().state!.finances[useGameStore.getState().state!.meta.managedClubId].balance;
+useGameStore.getState().creditCash(CASH_PACKS[0].amount);
+const cashS = useGameStore.getState().state!;
+assert(cashS.finances[cashS.meta.managedClubId].balance === cashBefore + CASH_PACKS[0].amount, 'creditCash soma o pacote à caixa');
+useGameStore.getState().creditCash(-5);
+useGameStore.getState().creditCash(0);
+assert(useGameStore.getState().state!.finances[cashS.meta.managedClubId].balance === cashBefore + CASH_PACKS[0].amount, 'creditCash ignora valores não positivos');
 
 console.log(`\n${failures === 0 ? '✅ TODOS OS TESTES PASSARAM' : `❌ ${failures} FALHA(S)`}`);
 process.exit(failures === 0 ? 0 : 1);

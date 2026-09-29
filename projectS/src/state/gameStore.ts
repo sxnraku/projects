@@ -230,7 +230,8 @@ export interface GameStore {
   acceptMerit: (clubId: string) => boolean;
   /** Recusa as ofertas por mérito (mantém o clube). */
   declineMerit: () => void;
-  claimDaily: () => number; // devolve o valor creditado (0 se indisponível)
+  claimDaily: (multiplier?: number) => number; // devolve o valor creditado (0 se indisponível)
+  creditCash: (amount: number) => void; // crédito direto na caixa (compras na loja)
   dailyAvailable: () => boolean;
   requestBudget: () => BudgetRequestResult; // pedir dinheiro à direção (1×/época)
   budgetRequestUsed: () => boolean; // já foi pedido esta época?
@@ -678,7 +679,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return dailyBonusAvailable(state.career, todayISO());
   },
 
-  claimDaily: () => {
+  creditCash: (amount) => {
+    const { state } = get();
+    if (!state || !(amount > 0)) return;
+    const fin = state.finances[state.meta.managedClubId];
+    if (fin) moveMoney(fin, amount);
+    set({ state: bump(state) });
+  },
+
+  claimDaily: (multiplier = 1) => {
     const { state } = get();
     if (!state) return 0;
     const raw = claimDailyBonus(state.career, todayISO());
@@ -687,7 +696,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     // subida de divisão — a progressão passa a valer.
     const club = state.clubs[state.meta.managedClubId];
     const tier = club ? state.leagues[club.leagueId]?.tier ?? 1 : 1;
-    const amount = Math.round(raw * Math.pow(0.5, tier - 1) / 10_000) * 10_000;
+    const amount = Math.round(raw * multiplier * Math.pow(0.5, tier - 1) / 10_000) * 10_000;
     if (amount > 0) {
       const fin = state.finances[state.meta.managedClubId];
       if (fin) moveMoney(fin, amount);

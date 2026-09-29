@@ -5,6 +5,7 @@ import { useGameStore } from '../../src/state/gameStore';
 import { Spot } from '../../src/ui/tutorial/Spot';
 import { TutorialTargets } from '../../src/ui/tutorial/registry';
 import { useMonetizationStore } from '../../src/state/monetizationStore';
+import { VIP_DAILY_MULTIPLIER } from '../../src/monetization/catalog';
 import { AdReward } from '../../src/monetization';
 import { OBJECTIVE_KEYS, dailyBonusAmount } from '../../src/core/career';
 import { TrainingFocus } from '../../src/core/training';
@@ -856,7 +857,7 @@ export default function Dashboard() {
               <DashCard title={t('card.bonus')}>
                 {dailyAvailable() ? (
                   <Pressable style={styles.bonusRow} onPress={() => {
-                    const v = claimDaily();
+                    const v = claimDaily(useMonetizationStore.getState().m.vip ? VIP_DAILY_MULTIPLIER : 1);
                     if (v > 0) setFeedback({ kind: 'ok', text: t('bonus.dailyToast', { v: money(v), streak: state.career.loginStreak }) });
                   }}>
                     <Text style={styles.bonusText}>{t('bonus.daily', { d: state.career.loginStreak + 1 })}</Text>

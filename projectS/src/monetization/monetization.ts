@@ -46,7 +46,12 @@ export function rewardedCap(m: MonetizationState): number {
 }
 
 export interface MonetizationState {
+  /** Sem anúncios AGORA: comprou o Premium OU tem o VIP em vigor. É o que a lógica lê. */
   premium: boolean;
+  /** Comprou o `premium_no_ads` (para sempre). */
+  premiumOwned: boolean;
+  /** Subscrição VIP em vigor (pode expirar; a loja é quem manda). */
+  vip: boolean;
   totalAdvances: number; // avanços de semana desde sempre (para o período de graça)
   advancesSinceAd: number; // avanços desde o último interstitial
   rewardedUsed: number; // bónus usados na data atual do jogo
@@ -56,6 +61,8 @@ export interface MonetizationState {
 export function initialMonetization(): MonetizationState {
   return {
     premium: false,
+    premiumOwned: false,
+    vip: false,
     totalAdvances: 0,
     advancesSinceAd: 0,
     rewardedUsed: 0,

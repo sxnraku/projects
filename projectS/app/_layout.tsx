@@ -7,7 +7,7 @@ import { GameState } from '../src/core/models';
 import { useGameStore } from '../src/state/gameStore';
 import { useMonetizationStore } from '../src/state/monetizationStore';
 import { loadPrefs, persist, restore, savePrefs } from './db';
-import { restore as restorePurchases } from '../src/native/purchases';
+import { claimPendingCash, restore as restorePurchases, restoreVip } from '../src/native/purchases';
 import { initAds } from '../src/native/ads';
 import { detectDeviceLang } from '../src/ui/deviceLang';
 import { ForcedUpdateGate } from '../src/ui/ForcedUpdateGate';
@@ -41,6 +41,7 @@ export default function RootLayout() {
         // O que está gravado no dispositivo é só CACHE, para o jogo abrir
         // depressa sem esperar pela loja.
         useMonetizationStore.getState().setPremium(prefs.premium);
+        useMonetizationStore.getState().setVip(prefs.vip);
         if (saved) {
           useGameStore.getState().loadState(saved);
         } else {
@@ -73,7 +74,35 @@ export default function RootLayout() {
         useMonetizationStore.getState().setPremium(true);
       })
       .catch(() => { /* a loja é opcional; o jogo nunca depende dela */ });
-    return () => { alive = false; };
+
+    // VIP: a loja manda nos dois sentidos. `null` = a loja não respondeu, e aí
+    // fica o que estava em cache (nunca se revoga por causa de uma falha de rede).
+    restoreVip()
+      .then((active) => {
+        if (!alive || active === null) return;
+        useMonetizationStore.getState().setVip(active);
+      })
+      .catch(() => { /* idem */ });
+
+    // Pacotes pagos que a app não chegou a creditar (fechou a meio da compra).
+    // Só se credita a uma carreira já criada — nunca ao mundo em branco do onboarding.
+    const grant = (amount: number) => useGameStore.getState().creditCash(amount);
+    const ready = () => {
+      const s = useGameStore.getState().state;
+      return !!s && s.meta.managerName !== '';
+    };
+    let unsub: (() => void) | null = null;
+    const claim = () => { void claimPendingCash(grant).catch(() => { /* idem */ }); };
+    if (ready()) claim();
+    else {
+      unsub = useGameStore.subscribe(() => {
+        if (!ready()) return;
+        unsub?.();
+        unsub = null;
+        claim();
+      });
+    }
+    return () => { alive = false; unsub?.(); };
   }, []);
 
   // Auto-save com THROTTLE: gravar o estado inteiro (900+ jogadores) a cada
@@ -96,7 +125,7 @@ export default function RootLayout() {
       if (!timer) timer = setTimeout(flush, 4000);
     });
     const unsubMon = useMonetizationStore.subscribe((s) => {
-      savePrefs({ premium: s.m.premium }).catch(() => {});
+      savePrefs({ premium: s.m.premiumOwned, vip: s.m.vip }).catch(() => {});
     });
     // Grava já ao minimizar/fechar a app (não esperar pelo timer).
     const sub = AppState.addEventListener('change', (st) => {
@@ -147,6 +176,7 @@ export default function RootLayout() {
           <Stack.Screen name="europe" options={{ title: 'Europa' }} />
           <Stack.Screen name="history" options={{ title: 'Histórico' }} />
           <Stack.Screen name="manual" options={{ title: 'Manual' }} />
+          <Stack.Screen name="store" options={{ title: 'Loja' }} />
         </Stack>
         {/* TUTORIAL GUIADO — vive na RAIZ, não dentro do separador Início.
             Ele navega entre abas para mostrar cada coisa no sítio; montado

@@ -25,7 +25,8 @@ import type { Purchase } from 'expo-iap';
  * ID do produto na Play Console. Tem de ser exatamente igual ao que lá está
  * criado — e, uma vez publicado, NUNCA pode mudar.
  */
-export const PREMIUM_SKU = 'premium_no_ads';
+import { CASH_PACKS, PREMIUM_SKU, VIP_PLANS, VIP_SKU, cashPackBySku, type VipPlan } from '../monetization/catalog';
+export { PREMIUM_SKU };
 
 /** Estado de uma tentativa de compra, para a UI dizer o que aconteceu. */
 export type PurchaseOutcome =
@@ -176,4 +177,211 @@ export async function premiumPrice(): Promise<string | null> {
 /** A loja está disponível neste dispositivo? (a UI esconde o botão se não). */
 export async function purchasesAvailable(): Promise<boolean> {
   return (await connect()) !== null;
+}
+
+function skuOf(p: Purchase): string {
+  const anyP = p as unknown as { productId?: string; ids?: string[] };
+  return anyP.productId ?? anyP.ids?.[0] ?? '';
+}
+
+/** Preço formatado pela loja para vários produtos de uma vez (sku → "0,99 €"). */
+async function pricesOf(skus: string[], type: 'in-app' | 'subs'): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const sdk = await connect();
+  if (!sdk) return out;
+  try {
+    const products = await sdk.fetchProducts({ skus, type });
+    for (const p of (products ?? []) as unknown as { id?: string; productId?: string; displayPrice?: string; price?: string }[]) {
+      const id = p.id ?? p.productId;
+      const price = p.displayPrice ?? p.price;
+      if (id && price) out[id] = price;
+    }
+  } catch { /* sem preço: a UI mostra o botão sem valor */ }
+  return out;
+}
+
+export const cashPrices = (): Promise<Record<string, string>> => pricesOf(CASH_PACKS.map((p) => p.sku), 'in-app');
+
+/**
+ * PACOTES DE DINHEIRO (consumíveis).
+ *
+ * Ordem que evita os dois erros caros: creditar SEM cobrar, ou cobrar SEM
+ * creditar. O dinheiro só é creditado quando a loja confirma a compra
+ * (`onGrant`), e só DEPOIS se consome o token — se a app morrer entre as duas
+ * coisas, `claimPendingCash` no arranque volta a creditar e consome. Consumir
+ * antes de creditar perderia o dinheiro do jogador; nunca fazer.
+ */
+export async function buyCashPack(
+  sku: string,
+  onGrant: (amount: number) => void,
+  timeoutMs = 180_000,
+): Promise<PurchaseOutcome> {
+  const pack = cashPackBySku(sku);
+  const sdk = await connect();
+  if (!pack || !sdk) return { ok: false, reason: 'UNAVAILABLE' };
+
+  try {
+    const products = await sdk.fetchProducts({ skus: [sku], type: 'in-app' });
+    if (!products || products.length === 0) return { ok: false, reason: 'UNAVAILABLE' };
+  } catch {
+    return { ok: false, reason: 'UNAVAILABLE' };
+  }
+
+  return new Promise<PurchaseOutcome>((resolve) => {
+    let settled = false;
+    const done = (out: PurchaseOutcome) => {
+      if (settled) return;
+      settled = true;
+      try { subOk.remove(); } catch { /* ignora */ }
+      try { subErr.remove(); } catch { /* ignora */ }
+      clearTimeout(timer);
+      resolve(out);
+    };
+
+    const subOk = sdk.purchaseUpdatedListener((p) => {
+      if (skuOf(p) !== sku) return;
+      onGrant(pack.amount);
+      void sdk.finishTransaction({ purchase: p, isConsumable: true })
+        .catch(() => { /* fica por consumir; o arranque seguinte trata */ })
+        .finally(() => done({ ok: true, restored: false }));
+    });
+
+    const subErr = sdk.purchaseErrorListener((e) => {
+      const code = String((e as unknown as { code?: string }).code ?? '');
+      const cancelled = /cancel/i.test(code) || /cancel/i.test(e?.message ?? '');
+      done(cancelled
+        ? { ok: false, reason: 'CANCELLED' }
+        : { ok: false, reason: 'ERROR', message: e?.message });
+    });
+
+    const timer = setTimeout(() => done({ ok: false, reason: 'ERROR' }), timeoutMs);
+
+    try {
+      void sdk.requestPurchase({
+        request: { google: { skus: [sku] }, apple: { sku } },
+        type: 'in-app',
+      });
+    } catch (e) {
+      done({ ok: false, reason: 'ERROR', message: (e as Error)?.message });
+    }
+  });
+}
+
+/**
+ * Pacotes pagos e ainda não consumidos (a app fechou a meio). Credita-os e
+ * consome-os. Devolve o total creditado. Corre no arranque; nunca atira.
+ */
+export async function claimPendingCash(onGrant: (amount: number) => void): Promise<number> {
+  const sdk = await connect();
+  if (!sdk) return 0;
+  let total = 0;
+  try {
+    const purchases = await sdk.getAvailablePurchases();
+    for (const p of purchases) {
+      const pack = cashPackBySku(skuOf(p));
+      if (!pack) continue;
+      onGrant(pack.amount);
+      total += pack.amount;
+      try { await sdk.finishTransaction({ purchase: p, isConsumable: true }); } catch { /* tenta no próximo arranque */ }
+    }
+  } catch { /* a loja é opcional */ }
+  return total;
+}
+
+/**
+ * VIP (subscrição). Ativo segundo a LOJA: `getAvailablePurchases` só devolve
+ * subscrições em vigor. Reconhece-as (senão a Google reembolsa em 3 dias).
+ */
+export async function restoreVip(): Promise<boolean | null> {
+  const sdk = await connect();
+  if (!sdk) return null; // loja em dúvida: NÃO revogar por causa disto
+  try {
+    const purchases = await sdk.getAvailablePurchases();
+    const mine = purchases.filter((p) => skuOf(p) === VIP_SKU);
+    for (const p of mine) {
+      try { await sdk.finishTransaction({ purchase: p, isConsumable: false }); } catch { /* já reconhecida */ }
+    }
+    return mine.length > 0;
+  } catch {
+    return null;
+  }
+}
+
+type VipOffer = { basePlanId?: string; id?: string; offerTokenAndroid?: string; offerToken?: string; displayPrice?: string };
+
+async function vipOffers(sdk: Iap): Promise<VipOffer[]> {
+  const products = await sdk.fetchProducts({ skus: [VIP_SKU], type: 'subs' });
+  const p = products?.[0] as unknown as { subscriptionOffers?: VipOffer[] } | undefined;
+  return p?.subscriptionOffers ?? [];
+}
+
+/** Preço formatado de cada plano do VIP (plano → "3,99 €"). */
+export async function vipPrices(): Promise<Partial<Record<VipPlan, string>>> {
+  const out: Partial<Record<VipPlan, string>> = {};
+  const sdk = await connect();
+  if (!sdk) return out;
+  try {
+    for (const o of await vipOffers(sdk)) {
+      const plan = VIP_PLANS.find((pl) => pl === o.basePlanId);
+      if (plan && o.displayPrice && !o.id) out[plan] = o.displayPrice;
+    }
+  } catch { /* sem preço */ }
+  return out;
+}
+
+/** Subscreve o VIP no plano escolhido. */
+export async function buyVip(plan: VipPlan, timeoutMs = 180_000): Promise<PurchaseOutcome> {
+  const sdk = await connect();
+  if (!sdk) return { ok: false, reason: 'UNAVAILABLE' };
+  if ((await restoreVip()) === true) return { ok: true, restored: true };
+
+  let offerToken: string | undefined;
+  try {
+    const offers = await vipOffers(sdk);
+    // A oferta base do plano (sem promoção) — `id` vazio.
+    const base = offers.find((o) => o.basePlanId === plan && !o.id) ?? offers.find((o) => o.basePlanId === plan);
+    offerToken = base?.offerTokenAndroid ?? base?.offerToken;
+  } catch {
+    return { ok: false, reason: 'UNAVAILABLE' };
+  }
+  if (!offerToken) return { ok: false, reason: 'UNAVAILABLE' };
+  const token = offerToken;
+
+  return new Promise<PurchaseOutcome>((resolve) => {
+    let settled = false;
+    const done = (out: PurchaseOutcome) => {
+      if (settled) return;
+      settled = true;
+      try { subOk.remove(); } catch { /* ignora */ }
+      try { subErr.remove(); } catch { /* ignora */ }
+      clearTimeout(timer);
+      resolve(out);
+    };
+
+    const subOk = sdk.purchaseUpdatedListener((p) => {
+      if (skuOf(p) !== VIP_SKU) return;
+      void sdk.finishTransaction({ purchase: p, isConsumable: false })
+        .catch(() => { /* já reconhecida */ })
+        .finally(() => done({ ok: true, restored: false }));
+    });
+
+    const subErr = sdk.purchaseErrorListener((e) => {
+      const code = String((e as unknown as { code?: string }).code ?? '');
+      const cancelled = /cancel/i.test(code) || /cancel/i.test(e?.message ?? '');
+      done(cancelled
+        ? { ok: false, reason: 'CANCELLED' }
+        : { ok: false, reason: 'ERROR', message: e?.message });
+    });
+
+    const timer = setTimeout(() => done({ ok: false, reason: 'ERROR' }), timeoutMs);
+
+    try {
+      void sdk.requestPurchase({
+        request: { google: { skus: [VIP_SKU], subscriptionOffers: [{ sku: VIP_SKU, offerToken: token }] } },
+        type: 'subs',
+      });
+    } catch (e) {
+      done({ ok: false, reason: 'ERROR', message: (e as Error)?.message });
+    }
+  });
 }

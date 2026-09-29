@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useMonetizationStore } from '../../src/state/monetizationStore';
-import { buyPremium, premiumPrice, purchasesAvailable } from '../../src/native/purchases';
+import { purchasesAvailable } from '../../src/native/purchases';
 import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useGameStore } from '../../src/state/gameStore';
@@ -42,60 +42,30 @@ const PRIVACY_URL = 'https://sxnraku.github.io/projects/';
  * nenhuma do que haver uma que não faz nada (era esse o problema do botão
  * anterior, que ativava o Premium sem cobrar).
  */
-function PremiumRow() {
+function StoreRow() {
   const t = useT();
+  const router = useRouter();
   const premium = useMonetizationStore((s) => s.m.premium);
-  const setPremium = useMonetizationStore((s) => s.setPremium);
   const [available, setAvailable] = useState(false);
-  const [price, setPrice] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
-    void purchasesAvailable().then((ok) => {
-      if (!alive) return;
-      setAvailable(ok);
-      if (ok) void premiumPrice().then((p) => { if (alive) setPrice(p); });
-    });
+    void purchasesAvailable().then((ok) => { if (alive) setAvailable(ok); });
     return () => { alive = false; };
   }, []);
 
-  // Sem loja, sem linha. Com Premium já ativo, mostra-se sempre (é a prova de
+  // Sem loja, sem linha. Com Premium/VIP ativo mostra-se sempre (é a prova de
   // que a compra foi reconhecida).
   if (!available && !premium) return null;
 
   return (
     <View style={styles.settingRow}>
       <View style={{ flex: 1 }}>
-        <Text style={styles.settingName}>{t('club.premiumName')}</Text>
-        <Text style={styles.settingSub}>
-          {msg ?? (premium
-            ? t('club.premiumActiveSub')
-            : price ? t('club.premiumPriceSub', { price }) : t('club.premiumSub'))}
-        </Text>
+        <Text style={styles.settingName}>{t('club.storeName')}</Text>
+        <Text style={styles.settingSub}>{premium ? t('club.premiumActiveSub') : t('club.storeSub')}</Text>
       </View>
-      <Pressable
-        disabled={premium || busy}
-        onPress={() => {
-          setBusy(true);
-          setMsg(null);
-          void buyPremium().then((r) => {
-            setBusy(false);
-            if (r.ok) {
-              setPremium(true);
-              setMsg(t(r.restored ? 'club.premiumRestored' : 'club.premiumThanks'));
-              return;
-            }
-            if (r.reason === 'CANCELLED') return; // desistir não é erro
-            setMsg(t(r.reason === 'UNAVAILABLE' ? 'club.premiumUnavailable' : 'club.premiumFailed'));
-          });
-        }}
-        style={[styles.settingBtn, (premium || busy) && styles.settingBtnDone]}
-      >
-        <Text style={styles.settingBtnText}>
-          {premium ? t('club.premiumOn') : busy ? t('common.loading') : t('club.premiumActivate')}
-        </Text>
+      <Pressable onPress={() => router.push('/store' as never)} style={styles.settingBtn}>
+        <Text style={styles.settingBtnText}>{t('club.privacyOpen')}</Text>
       </Pressable>
     </View>
   );
@@ -557,7 +527,7 @@ export default function ClubScreen() {
         {/* PREMIUM — compra a sério pela Play Store. O botão antigo chamava
             `setPremium(true)` e mais nada: sem compra, sem pagamento, e perdia-se
             ao fechar a app. Ver `src/native/purchases.ts` e `docs/PREMIUM.md`. */}
-        <PremiumRow />
+        <StoreRow />
 
         {/* POLÍTICA DE PRIVACIDADE — a app mostra anúncios e pede consentimento
             (UMP); ter o documento a um toque é o mínimo, e a Play Store espera

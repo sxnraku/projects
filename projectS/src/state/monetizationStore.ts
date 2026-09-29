@@ -23,6 +23,14 @@ async function ads() {
 }
 
 /**
+ * A fronteira dos anúncios tem de saber, para nunca chegar a carregar um.
+ * Falhar aqui (Node, web) não pode partir a ativação do Premium/VIP.
+ */
+function syncAds(premium: boolean): void {
+  void ads().then((a) => a.setAdsPremium(premium)).catch(() => { /* sem SDK */ });
+}
+
+/**
  * Store de monetização — contadores de anúncios e estado premium.
  *
  * Nota: o estado vive em memória. O premium real será restaurado pelo fornecedor
@@ -57,8 +65,18 @@ export interface MonetizationStore {
    */
   claimAdSlot: () => Promise<boolean>;
 
-  /** Ativa premium (chamado pelo fluxo de compra IAP quando existir). */
+  /** Marca o Premium (compra única) como comprado ou não. */
   setPremium: (premium: boolean) => void;
+
+  /** Marca a subscrição VIP como em vigor ou não. VIP também dispensa anúncios. */
+  setVip: (vip: boolean) => void;
+}
+
+/** Aplica um patch e recalcula o "sem anúncios" efetivo: Premium comprado OU VIP. */
+function withPremium(m: MonetizationState, patch: Partial<MonetizationState>): MonetizationState {
+  const next = { ...m, ...patch };
+  next.premium = next.premiumOwned || next.vip;
+  return next;
 }
 
 export const useMonetizationStore = create<MonetizationStore>((set, get) => ({
@@ -121,9 +139,14 @@ export const useMonetizationStore = create<MonetizationStore>((set, get) => ({
   },
 
   setPremium: (premium) => {
-    set({ m: { ...get().m, premium } });
-    // A fronteira dos anúncios tem de saber, para nunca chegar a carregar um.
-    // Falhar aqui (Node, web) não pode partir a ativação do Premium.
-    void ads().then((a) => a.setAdsPremium(premium)).catch(() => { /* sem SDK */ });
+    const m = withPremium(get().m, { premiumOwned: premium });
+    set({ m });
+    syncAds(m.premium);
+  },
+
+  setVip: (vip) => {
+    const m = withPremium(get().m, { vip });
+    set({ m });
+    syncAds(m.premium);
   },
 }));

@@ -111,10 +111,13 @@ export function persistenceAvailable(): boolean {
 // ---- Preferências do dispositivo (premium, etc.) — fora do save ----
 
 export interface DevicePrefs {
+  /** Premium comprado (compra única). Cache: a loja é a fonte da verdade. */
   premium: boolean;
+  /** VIP em vigor. Cache: revalidado pela loja em cada arranque. */
+  vip: boolean;
 }
 
-const DEFAULT_PREFS: DevicePrefs = { premium: false };
+const DEFAULT_PREFS: DevicePrefs = { premium: false, vip: false };
 
 export async function loadPrefs(): Promise<DevicePrefs> {
   const handle = await openDb();
