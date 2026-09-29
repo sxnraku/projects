@@ -11,6 +11,7 @@ import {
   GRACE_ADVANCES,
   initialMonetization,
   INTERSTITIAL_EVERY,
+  MORALE_BOOST_AMOUNT,
   registerAdvance,
   REWARDED_DAILY_CAP,
   SPONSOR_BONUS_AMOUNT,
@@ -70,6 +71,11 @@ applyReward(game, 'FITNESS_BOOST');
 assert(squad.every((id) => game.players[id]!.condition.fitness === 50 + FITNESS_BOOST_AMOUNT),
   `plantel inteiro recuperou +${FITNESS_BOOST_AMOUNT} de frescura`);
 
+for (const id of squad) game.players[id]!.condition.morale = 50;
+applyReward(game, 'MORALE_BOOST');
+assert(squad.every((id) => game.players[id]!.condition.morale === 50 + MORALE_BOOST_AMOUNT),
+  `plantel inteiro ganhou +${MORALE_BOOST_AMOUNT} de moral`);
+
 console.log('\nIntegração via stores (Zustand):');
 useGameStore.getState().newGame({ managerName: 'R', numClubs: 6, squadSize: 16, divisions: 1, seed: 11 });
 const mStore = useMonetizationStore.getState();
@@ -87,9 +93,8 @@ assert(msg !== null && balStoreAfter === balStoreBefore + SPONSOR_BONUS_AMOUNT,
   'claimReward aplica o bónus através das stores');
 
 // Esgota o cap e verifica o bloqueio.
-useMonetizationStore.getState().claimReward('SPONSOR_BONUS');
-useMonetizationStore.getState().claimReward('SPONSOR_BONUS');
-assert(!useMonetizationStore.getState().rewardedAvailable(), 'cap diário bloqueia o 4º rewarded');
+for (let i = 1; i < REWARDED_DAILY_CAP; i++) useMonetizationStore.getState().claimReward('SPONSOR_BONUS');
+assert(!useMonetizationStore.getState().rewardedAvailable(), `cap diário bloqueia o ${REWARDED_DAILY_CAP + 1}º rewarded`);
 assert(useMonetizationStore.getState().claimReward('SPONSOR_BONUS') === null, 'claim bloqueado devolve null');
 
 useMonetizationStore.getState().setPremium(true);

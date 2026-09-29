@@ -67,6 +67,7 @@ const ptPT: Record<string, string> = {
   // recompensas de anúncio
   'reward.sponsor': 'Patrocinador surpresa! +{amount} € em caixa.',
   'reward.fitness': 'Sessão de recuperação! Plantel +{amount} de frescura.',
+  'reward.morale': 'Discurso motivador! Plantel +{amount} de moral.',
   // resolução de pedidos de jogadores
   'req.wageAccepted': '{name} aceitou o novo salário ({wage} €/sem) e está motivado.',
   'req.wageRefused': '{name} não gostou da recusa — a moral caiu.',
@@ -187,6 +188,8 @@ const ptPT: Record<string, string> = {
   'bonus.daily': '📅 Bónus diário — dia {d}',
   'bonus.sponsor': '▶ Anúncio: patrocínio',
   'bonus.fitness': '▶ Anúncio: recuperação do plantel',
+  'bonus.morale': '▶ Anúncio: moral do plantel',
+  'bonus.double': '▶ Anúncio: duplicar o bónus diário',
   'bonus.dailyToast': 'Bónus diário: +{v} (streak {streak})',
   'fired.title': 'Foste despedido — escolhe o próximo clube',
   'fired.accept': 'Aceitar ›',
@@ -1654,6 +1657,7 @@ const en: Record<string, string> = {
   'common.and': ' and ',
   'reward.sponsor': 'Surprise sponsor! +€{amount} in the bank.',
   'reward.fitness': 'Recovery session! Squad +{amount} freshness.',
+  'reward.morale': 'Rousing speech! Squad +{amount} morale.',
   'req.wageAccepted': '{name} accepted the new wage ({wage} €/wk) and is motivated.',
   'req.wageRefused': "{name} didn't like the refusal — morale dropped.",
   'req.leaveAccepted': '{name} was placed on the transfer list, relieved.',
@@ -1767,6 +1771,8 @@ const en: Record<string, string> = {
   'bonus.daily': '📅 Daily bonus — day {d}',
   'bonus.sponsor': '▶ Ad: sponsor',
   'bonus.fitness': '▶ Ad: squad recovery',
+  'bonus.morale': '▶ Ad: squad morale',
+  'bonus.double': '▶ Ad: double the daily bonus',
   'bonus.dailyToast': 'Daily bonus: +{v} (streak {streak})',
   'fired.title': 'You were sacked — choose your next club',
   'fired.accept': 'Accept ›',

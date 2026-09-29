@@ -12,7 +12,7 @@ export default function AdBanner() {
   return (
     <View style={{
       height: 50, alignItems: 'center', justifyContent: 'center',
-      backgroundColor: '#2B3138', borderTopWidth: 1, borderTopColor: '#3A424C',
+      backgroundColor: '#131C28', borderTopWidth: 1, borderTopColor: '#243247',
       marginVertical: 8, borderRadius: 6, width: '100%',
     }}>
       <Text style={{ color: '#9AA3AD', fontSize: 11 }}>[ banner de anúncio — visível no build Android ]</Text>

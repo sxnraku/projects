@@ -1,7 +1,7 @@
 import { PositionGroup } from '../core/models';
 
 /**
- * Tema visual — Football Manager clássico.
+ * Tema visual — Premium escuro + dourado.
  *
  * Filosofia: informação primeiro, decoração depois. Fundo cinzento-escuro,
  * painéis ligeiramente mais claros, cores APENAS para indicar estado:
@@ -10,12 +10,17 @@ import { PositionGroup } from '../core/models';
  */
 export const theme = {
   colors: {
-    bg: '#20242A',
-    surface: '#2B3138',
-    surfaceAlt: '#333A43',
-    border: '#3A424C',
-    text: '#E8EAED',
-    textDim: '#9AA3AD',
+    bg: '#0B1119',
+    surface: '#131C28',
+    surfaceAlt: '#1A2637',
+    border: '#243247',
+    text: '#F1F4F8',
+    textDim: '#8E9BAE',
+
+    // Dourado premium: destaque de marca, recompensas, VIP (não é cor de estado)
+    gold: '#F5C542',
+    goldDim: '#B8891A',
+    goldSoft: 'rgba(245,197,66,0.14)',
 
     // Cores de ESTADO (nunca decorativas)
     green: '#3FB950', // positivo: confirmar, lucro, vitória
@@ -27,19 +32,19 @@ export const theme = {
     // Aliases usados pelo código existente
     primary: '#3FB950',
     primaryDim: '#2E7D3B',
-    accent: '#E3B341',
+    accent: '#F5C542',
     danger: '#F85149',
     info: '#4A9EFF',
     win: '#3FB950',
     draw: '#9AA3AD',
     loss: '#F85149',
-    borderLight: '#4A525C',
+    borderLight: '#34445B',
     pitch: '#2F6B3F', // campo tático — verde dessaturado, não gritante
     pitchStripe: '#357B48', // risca de relvado (banda alternada, mais clara)
     pitchLine: 'rgba(255,255,255,0.22)',
   },
   spacing: (n: number) => n * 8,
-  radius: { sm: 6, md: 8, lg: 8, pill: 6 },
+  radius: { sm: 10, md: 12, lg: 16, pill: 999 },
   font: {
     h1: 22,
     h2: 17,
@@ -49,6 +54,15 @@ export const theme = {
     score: 32,
   },
 } as const;
+
+/** Sombra suave para cartões/botões (iOS shadow* + Android elevation). */
+export function elevation(level: 1 | 2 | 3 = 1) {
+  const o = { 1: 0.25, 2: 0.35, 3: 0.5 }[level];
+  return {
+    shadowColor: '#000', shadowOpacity: o, shadowRadius: level * 6, shadowOffset: { width: 0, height: level * 2 },
+    elevation: level * 3,
+  } as const;
+}
 
 /** Cor do TEXTO da posição (estado informativo, sem fundos coloridos). */
 export const POS_COLORS: Record<PositionGroup, string> = {

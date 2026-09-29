@@ -22,7 +22,7 @@ import { TutorialTargets } from '../src/ui/tutorial/registry';
 import { money } from '../src/ui/format';
 import { useT } from '../src/ui/i18n';
 import { haptic, playSound } from '../src/ui/sound';
-import { fitnessColor, POS_COLORS, reputationStars, theme } from '../src/ui/theme';
+import { elevation, fitnessColor, POS_COLORS, reputationStars, theme } from '../src/ui/theme';
 
 /** Preto ou branco conforme a cor de fundo, para o texto ficar legível. */
 export function contrastOn(hex: string): string {
@@ -557,7 +557,7 @@ const styles = StyleSheet.create({
 
   resBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: '#171B21', paddingHorizontal: theme.spacing(1.5), paddingVertical: theme.spacing(0.75),
+    backgroundColor: '#080D14', paddingHorizontal: theme.spacing(1.5), paddingVertical: theme.spacing(0.75),
     borderBottomWidth: 1, borderBottomColor: theme.colors.border,
   },
   resSeason: { color: theme.colors.text, fontSize: theme.font.small, fontWeight: '700', flexShrink: 1 },
@@ -596,15 +596,16 @@ const styles = StyleSheet.create({
   dashCard: {
     backgroundColor: theme.colors.surface, borderRadius: theme.radius.md,
     borderWidth: 1, borderColor: theme.colors.border, marginBottom: theme.spacing(1.25),
-    overflow: 'hidden',
+    overflow: 'hidden', ...elevation(1),
   },
   dashHead: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: theme.spacing(1.5), paddingVertical: theme.spacing(1),
     backgroundColor: theme.colors.surfaceAlt,
+    borderBottomWidth: 2, borderBottomColor: theme.colors.goldSoft,
   },
   dashTitle: {
-    color: theme.colors.textDim, fontSize: theme.font.small, fontWeight: '800',
+    color: theme.colors.gold, fontSize: theme.font.small, fontWeight: '800',
     letterSpacing: 1.1, textTransform: 'uppercase',
   },
   dashChevron: { color: theme.colors.textDim, fontSize: theme.font.h3, fontWeight: '800' },
@@ -630,6 +631,7 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: theme.colors.surface, borderRadius: theme.radius.md,
     borderWidth: 1, borderColor: theme.colors.border, padding: theme.spacing(1.5),
+    ...elevation(1),
   },
 
   h1: { color: theme.colors.text, fontSize: theme.font.h1, fontWeight: '700' },
@@ -652,14 +654,15 @@ const styles = StyleSheet.create({
   statBarVal: { color: theme.colors.text, fontSize: theme.font.small, fontWeight: '700', width: 22, textAlign: 'right', fontVariant: ['tabular-nums'] },
 
   btn: {
-    height: 42, borderRadius: theme.radius.sm, alignItems: 'center', justifyContent: 'center',
-    paddingHorizontal: theme.spacing(2),
+    height: 46, borderRadius: theme.radius.md, alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: theme.spacing(2), ...elevation(2),
   },
-  btnPrimary: { backgroundColor: theme.colors.green },
-  btnDanger: { backgroundColor: theme.colors.red },
-  btnGhost: { backgroundColor: 'transparent', borderWidth: 1, borderColor: theme.colors.borderLight },
+  // Rebordo inferior mais escuro = botão "físico", convida ao toque.
+  btnPrimary: { backgroundColor: theme.colors.green, borderBottomWidth: 3, borderBottomColor: theme.colors.primaryDim },
+  btnDanger: { backgroundColor: theme.colors.red, borderBottomWidth: 3, borderBottomColor: '#A5302B' },
+  btnGhost: { backgroundColor: 'transparent', borderWidth: 1, borderColor: theme.colors.borderLight, shadowOpacity: 0, elevation: 0 },
   btnDisabled: { opacity: 0.45 },
-  btnPressed: { opacity: 0.85 },
+  btnPressed: { opacity: 0.85, transform: [{ scale: 0.98 }] },
   btnText: { color: '#fff', fontSize: theme.font.h3, fontWeight: '700' },
   btnGhostText: { color: theme.colors.text },
 

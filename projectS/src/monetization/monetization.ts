@@ -23,7 +23,7 @@ import { moveMoney } from '../core/economy';
 // que rende mais por impressão) fica como a via principal de receita.
 export const INTERSTITIAL_EVERY = 15; // 1 anúncio a cada 15 jornadas avançadas
 export const GRACE_ADVANCES = 15; // primeiras 15 jornadas sem anúncios
-export const REWARDED_DAILY_CAP = 3; // máx. de bónus por dia de jogo
+export const REWARDED_DAILY_CAP = 5; // máx. de bónus por dia de jogo (opt-in, rende mais por impressão)
 
 export interface MonetizationState {
   premium: boolean;
@@ -63,11 +63,13 @@ export function registerAdvance(m: MonetizationState): boolean {
 export const AdReward = {
   SPONSOR_BONUS: 'SPONSOR_BONUS', // injeção de dinheiro de "patrocinador"
   FITNESS_BOOST: 'FITNESS_BOOST', // recuperação física do plantel
+  MORALE_BOOST: 'MORALE_BOOST', // moral do plantel
 } as const;
 export type AdReward = (typeof AdReward)[keyof typeof AdReward];
 
 export const SPONSOR_BONUS_AMOUNT = 250_000;
 export const FITNESS_BOOST_AMOUNT = 20;
+export const MORALE_BOOST_AMOUNT = 15;
 
 /** O jogador ainda pode usar rewarded hoje (data do jogo)? */
 export function canUseRewarded(m: MonetizationState, gameDate: string): boolean {
@@ -100,8 +102,19 @@ export function applyReward(state: GameState, reward: AdReward): Msg {
     return { key: 'reward.sponsor', params: { amount: amount.toLocaleString('pt-PT') } };
   }
 
-  // FITNESS_BOOST — recupera o plantel inteiro.
   const club = state.clubs[clubId];
+
+  if (reward === 'MORALE_BOOST') {
+    if (club) {
+      for (const id of club.squad) {
+        const p = state.players[id];
+        if (p) p.condition.morale = Math.min(100, p.condition.morale + MORALE_BOOST_AMOUNT);
+      }
+    }
+    return { key: 'reward.morale', params: { amount: MORALE_BOOST_AMOUNT } };
+  }
+
+  // FITNESS_BOOST — recupera o plantel inteiro.
   if (club) {
     for (const id of club.squad) {
       const p = state.players[id];

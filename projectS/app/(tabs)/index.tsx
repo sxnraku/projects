@@ -51,6 +51,8 @@ export default function Dashboard() {
   const fans = useGameStore((s) => s.fans);
   const claimDaily = useGameStore((s) => s.claimDaily);
   const dailyAvailable = useGameStore((s) => s.dailyAvailable);
+  const creditBonus = useGameStore((s) => s.creditBonus);
+  const [doubleOffer, setDoubleOffer] = useState(0);
   const blockedCounts = useGameStore((s) => s.blockedCounts);
   const preview = useGameStore((s) => s.preview);
   const rotate = useGameStore((s) => s.rotate);
@@ -782,15 +784,28 @@ export default function Dashboard() {
             ) : null}
 
             {/* BÓNUS */}
-            {(dailyAvailable() || rewardedAvailable()) ? (
+            {(dailyAvailable() || rewardedAvailable() || doubleOffer > 0) ? (
               <DashCard title={t('card.bonus')}>
                 {dailyAvailable() ? (
                   <Pressable style={styles.bonusRow} onPress={() => {
                     const v = claimDaily();
-                    if (v > 0) setFeedback({ kind: 'ok', text: t('bonus.dailyToast', { v: money(v), streak: state.career.loginStreak }) });
+                    if (v > 0) {
+                      setFeedback({ kind: 'ok', text: t('bonus.dailyToast', { v: money(v), streak: state.career.loginStreak }) });
+                      setDoubleOffer(v);
+                    }
                   }}>
                     <Text style={styles.bonusText}>{t('bonus.daily', { d: state.career.loginStreak + 1 })}</Text>
                     <Text style={styles.bonusVal}>+{money(scaled(dailyBonusAmount(state.career.loginStreak + 1)))}</Text>
+                  </Pressable>
+                ) : null}
+                {doubleOffer > 0 ? (
+                  <Pressable disabled={busy} style={[styles.bonusRow, styles.bonusGold, busy && { opacity: 0.5 }]} onPress={async () => {
+                    setBusy(true);
+                    if (await showRewarded()) { creditBonus(doubleOffer); setFeedback({ kind: 'ok', text: `+${money(doubleOffer)}` }); setDoubleOffer(0); }
+                    setBusy(false);
+                  }}>
+                    <Text style={[styles.bonusText, { color: theme.colors.gold, fontWeight: '800' }]}>{t('bonus.double')}</Text>
+                    <Text style={[styles.bonusVal, { color: theme.colors.gold }]}>+{money(doubleOffer)}</Text>
                   </Pressable>
                 ) : null}
                 {rewardedAvailable() ? (
@@ -810,6 +825,14 @@ export default function Dashboard() {
                     }}>
                       <Text style={styles.bonusText}>{t('bonus.fitness')}</Text>
                       <Text style={styles.bonusVal}>+20 fit</Text>
+                    </Pressable>
+                    <Pressable disabled={busy} style={[styles.bonusRow, busy && { opacity: 0.5 }]} onPress={async () => {
+                      setBusy(true);
+                      if (await showRewarded()) { const m = claimReward(AdReward.MORALE_BOOST); if (m) setFeedback({ kind: 'ok', text: tMsg(m) }); }
+                      setBusy(false);
+                    }}>
+                      <Text style={styles.bonusText}>{t('bonus.morale')}</Text>
+                      <Text style={styles.bonusVal}>+15 moral</Text>
                     </Pressable>
                   </>
                 ) : null}
@@ -1437,6 +1460,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.bg, borderRadius: theme.radius.sm,
     padding: theme.spacing(1.1), marginBottom: theme.spacing(0.75),
   },
+  bonusGold: { backgroundColor: theme.colors.goldSoft, borderColor: theme.colors.goldDim, borderWidth: 1 },
   bonusText: { color: theme.colors.text, fontSize: theme.font.body },
   bonusVal: { color: theme.colors.green, fontSize: theme.font.body, fontWeight: '700' },
 

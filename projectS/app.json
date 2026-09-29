@@ -11,7 +11,7 @@
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "cover",
-      "backgroundColor": "#20242A"
+      "backgroundColor": "#0B1119"
     },
     "assetBundlePatterns": [
       "**/*"
@@ -25,7 +25,7 @@
       "versionCode": 42,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#20242A"
+        "backgroundColor": "#0B1119"
       }
     },
     "plugins": [

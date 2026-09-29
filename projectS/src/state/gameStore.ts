@@ -230,6 +230,7 @@ export interface GameStore {
   declineMerit: () => void;
   claimDaily: () => number; // devolve o valor creditado (0 se indisponível)
   dailyAvailable: () => boolean;
+  creditBonus: (amount: number) => void; // crédito direto (ex.: duplicar bónus diário via anúncio)
   requestBudget: () => BudgetRequestResult; // pedir dinheiro à direção (1×/época)
   budgetRequestUsed: () => boolean; // já foi pedido esta época?
 
@@ -688,6 +689,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       set({ state: bump(state) });
     }
     return amount;
+  },
+
+  creditBonus: (amount) => {
+    const { state } = get();
+    if (!state || amount <= 0) return;
+    const fin = state.finances[state.meta.managedClubId];
+    if (fin) moveMoney(fin, amount);
+    set({ state: bump(state) });
   },
 
   budgetRequestUsed: () => {
